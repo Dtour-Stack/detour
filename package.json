@@ -19,7 +19,7 @@
 		"dev:web": "cd packages/web && bun run dev",
 		"start": "cd packages/tray && bun run start",
 		"build:canary": "cd packages/tray && bun run build:canary",
-		"build:eliza": "bun run --cwd eliza/packages/core build && bun run --cwd eliza/packages/vault build && bun run --cwd eliza/plugins/plugin-sql build && bun run --cwd eliza/plugins/plugin-anthropic build && bun run --cwd eliza/plugins/plugin-openai build",
+		"build:eliza": "bun run --cwd eliza/packages/core build && bun run --cwd eliza/packages/vault build && bun run --cwd eliza/packages/agent build && bun run --cwd eliza/plugins/plugin-sql build && bun run --cwd eliza/plugins/plugin-anthropic build && bun run --cwd eliza/plugins/plugin-openai build",
 		"cli": "bun packages/cli/bin/detour.ts"
 	},
 	"devDependencies": {

@@ -105,7 +105,7 @@ export class RuntimeService {
 		// when the new content extends what we already sent, otherwise emit a
 		// separator + the new chunk.
 		let emitted = "";
-		await service.handleMessage(state.runtime, message, async (content) => {
+		await service.handleMessage(state.runtime, message, async (content: { text?: string } | null | undefined) => {
 			const text = typeof content?.text === "string" ? content.text : "";
 			if (!text) return [];
 			if (text === emitted) return [];

@@ -32,6 +32,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: Build eliza submodule packages
+        # tsc needs the vendored eliza packages compiled to .d.ts so
+        # `@elizaos/core`, `@elizaos/vault`, etc. resolve from our packages'
+        # tsconfig. Bun runtime doesn't need this (it loads source TS
+        # directly) but the typecheck step does.
+        run: bun run build:eliza
+
       - name: Typecheck shared
         run: bunx tsc --noEmit -p packages/shared/tsconfig.json
 
