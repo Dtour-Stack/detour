@@ -146,6 +146,133 @@ export type SigninResult = {
 	message: string;
 };
 
+// ── Pensieve ─────────────────────────────────────────────────────────────────
+
+export type PensieveLogEntry = {
+	time: number;
+	level: number;
+	levelName: string;
+	msg: string;
+	source?: string;
+	agentName?: string;
+	agentId?: string;
+	extras?: Record<string, unknown>;
+};
+
+export type PensieveTrajectoryListItem = {
+	id: string;
+	source?: string;
+	status?: string;
+	startTime?: number;
+	endTime?: number;
+	durationMs?: number;
+	llmCallCount?: number;
+	totalPromptTokens?: number;
+	totalCompletionTokens?: number;
+};
+
+export type PensieveTrajectoryListResult = {
+	trajectories: PensieveTrajectoryListItem[];
+	total: number;
+	limit: number;
+	offset: number;
+};
+
+export type PensieveMemorySummary = {
+	id: string;
+	type?: string;
+	createdAt?: number;
+	roomId?: string;
+	entityId?: string;
+	worldId?: string;
+	tags?: string[];
+	preview: string;
+};
+
+export type PensieveMemoryDetail = PensieveMemorySummary & {
+	content: { text?: string; [k: string]: unknown };
+	metadata?: Record<string, unknown>;
+	hasEmbedding: boolean;
+	backlinks?: PensieveGraphSnapshot;
+};
+
+export type PensieveEntitySummary = {
+	id: string;
+	name?: string;
+	relationshipCount: number;
+	memoryCount: number;
+	lastSeen?: number;
+	tags: string[];
+};
+
+export type PensieveRelationshipSummary = {
+	sourceEntityId: string;
+	targetEntityId: string;
+	tags: string[];
+	createdAt?: number;
+	metadata?: Record<string, unknown>;
+};
+
+export type PensievePersonDetail = {
+	entity: PensieveEntitySummary;
+	memories: Array<{ id: string; preview: string; createdAt?: number }>;
+	relationships: PensieveRelationshipSummary[];
+};
+
+export type PensieveRuntimeRegistryItem = {
+	name: string;
+	description?: string;
+	className?: string;
+	id?: string;
+};
+
+export type PensieveRuntimeSnapshot = {
+	available: boolean;
+	generatedAt: number;
+	agentId?: string;
+	agentName?: string;
+	counts: {
+		actions: number;
+		providers: number;
+		evaluators: number;
+		services: number;
+		plugins: number;
+	};
+	actions: PensieveRuntimeRegistryItem[];
+	providers: PensieveRuntimeRegistryItem[];
+	evaluators: PensieveRuntimeRegistryItem[];
+	services: PensieveRuntimeRegistryItem[];
+	plugins: PensieveRuntimeRegistryItem[];
+};
+
+export type PensieveGraphNodeKind = "memory" | "entity" | "trajectory";
+
+export type PensieveGraphNode = {
+	id: string;
+	kind: PensieveGraphNodeKind;
+	label: string;
+	tags?: string[];
+	createdAt?: number;
+};
+
+export type PensieveGraphEdge = {
+	source: string;
+	target: string;
+	kind: "memory-entity" | "memory-tag" | "entity-relationship" | "trajectory-memory";
+	weight?: number;
+};
+
+export type PensieveGraphSnapshot = {
+	nodes: PensieveGraphNode[];
+	edges: PensieveGraphEdge[];
+	stats: {
+		memories: number;
+		entities: number;
+		trajectories: number;
+		edges: number;
+	};
+};
+
 export type AuthFlowStatus = "pending" | "success" | "error" | "cancelled" | "timeout";
 export type AuthFlowState = {
 	sessionId: string;

@@ -2,6 +2,7 @@ import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
 import { BackendOps } from "./backend-ops";
 import { ConfigService } from "./config-service";
+import { PensieveService } from "./pensieve";
 import { RuntimeService } from "./runtime";
 import { VaultService } from "./vault";
 
@@ -67,7 +68,9 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	await config.bootstrap(); // load persisted config + push to plugins
 	const runtime = new RuntimeService(vault, auth);
 	const backendOps = new BackendOps(vault);
-	const api = new ApiServer(runtime, vault, auth, backendOps, config);
+	const pensieve = new PensieveService(runtime);
+	pensieve.start();
+	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
@@ -78,7 +81,10 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		runtime,
 		auth,
 		api,
-		stop: () => api.stop(),
+		stop: () => {
+			pensieve.stop();
+			api.stop();
+		},
 	};
 	return handle;
 }

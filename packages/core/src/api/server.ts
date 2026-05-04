@@ -8,6 +8,8 @@ import type { AuthService } from "../auth";
 import { ALL_PROVIDER_IDS, PROVIDER_ENV } from "../auth";
 import type { BackendOps, InstallableBackendId } from "../backend-ops";
 import type { ConfigService } from "../config-service";
+import type { PensieveService } from "../pensieve";
+import { pensieveAudit } from "../pensieve";
 import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
 import {
 	BACKEND_INSTALL_SPECS,
@@ -67,6 +69,7 @@ export class ApiServer {
 		private readonly auth: AuthService,
 		private readonly backendOps: BackendOps,
 		private readonly config: ConfigService,
+		private readonly pensieve: PensieveService,
 	) {}
 
 	async start(preferredPort = 2138): Promise<{ port: number }> {
@@ -444,6 +447,195 @@ export class ApiServer {
 						const v = await this.vault.vault();
 						await writeRoutingConfig(v, body);
 						return ok();
+					}
+
+					// --- Pensieve (activity + memories + relationships + graph) ---
+					if (req.method === "GET" && path === "/api/pensieve/runtime") {
+						return json(this.pensieve.runtimeSnapshot());
+					}
+					if (req.method === "GET" && path === "/api/pensieve/logs") {
+						const level = url.searchParams.get("level") ?? undefined;
+						const source = url.searchParams.get("source") ?? undefined;
+						const q = url.searchParams.get("q") ?? undefined;
+						const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
+						const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : undefined;
+						return json(this.pensieve.logs.list({
+							...(level ? { level } : {}),
+							...(source ? { source } : {}),
+							...(q ? { q } : {}),
+							...(limit ? { limit } : {}),
+							...(since ? { since } : {}),
+						}));
+					}
+					if (req.method === "GET" && path === "/api/pensieve/trajectories") {
+						const limit = Number(url.searchParams.get("limit") ?? 50);
+						const offset = Number(url.searchParams.get("offset") ?? 0);
+						const status = url.searchParams.get("status") ?? undefined;
+						const source = url.searchParams.get("source") ?? undefined;
+						const q = url.searchParams.get("q") ?? undefined;
+						return json(await this.pensieve.trajectories.list({
+							limit, offset,
+							...(status ? { status } : {}),
+							...(source ? { source } : {}),
+							...(q ? { q } : {}),
+						}));
+					}
+					const trajGet = path.match(/^\/api\/pensieve\/trajectories\/([^/]+)$/);
+					if (req.method === "GET" && trajGet) {
+						return json(await this.pensieve.trajectories.get(decodeURIComponent(trajGet[1] ?? "")));
+					}
+					if (req.method === "GET" && path === "/api/pensieve/memories") {
+						const opts: Record<string, unknown> = {
+							limit: Number(url.searchParams.get("limit") ?? 100),
+						};
+						for (const key of ["roomId", "entityId", "type", "tag", "q"]) {
+							const v = url.searchParams.get(key);
+							if (v) opts[key] = v;
+						}
+						return json(await this.pensieve.memories.list(opts as Parameters<typeof this.pensieve.memories.list>[0]));
+					}
+					if (req.method === "POST" && path === "/api/pensieve/memories/search") {
+						const body = (await req.json()) as { text: string; limit?: number };
+						return json(await this.pensieve.memories.search(body.text, body.limit ?? 30));
+					}
+					const memGet = path.match(/^\/api\/pensieve\/memories\/([^/]+)$/);
+					if (req.method === "GET" && memGet) {
+						const id = decodeURIComponent(memGet[1] ?? "") as never;
+						const detail = await this.pensieve.memories.get(id);
+						if (!detail) return error("not found", 404);
+						const backlinks = await this.pensieve.graph.backlinksForMemory(memGet[1] ?? "");
+						return json({ ...detail, backlinks });
+					}
+					if (req.method === "PATCH" && memGet) {
+						const id = decodeURIComponent(memGet[1] ?? "") as never;
+						const body = (await req.json()) as { contentText?: string; tags?: string[] };
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							success = await this.pensieve.memories.update(id, body);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "memory.update",
+							target: memGet[1],
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? "update failed", 400);
+					}
+					if (req.method === "DELETE" && memGet) {
+						const id = decodeURIComponent(memGet[1] ?? "") as never;
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							success = await this.pensieve.memories.remove(id);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "memory.delete",
+							target: memGet[1],
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? "delete failed", 400);
+					}
+					if (req.method === "GET" && path === "/api/pensieve/relationships/persons") {
+						const limit = Number(url.searchParams.get("limit") ?? 100);
+						return json(await this.pensieve.relationships.listPersons(limit));
+					}
+					const personGet = path.match(/^\/api\/pensieve\/relationships\/([^/]+)$/);
+					if (req.method === "GET" && personGet) {
+						const id = decodeURIComponent(personGet[1] ?? "") as never;
+						const detail = await this.pensieve.relationships.getPerson(id);
+						if (!detail) return error("not found", 404);
+						return json(detail);
+					}
+					if (req.method === "GET" && path === "/api/pensieve/relationships") {
+						const ids = (url.searchParams.get("entityIds") ?? "").split(",").filter(Boolean) as never[];
+						const tags = (url.searchParams.get("tags") ?? "").split(",").filter(Boolean);
+						const limit = Number(url.searchParams.get("limit") ?? 200);
+						return json(await this.pensieve.relationships.listRelationships(ids, tags, limit));
+					}
+					if (req.method === "POST" && path === "/api/pensieve/relationships") {
+						const body = (await req.json()) as Parameters<typeof this.pensieve.relationships.create>[0];
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							success = await this.pensieve.relationships.create(body);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "relationship.create",
+							target: `${body?.sourceEntityId}↔${body?.targetEntityId}`,
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? "create failed", 400);
+					}
+					const relPair = path.match(/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/);
+					if (req.method === "PATCH" && relPair) {
+						const source = decodeURIComponent(relPair[1] ?? "") as never;
+						const target = decodeURIComponent(relPair[2] ?? "") as never;
+						const body = (await req.json()) as { tags?: string[]; metadata?: Record<string, unknown> };
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							success = await this.pensieve.relationships.update(source, target, body);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "relationship.update",
+							target: `${relPair[1]}↔${relPair[2]}`,
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? "update failed", 400);
+					}
+					if (req.method === "DELETE" && relPair) {
+						const source = decodeURIComponent(relPair[1] ?? "") as never;
+						const target = decodeURIComponent(relPair[2] ?? "") as never;
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							success = await this.pensieve.relationships.remove(source, target);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "relationship.delete",
+							target: `${relPair[1]}↔${relPair[2]}`,
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? "delete failed", 400);
+					}
+					if (req.method === "GET" && path === "/api/pensieve/graph") {
+						const filter: Record<string, unknown> = {};
+						const dateFrom = url.searchParams.get("dateFrom");
+						const dateTo = url.searchParams.get("dateTo");
+						if (dateFrom) filter.dateFrom = Number(dateFrom);
+						if (dateTo) filter.dateTo = Number(dateTo);
+						const entityIds = (url.searchParams.get("entityIds") ?? "").split(",").filter(Boolean);
+						const types = (url.searchParams.get("types") ?? "").split(",").filter(Boolean);
+						const tags = (url.searchParams.get("tags") ?? "").split(",").filter(Boolean);
+						if (entityIds.length) filter.entityIds = entityIds;
+						if (types.length) filter.types = types;
+						if (tags.length) filter.tags = tags;
+						return json(await this.pensieve.graph.snapshot(filter as Parameters<typeof this.pensieve.graph.snapshot>[0]));
 					}
 
 					// --- auth: account providers + OAuth flows ---

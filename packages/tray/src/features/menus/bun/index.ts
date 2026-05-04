@@ -41,6 +41,18 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
+				label: "Pensieve",
+				submenu: [
+					{ label: "Open Pensieve", action: "pensieve:open", accelerator: "CommandOrControl+Shift+P" },
+				],
+			},
+			{
+				label: "Activity",
+				submenu: [
+					{ label: "Open Activity", action: "activity:open", accelerator: "CommandOrControl+Shift+A" },
+				],
+			},
+			{
 				label: "Window",
 				submenu: [
 					{ role: "minimize" },
@@ -60,6 +72,12 @@ export const menusFeature: Feature = {
 					break;
 				case "chat:open":
 					deps.events.emit("ui:open-chat", {});
+					break;
+				case "pensieve:open":
+					deps.events.emit("ui:open-pensieve", {});
+					break;
+				case "activity:open":
+					deps.events.emit("ui:open-activity", {});
 					break;
 			}
 		});

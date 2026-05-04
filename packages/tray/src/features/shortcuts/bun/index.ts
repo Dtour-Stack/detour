@@ -3,6 +3,8 @@ import type { Feature } from "../../../bun/kernel/registry";
 
 const TOGGLE_CHAT = "CommandOrControl+Shift+Space";
 const OPEN_SETTINGS = "CommandOrControl+Shift+S";
+const OPEN_PENSIEVE = "CommandOrControl+Shift+P";
+const OPEN_ACTIVITY = "CommandOrControl+Shift+A";
 
 export const shortcutsFeature: Feature = {
 	id: "shortcuts",
@@ -23,6 +25,24 @@ export const shortcutsFeature: Feature = {
 			console.warn(`[shortcuts] failed to register ${OPEN_SETTINGS}`);
 		} else {
 			console.log(`[shortcuts] ${OPEN_SETTINGS} → open settings`);
+		}
+
+		const okPensieve = GlobalShortcut.register(OPEN_PENSIEVE, () => {
+			deps.events.emit("ui:open-pensieve", {});
+		});
+		if (!okPensieve) {
+			console.warn(`[shortcuts] failed to register ${OPEN_PENSIEVE}`);
+		} else {
+			console.log(`[shortcuts] ${OPEN_PENSIEVE} → open pensieve`);
+		}
+
+		const okActivity = GlobalShortcut.register(OPEN_ACTIVITY, () => {
+			deps.events.emit("ui:open-activity", {});
+		});
+		if (!okActivity) {
+			console.warn(`[shortcuts] failed to register ${OPEN_ACTIVITY}`);
+		} else {
+			console.log(`[shortcuts] ${OPEN_ACTIVITY} → open activity`);
 		}
 	},
 };

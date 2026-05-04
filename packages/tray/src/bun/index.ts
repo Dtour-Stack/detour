@@ -23,6 +23,8 @@ const { createKernel } = await import("./kernel/app");
 const { loadFeatures } = await import("./kernel/registry");
 const { chatFeature } = await import("../features/chat/bun");
 const { settingsFeature } = await import("../features/settings/bun");
+const { pensieveFeature } = await import("../features/pensieve/bun");
+const { activityFeature } = await import("../features/activity/bun");
 const { shortcutsFeature } = await import("../features/shortcuts/bun");
 const { notificationsFeature } = await import("../features/notifications/bun");
 const { menusFeature } = await import("../features/menus/bun");
@@ -34,6 +36,8 @@ console.log("[main] loading features");
 await loadFeatures(kernel, [
 	chatFeature,
 	settingsFeature,
+	pensieveFeature,
+	activityFeature,
 	shortcutsFeature,
 	notificationsFeature,
 	menusFeature,

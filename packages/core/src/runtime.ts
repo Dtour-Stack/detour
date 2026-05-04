@@ -73,6 +73,12 @@ export class RuntimeService {
 		return this.getOrBuild();
 	}
 
+	/** Sync accessor — returns the cached runtime if built, or null. Used by
+	 * pensieve queries that should never trigger a build. */
+	peek(): import("@elizaos/core").IAgentRuntime | null {
+		return this.current?.runtime ?? null;
+	}
+
 	getCurrentProvider(): ProviderId | null {
 		const p = this.current?.provider;
 		if (p === "codex-chatgpt") return "openai"; // surface as "openai" to existing UI consumers

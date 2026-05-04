@@ -2496,7 +2496,7 @@
     },
     "packages/cli": {
       "name": "@detour/cli",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "bin": {
         "detour": "./bin/detour.ts",
       },
@@ -2510,7 +2510,7 @@
     },
     "packages/core": {
       "name": "@detour/core",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "dependencies": {
         "@detour/plugin-codex-chatgpt": "workspace:*",
         "@detour/plugin-vault-tools": "workspace:*",
@@ -2531,7 +2531,7 @@
     },
     "packages/plugin-codex-chatgpt": {
       "name": "@detour/plugin-codex-chatgpt",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "dependencies": {
         "@elizaos/core": "workspace:*",
       },
@@ -2542,7 +2542,7 @@
     },
     "packages/plugin-vault-tools": {
       "name": "@detour/plugin-vault-tools",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "dependencies": {
         "@elizaos/core": "workspace:*",
         "@elizaos/vault": "workspace:*",
@@ -2554,11 +2554,11 @@
     },
     "packages/shared": {
       "name": "@detour/shared",
-      "version": "0.1.1",
+      "version": "0.2.0",
     },
     "packages/tray": {
       "name": "@detour/tray",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "dependencies": {
         "@detour/core": "workspace:*",
         "@detour/shared": "workspace:*",
@@ -2568,7 +2568,7 @@
     },
     "packages/web": {
       "name": "@detour/web",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "dependencies": {
         "@detour/shared": "workspace:*",
         "react": "^19.0.0",

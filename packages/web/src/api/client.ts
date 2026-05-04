@@ -5,6 +5,15 @@ import type {
 	OpDiagnostic,
 	OsPermissionId,
 	OsPermissionInfo,
+	PensieveEntitySummary,
+	PensieveGraphSnapshot,
+	PensieveLogEntry,
+	PensieveMemoryDetail,
+	PensieveMemorySummary,
+	PensievePersonDetail,
+	PensieveRelationshipSummary,
+	PensieveRuntimeSnapshot,
+	PensieveTrajectoryListResult,
 	ProviderId,
 	ProviderInfo,
 	SigninResult,
@@ -181,6 +190,87 @@ export class WebClient {
 	}
 	async openOsPermissionPane(id: OsPermissionId): Promise<void> {
 		await this.json("POST", `/api/os/permissions/${encodeURIComponent(id)}/open`);
+	}
+
+	// --- Pensieve ---
+	pensieveLogs(params: { level?: string; source?: string; q?: string; limit?: number; since?: number } = {}): Promise<PensieveLogEntry[]> {
+		const qs = new URLSearchParams();
+		if (params.level) qs.set("level", params.level);
+		if (params.source) qs.set("source", params.source);
+		if (params.q) qs.set("q", params.q);
+		if (params.limit) qs.set("limit", String(params.limit));
+		if (params.since) qs.set("since", String(params.since));
+		const s = qs.toString();
+		return this.json("GET", `/api/pensieve/logs${s ? `?${s}` : ""}`);
+	}
+	pensieveRuntime(): Promise<PensieveRuntimeSnapshot> {
+		return this.json("GET", "/api/pensieve/runtime");
+	}
+	pensieveTrajectories(params: { limit?: number; offset?: number; status?: string; source?: string; q?: string } = {}): Promise<PensieveTrajectoryListResult> {
+		const qs = new URLSearchParams();
+		if (params.limit) qs.set("limit", String(params.limit));
+		if (params.offset) qs.set("offset", String(params.offset));
+		if (params.status) qs.set("status", params.status);
+		if (params.source) qs.set("source", params.source);
+		if (params.q) qs.set("q", params.q);
+		const s = qs.toString();
+		return this.json("GET", `/api/pensieve/trajectories${s ? `?${s}` : ""}`);
+	}
+	pensieveTrajectory(id: string): Promise<{ trajectory: Record<string, unknown> | null }> {
+		return this.json("GET", `/api/pensieve/trajectories/${encodeURIComponent(id)}`);
+	}
+	pensieveMemories(params: { limit?: number; type?: string; roomId?: string; entityId?: string; tag?: string; q?: string } = {}): Promise<PensieveMemorySummary[]> {
+		const qs = new URLSearchParams();
+		for (const [k, v] of Object.entries(params)) {
+			if (v != null && v !== "") qs.set(k, String(v));
+		}
+		const s = qs.toString();
+		return this.json("GET", `/api/pensieve/memories${s ? `?${s}` : ""}`);
+	}
+	pensieveSearchMemories(text: string, limit = 30): Promise<PensieveMemorySummary[]> {
+		return this.json("POST", "/api/pensieve/memories/search", { text, limit });
+	}
+	pensieveMemory(id: string): Promise<PensieveMemoryDetail> {
+		return this.json("GET", `/api/pensieve/memories/${encodeURIComponent(id)}`);
+	}
+	async pensieveUpdateMemory(id: string, patch: { contentText?: string; tags?: string[] }): Promise<void> {
+		await this.json("PATCH", `/api/pensieve/memories/${encodeURIComponent(id)}`, patch);
+	}
+	async pensieveDeleteMemory(id: string): Promise<void> {
+		await this.json("DELETE", `/api/pensieve/memories/${encodeURIComponent(id)}`);
+	}
+	pensievePersons(limit = 100): Promise<PensieveEntitySummary[]> {
+		return this.json("GET", `/api/pensieve/relationships/persons?limit=${limit}`);
+	}
+	pensievePerson(id: string): Promise<PensievePersonDetail> {
+		return this.json("GET", `/api/pensieve/relationships/${encodeURIComponent(id)}`);
+	}
+	pensieveRelationships(params: { entityIds?: string[]; tags?: string[]; limit?: number } = {}): Promise<PensieveRelationshipSummary[]> {
+		const qs = new URLSearchParams();
+		if (params.entityIds?.length) qs.set("entityIds", params.entityIds.join(","));
+		if (params.tags?.length) qs.set("tags", params.tags.join(","));
+		if (params.limit) qs.set("limit", String(params.limit));
+		const s = qs.toString();
+		return this.json("GET", `/api/pensieve/relationships${s ? `?${s}` : ""}`);
+	}
+	async pensieveCreateRelationship(rel: { sourceEntityId: string; targetEntityId: string; tags?: string[]; metadata?: Record<string, unknown> }): Promise<void> {
+		await this.json("POST", "/api/pensieve/relationships", rel);
+	}
+	async pensieveUpdateRelationship(source: string, target: string, patch: { tags?: string[]; metadata?: Record<string, unknown> }): Promise<void> {
+		await this.json("PATCH", `/api/pensieve/relationships/${encodeURIComponent(source)}/${encodeURIComponent(target)}`, patch);
+	}
+	async pensieveDeleteRelationship(source: string, target: string): Promise<void> {
+		await this.json("DELETE", `/api/pensieve/relationships/${encodeURIComponent(source)}/${encodeURIComponent(target)}`);
+	}
+	pensieveGraph(filter: { dateFrom?: number; dateTo?: number; entityIds?: string[]; types?: string[]; tags?: string[] } = {}): Promise<PensieveGraphSnapshot> {
+		const qs = new URLSearchParams();
+		if (filter.dateFrom) qs.set("dateFrom", String(filter.dateFrom));
+		if (filter.dateTo) qs.set("dateTo", String(filter.dateTo));
+		if (filter.entityIds?.length) qs.set("entityIds", filter.entityIds.join(","));
+		if (filter.types?.length) qs.set("types", filter.types.join(","));
+		if (filter.tags?.length) qs.set("tags", filter.tags.join(","));
+		const s = qs.toString();
+		return this.json("GET", `/api/pensieve/graph${s ? `?${s}` : ""}`);
 	}
 
 	// --- external browser (OAuth flows can't use window.open in a webview) ---

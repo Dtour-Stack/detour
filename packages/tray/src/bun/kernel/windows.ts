@@ -77,6 +77,8 @@ export type RegularWindowOptions = {
 	height: number;
 	rpc: RpcConfig;
 	centered?: boolean;
+	/** Override the default `views://<viewKey>/index.html` URL. Useful for pointing at a Vite dev server. */
+	url?: string;
 };
 
 export class WindowFactory {
@@ -116,7 +118,7 @@ export class WindowFactory {
 			: 100;
 		const window = new BrowserWindow({
 			title: opts.title,
-			url: `views://${opts.viewKey}/index.html`,
+			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
 			preload: null,
 			viewsRoot: null,
