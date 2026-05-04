@@ -19,7 +19,45 @@ export type CoreHandle = {
 	stop: () => void;
 };
 
+/**
+ * macOS .app bundles launched from Finder/Launchd inherit a minimal PATH
+ * (`/usr/bin:/bin:/usr/sbin:/sbin`). That breaks our spawn-based detectors
+ * for `op`, `bw`, `brew`, `npm`, and anything else users have installed under
+ * Homebrew or in their home dir. Augment PATH at startup so child_process
+ * spawns find these tools regardless of how the app was launched.
+ *
+ * Order: existing PATH entries → standard system → Homebrew → user-local. We
+ * append rather than prepend so a user who explicitly set PATH (e.g. wrapper
+ * launcher) keeps their precedence.
+ */
+function ensureUsefulPath(): void {
+	const existing = (process.env.PATH ?? "").split(":").filter(Boolean);
+	const home = process.env.HOME ?? "";
+	const candidates = [
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/sbin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+		home ? `${home}/.local/bin` : "",
+		home ? `${home}/bin` : "",
+	].filter(Boolean);
+	const seen = new Set(existing);
+	const merged = [...existing];
+	for (const p of candidates) {
+		if (!seen.has(p)) {
+			merged.push(p);
+			seen.add(p);
+		}
+	}
+	process.env.PATH = merged.join(":");
+}
+
 export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
+	ensureUsefulPath();
 	process.env.PGLITE_DATA_DIR = opts.pgliteDataDir;
 
 	const vault = new VaultService();
