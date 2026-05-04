@@ -17,7 +17,7 @@ export const notificationsFeature: Feature = {
 			if (msg.kind === "chat:error") {
 				try {
 					Utils.showNotification({
-						title: "Eliza error",
+						title: "Detour error",
 						body: msg.message,
 					});
 				} catch {

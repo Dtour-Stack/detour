@@ -7,6 +7,8 @@ import type { RuntimeService } from "../runtime";
 import type { AuthService } from "../auth";
 import { ALL_PROVIDER_IDS, PROVIDER_ENV } from "../auth";
 import type { BackendOps, InstallableBackendId } from "../backend-ops";
+import type { ConfigService } from "../config-service";
+import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
 import {
 	BACKEND_INSTALL_SPECS,
 	buildInstallCommand,
@@ -64,6 +66,7 @@ export class ApiServer {
 		private readonly vault: VaultService,
 		private readonly auth: AuthService,
 		private readonly backendOps: BackendOps,
+		private readonly config: ConfigService,
 	) {}
 
 	async start(preferredPort = 2138): Promise<{ port: number }> {
@@ -106,37 +109,17 @@ export class ApiServer {
 					if (req.method === "GET" && path === "/api/health") {
 						return json({ ok: true, version: VERSION });
 					}
-					if (req.method === "GET" && path === "/api/debug/keyring") {
-						const out: Record<string, unknown> = {};
-						try {
-							const dyn: any = await import("@napi-rs/keyring");
-							out.dynamic_keys = Object.keys(dyn);
-							out.dynamic_Entry = typeof dyn.Entry;
-							out.dynamic_default_keys = dyn.default ? Object.keys(dyn.default) : null;
-							out.dynamic_default_Entry = dyn.default ? typeof dyn.default.Entry : null;
-						} catch (err) {
-							out.dynamic_error = err instanceof Error ? err.message : String(err);
-						}
-						try {
-							const req2 = (await import("module")).createRequire(import.meta.url);
-							const reqMod: any = req2("@napi-rs/keyring");
-							out.require_keys = Object.keys(reqMod);
-							out.require_Entry = typeof reqMod.Entry;
-							if (reqMod.Entry) {
-								try {
-									new reqMod.Entry("test", "test");
-									out.require_Entry_construct = "ok";
-								} catch (e) {
-									out.require_Entry_construct = e instanceof Error ? e.message : String(e);
-								}
-							}
-						} catch (err) {
-							out.require_error = err instanceof Error ? err.message : String(err);
-						}
-						return json(out);
-					}
 					if (req.method === "GET" && path === "/api/providers") {
-						return json(await this.vault.listProviders());
+						const list = await this.vault.listProviders();
+						// Trigger build if no runtime exists so OAuth-derived providers
+						// surface as active without waiting for the first chat message.
+						await this.runtime.getOrBuild().catch(() => {});
+						const runtimeProvider = this.runtime.getCurrentProvider();
+						const enriched = list.map((p) => ({
+							...p,
+							active: p.active || runtimeProvider === p.id,
+						}));
+						return json(enriched);
 					}
 					const setKey = path.match(/^\/api\/providers\/([^/]+)\/key$/);
 					if (req.method === "PUT" && setKey) {
@@ -215,6 +198,23 @@ export class ApiServer {
 						return ok();
 					}
 
+					// --- system browser (OAuth flows can't use window.open from inside a webview) ---
+					if (req.method === "POST" && path === "/api/external/open") {
+						const body = (await req.json()) as { url: string };
+						if (typeof body.url !== "string" || !/^https?:\/\//i.test(body.url)) {
+							return error("invalid url", 400);
+						}
+						const cmd =
+							process.platform === "darwin"
+								? "open"
+								: process.platform === "win32"
+									? "start"
+									: "xdg-open";
+						const { spawn: sp } = await import("node:child_process");
+						sp(cmd, [body.url], { stdio: "ignore", detached: true, shell: false }).unref();
+						return ok();
+					}
+
 					// --- window control (chat popup) ---
 					if (req.method === "POST" && path === "/api/window/hide") {
 						this.windowController?.({ kind: "hide" });
@@ -232,6 +232,49 @@ export class ApiServer {
 							width: Math.max(320, Math.min(2000, Number(body.width) || 0)),
 							height: Math.max(320, Math.min(2000, Number(body.height) || 0)),
 						});
+						return ok();
+					}
+
+					// --- OS permissions (macOS TCC) ---
+					if (req.method === "GET" && path === "/api/os/permissions") {
+						return json(await listPermissions());
+					}
+					const osPermOpen = path.match(/^\/api\/os\/permissions\/([^/]+)\/open$/);
+					if (req.method === "POST" && osPermOpen) {
+						const id = decodeURIComponent(osPermOpen[1] ?? "") as PermissionId;
+						try {
+							await openPermissionPane(id);
+							return ok();
+						} catch (err) {
+							return error(err instanceof Error ? err.message : String(err), 400);
+						}
+					}
+
+					// --- App configuration (agent permissions, models, window) ---
+					if (req.method === "GET" && path === "/api/config/agent") {
+						return json(await this.config.getAgent());
+					}
+					if (req.method === "PUT" && path === "/api/config/agent") {
+						const body = (await req.json()) as Parameters<ConfigService["setAgent"]>[0];
+						await this.config.setAgent(body);
+						return ok();
+					}
+					if (req.method === "GET" && path === "/api/config/models") {
+						return json(await this.config.getModels());
+					}
+					if (req.method === "PUT" && path === "/api/config/models") {
+						const body = (await req.json()) as Parameters<ConfigService["setModels"]>[0];
+						await this.config.setModels(body);
+						// Rebuild runtime so new model names take effect immediately
+						await this.runtime.rebuild().catch(() => {});
+						return ok();
+					}
+					if (req.method === "GET" && path === "/api/config/window") {
+						return json(await this.config.getWindow());
+					}
+					if (req.method === "PUT" && path === "/api/config/window") {
+						const body = (await req.json()) as Parameters<ConfigService["setWindow"]>[0];
+						await this.config.setWindow(body);
 						return ok();
 					}
 
@@ -424,6 +467,11 @@ export class ApiServer {
 						const provider = decodeURIComponent(accountDelete[1] ?? "") as any;
 						const accountId = decodeURIComponent(accountDelete[2] ?? "");
 						this.auth.deleteAccount(provider, accountId);
+						await this.runtime.rebuild().catch(() => {});
+						this.broadcast({
+							kind: "provider:changed",
+							activeProvider: this.runtime.getCurrentProvider(),
+						});
 						return ok();
 					}
 					if (req.method === "POST" && path === "/api/auth/flows") {
@@ -436,13 +484,27 @@ export class ApiServer {
 							label: body.label,
 							accountId: body.accountId,
 						});
-						// Subscribe and broadcast WS updates
+						// Subscribe and broadcast WS updates. On success, rebuild the
+						// runtime so the chat picks up the freshly-stored OAuth account.
 						this.auth.subscribeFlow(handle.sessionId, (state) => {
 							this.broadcast({
 								kind: "auth:flow-update",
 								sessionId: handle.sessionId,
 								state: state as any,
 							});
+							if (state.status === "success") {
+								this.runtime
+									.rebuild()
+									.then(() => {
+										this.broadcast({
+											kind: "provider:changed",
+											activeProvider: this.runtime.getCurrentProvider(),
+										});
+									})
+									.catch((err) =>
+										console.error("[runtime] rebuild after OAuth success failed:", err),
+									);
+							}
 						});
 						// Don't await completion — return immediately so the UI can display authUrl
 						handle.completion.catch(() => {

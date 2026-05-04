@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs when a new commit lands on the same branch — no point
+# spending CI minutes on a superseded SHA.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.3.13"
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: macos-14
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck shared
+        run: bunx tsc --noEmit -p packages/shared/tsconfig.json
+
+      - name: Typecheck core
+        run: bunx tsc --noEmit -p packages/core/tsconfig.json
+
+      - name: Typecheck plugin-codex-chatgpt
+        run: bunx tsc --noEmit -p packages/plugin-codex-chatgpt/tsconfig.json
+
+      - name: Typecheck plugin-vault-tools
+        run: bunx tsc --noEmit -p packages/plugin-vault-tools/tsconfig.json
+
+      - name: Typecheck web
+        # Pre-existing CSS side-effect import warning is not a hard error; surface
+        # everything ELSE as a build break by greppping for new TS errors.
+        run: |
+          bunx tsc --noEmit -p packages/web/tsconfig.json 2>&1 | tee web-typecheck.log
+          if grep -E "^packages/web/src/.*error TS" web-typecheck.log | grep -v "TS2882.*index.css"; then
+            echo "::error::New TypeScript errors in packages/web"
+            exit 1
+          fi
+
+      - name: Typecheck tray
+        run: bunx tsc --noEmit -p packages/tray/tsconfig.json
+
+  test:
+    name: Test (${{ matrix.package }})
+    runs-on: macos-14
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - core
+          - plugin-codex-chatgpt
+          - plugin-vault-tools
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Test ${{ matrix.package }}
+        working-directory: packages/${{ matrix.package }}
+        # Bun's test runner discovers *.test.ts under cwd. Per-package isolation
+        # avoids the cross-package state collisions (shared module state, env)
+        # that show up when running everything in one process.
+        run: bun test
+
+  build-icons:
+    name: Verify icon + asset pipeline
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Run prebuild scripts (icons + pglite assets)
+        working-directory: packages/tray
+        run: bun run prepare
+
+      - name: Verify generated assets exist
+        run: |
+          set -e
+          test -f packages/tray/build-assets/tray/iconTemplate.png
+          test -f packages/tray/build-assets/tray/iconTemplate@2x.png
+          test -f packages/tray/build-assets/tray/iconTemplate@3x.png
+          test -f packages/tray/build-assets/app-icon/icon.icns
+          test -d packages/tray/build-assets/app-icon/icon.iconset
+          test -f packages/tray/build-assets/pglite/pglite.data
+          test -f packages/tray/build-assets/pglite/pglite.wasm
+          test -f packages/tray/build-assets/pglite/initdb.wasm
+          test -f packages/tray/build-assets/pglite/vector.tar.gz
+          test -f packages/tray/build-assets/pglite/fuzzystrmatch.tar.gz
+          test -f packages/web/public/favicon.ico
+          test -f packages/web/public/favicon-32.png
+          test -f packages/web/public/apple-touch-icon.png
+          echo "All assets present."

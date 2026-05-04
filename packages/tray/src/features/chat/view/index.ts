@@ -34,7 +34,7 @@ const r = (rpc as any).request as {
 function renderShell() {
 	root.innerHTML = `
 		<div class="titlebar electrobun-webkit-app-region-drag">
-			<h1>Eliza</h1>
+			<h1>Detour</h1>
 			<div class="titlebar-actions electrobun-webkit-app-region-no-drag">
 				<button class="icon-btn" data-action="settings" title="Settings">⚙</button>
 				<button class="icon-btn" data-action="close" title="Hide (Esc)">✕</button>

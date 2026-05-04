@@ -1,50 +1,111 @@
 import { useState } from "react";
 import type { WebClient } from "../../api/client";
 import { ProvidersTab } from "./ProvidersTab";
-import { AccountsTab } from "./AccountsTab";
 import { InventoryTab } from "./InventoryTab";
 import { SavedLoginsTab } from "./SavedLoginsTab";
 import { BackendsTab } from "./BackendsTab";
+import { AppearanceTab } from "./AppearanceTab";
+import { AgentPermissionsTab } from "./AgentPermissionsTab";
+import { ModelsTab } from "./ModelsTab";
+import { WindowTab } from "./WindowTab";
+import { OsPermissionsTab } from "./OsPermissionsTab";
 
-type Tab = "providers" | "accounts" | "inventory" | "saved-logins" | "backends";
+type Section = "configuration" | "vault";
 
-const TABS: { id: Tab; label: string }[] = [
+type ConfigTab = "appearance" | "providers" | "models" | "agent" | "os" | "window";
+type VaultTab = "inventory" | "saved-logins" | "backends";
+
+const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
+	{ id: "appearance", label: "Appearance" },
 	{ id: "providers", label: "Providers" },
-	{ id: "accounts", label: "Accounts" },
-	{ id: "backends", label: "Backends" },
+	{ id: "models", label: "Models & Routing" },
+	{ id: "agent", label: "Agent Permissions" },
+	{ id: "os", label: "OS Permissions" },
+	{ id: "window", label: "Window" },
+];
+
+const VAULT_TABS: { id: VaultTab; label: string }[] = [
+	{ id: "inventory", label: "Inventory" },
 	{ id: "saved-logins", label: "Saved Logins" },
-	{ id: "inventory", label: "Vault" },
+	{ id: "backends", label: "Backends" },
 ];
 
 export function SettingsView({ client }: { client: WebClient }) {
-	const [tab, setTab] = useState<Tab>("providers");
+	const [section, setSection] = useState<Section>("configuration");
+	const [configTab, setConfigTab] = useState<ConfigTab>("appearance");
+	const [vaultTab, setVaultTab] = useState<VaultTab>("inventory");
 
 	return (
-		<div className="settings-page">
-			<h2>Settings</h2>
-			<p className="subtitle">
-				Vault, providers, password manager backends, and saved logins. All keys
-				encrypted in your OS keychain via @elizaos/vault.
-			</p>
-
-			<div className="tabs">
-				{TABS.map((t) => (
+		<div className="settings-shell">
+			<aside className="settings-sidebar">
+				<div className="sidebar-section">
 					<button
-						key={t.id}
 						type="button"
-						className={tab === t.id ? "tab-btn active" : "tab-btn"}
-						onClick={() => setTab(t.id)}
+						className={section === "configuration" ? "section-btn active" : "section-btn"}
+						onClick={() => setSection("configuration")}
 					>
-						{t.label}
+						Configuration
 					</button>
-				))}
-			</div>
+					{section === "configuration" && (
+						<div className="sub-nav">
+							{CONFIG_TABS.map((t) => (
+								<button
+									key={t.id}
+									type="button"
+									className={configTab === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
+									onClick={() => setConfigTab(t.id)}
+								>
+									{t.label}
+								</button>
+							))}
+						</div>
+					)}
+				</div>
 
-			{tab === "providers" && <ProvidersTab client={client} />}
-			{tab === "accounts" && <AccountsTab client={client} />}
-			{tab === "backends" && <BackendsTab client={client} />}
-			{tab === "saved-logins" && <SavedLoginsTab client={client} />}
-			{tab === "inventory" && <InventoryTab client={client} />}
+				<div className="sidebar-section">
+					<button
+						type="button"
+						className={section === "vault" ? "section-btn active" : "section-btn"}
+						onClick={() => setSection("vault")}
+					>
+						Vault Nav
+					</button>
+					{section === "vault" && (
+						<div className="sub-nav">
+							{VAULT_TABS.map((t) => (
+								<button
+									key={t.id}
+									type="button"
+									className={vaultTab === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
+									onClick={() => setVaultTab(t.id)}
+								>
+									{t.label}
+								</button>
+							))}
+						</div>
+					)}
+				</div>
+			</aside>
+
+			<main className="settings-main">
+				{section === "configuration" && (
+					<>
+						{configTab === "appearance" && <AppearanceTab client={client} />}
+						{configTab === "providers" && <ProvidersTab client={client} />}
+						{configTab === "models" && <ModelsTab client={client} />}
+						{configTab === "agent" && <AgentPermissionsTab client={client} />}
+						{configTab === "os" && <OsPermissionsTab client={client} />}
+						{configTab === "window" && <WindowTab client={client} />}
+					</>
+				)}
+				{section === "vault" && (
+					<>
+						{vaultTab === "inventory" && <InventoryTab client={client} />}
+						{vaultTab === "saved-logins" && <SavedLoginsTab client={client} />}
+						{vaultTab === "backends" && <BackendsTab client={client} />}
+					</>
+				)}
+			</main>
 		</div>
 	);
 }

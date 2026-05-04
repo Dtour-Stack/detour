@@ -6,7 +6,7 @@ export const menusFeature: Feature = {
 	init(deps) {
 		ApplicationMenu.setApplicationMenu([
 			{
-				label: "Eliza",
+				label: "Detour",
 				submenu: [
 					{ role: "about" },
 					{ type: "separator" },

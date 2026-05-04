@@ -79,6 +79,51 @@ export type UiPreferences = {
 	accent: string;
 };
 
+export type AgentVaultMode = "off" | "read" | "read-write";
+export type AgentConfig = {
+	deny: boolean;
+	mode: AgentVaultMode;
+	allowedPrefixes: string[];
+	deniedPrefixes: string[];
+};
+
+export type ModelConfig = {
+	codexLarge: string;
+	codexSmall: string;
+	codexImage: string;
+	providerPriority: ("anthropic-subscription" | "openai-codex" | "anthropic-api" | "openai-api")[];
+};
+
+export type WindowConfig = {
+	width: number;
+	height: number;
+	hideOnBlur: boolean;
+	alwaysOnTop: boolean;
+};
+
+export type OsPermissionId =
+	| "camera"
+	| "microphone"
+	| "screen-recording"
+	| "accessibility"
+	| "full-disk-access"
+	| "automation"
+	| "location"
+	| "files-folders"
+	| "input-monitoring"
+	| "bluetooth";
+
+export type OsPermissionStatus = "granted" | "denied" | "unknown" | "not-applicable";
+
+export type OsPermissionInfo = {
+	id: OsPermissionId;
+	label: string;
+	enables: string;
+	status: OsPermissionStatus;
+	detail?: string;
+	settingsUrl?: string;
+};
+
 export type OpDiagnostic = {
 	platform: string;
 	opPath: string | null;

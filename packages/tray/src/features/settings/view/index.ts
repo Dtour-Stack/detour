@@ -95,7 +95,7 @@ function render(
 		.join("");
 
 	root.innerHTML = `
-		<h1>Eliza Settings</h1>
+		<h1>Detour Settings</h1>
 		<p class="subtitle">Keys are stored in your OS keychain via @elizaos/vault. Add at least one provider to chat.</p>
 
 		<section>

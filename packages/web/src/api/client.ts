@@ -1,10 +1,15 @@
 import type {
+	AgentConfig,
 	BackendStatus,
+	ModelConfig,
 	OpDiagnostic,
+	OsPermissionId,
+	OsPermissionInfo,
 	ProviderId,
 	ProviderInfo,
 	SigninResult,
 	UiPreferences,
+	WindowConfig,
 	WsClientMessage,
 	WsServerMessage,
 } from "@detour/shared";
@@ -148,6 +153,39 @@ export class WebClient {
 	}
 	async setUiPreferences(prefs: Partial<UiPreferences>): Promise<void> {
 		await this.json("PUT", "/api/ui/preferences", prefs);
+	}
+
+	// --- app config (agent perms, models, window) ---
+	getAgentConfig(): Promise<AgentConfig> {
+		return this.json("GET", "/api/config/agent");
+	}
+	async setAgentConfig(cfg: AgentConfig): Promise<void> {
+		await this.json("PUT", "/api/config/agent", cfg);
+	}
+	getModelConfig(): Promise<ModelConfig> {
+		return this.json("GET", "/api/config/models");
+	}
+	async setModelConfig(cfg: ModelConfig): Promise<void> {
+		await this.json("PUT", "/api/config/models", cfg);
+	}
+	getWindowConfig(): Promise<WindowConfig> {
+		return this.json("GET", "/api/config/window");
+	}
+	async setWindowConfig(cfg: WindowConfig): Promise<void> {
+		await this.json("PUT", "/api/config/window", cfg);
+	}
+
+	// --- OS permissions (macOS TCC) ---
+	listOsPermissions(): Promise<OsPermissionInfo[]> {
+		return this.json("GET", "/api/os/permissions");
+	}
+	async openOsPermissionPane(id: OsPermissionId): Promise<void> {
+		await this.json("POST", `/api/os/permissions/${encodeURIComponent(id)}/open`);
+	}
+
+	// --- external browser (OAuth flows can't use window.open in a webview) ---
+	async openExternal(url: string): Promise<void> {
+		await this.json("POST", "/api/external/open", { url });
 	}
 
 	// --- window control (tray popup) ---

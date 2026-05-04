@@ -28,7 +28,7 @@ const { notificationsFeature } = await import("../features/notifications/bun");
 const { menusFeature } = await import("../features/menus/bun");
 
 console.log("[main] creating kernel");
-const kernel = createKernel({ trayTitle: "Eliza", core, api });
+const kernel = createKernel({ trayTitle: "Detour", core, api });
 
 console.log("[main] loading features");
 await loadFeatures(kernel, [

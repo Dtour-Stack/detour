@@ -119,7 +119,7 @@ export function App() {
 	return (
 		<div className="popup-shell">
 			<header className="popup-header electrobun-webkit-app-region-drag">
-				<div className="popup-title">Eliza</div>
+				<div className="popup-title">Detour</div>
 				<div className="popup-actions" style={{ WebkitAppRegion: "no-drag" } as any}>
 					<div className="appearance-wrap" ref={appearanceRef}>
 						<button
@@ -178,7 +178,7 @@ export function App() {
 					<button
 						type="button"
 						className={drawerOpen ? "icon-btn active" : "icon-btn"}
-						title="Settings"
+						title="Configuration"
 						onClick={() => setDrawerOpen((x) => !x)}
 					>
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -204,11 +204,11 @@ export function App() {
 				{drawerOpen && (
 					<div className="drawer">
 						<div className="drawer-header electrobun-webkit-app-region-drag">
-							<span className="popup-title">Settings</span>
+							<span className="popup-title">Configuration</span>
 							<button
 								type="button"
 								className="icon-btn"
-								title="Close settings"
+								title="Close configuration"
 								style={{ WebkitAppRegion: "no-drag" } as any}
 								onClick={() => setDrawerOpen(false)}
 							>

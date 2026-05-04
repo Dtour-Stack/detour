@@ -4,6 +4,7 @@
 
 import {
 	createManager,
+	createVault,
 	listVaultInventory,
 	categorizeKey,
 	inferProviderId,
@@ -32,6 +33,7 @@ import {
 	type VaultEntryMeta,
 } from "@elizaos/vault";
 import type { ProviderId, ProviderInfo } from "@detour/shared";
+import { securityCliMasterKey } from "./master-key-security-cli";
 
 const PROVIDERS: ReadonlyArray<{
 	id: ProviderId;
@@ -48,7 +50,19 @@ export class VaultService {
 	private managerPromise: Promise<SecretsManager> | null = null;
 
 	manager(): Promise<SecretsManager> {
-		if (!this.managerPromise) this.managerPromise = Promise.resolve(createManager());
+		if (!this.managerPromise) {
+			// Bypass @napi-rs/keyring on macOS — its native binding fails to
+			// load inside Electrobun's bundled Bun process. The `security` CLI
+			// reads/writes the same keychain entry (service "eliza", account
+			// "vault.masterKey") so the user's existing vault is read back
+			// transparently. On other platforms, fall through to eliza's default.
+			if (process.platform === "darwin") {
+				const vault = createVault({ masterKey: securityCliMasterKey() });
+				this.managerPromise = Promise.resolve(createManager({ vault }));
+			} else {
+				this.managerPromise = Promise.resolve(createManager());
+			}
+		}
 		return this.managerPromise;
 	}
 

@@ -1,6 +1,7 @@
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
 import { BackendOps } from "./backend-ops";
+import { ConfigService } from "./config-service";
 import { RuntimeService } from "./runtime";
 import { VaultService } from "./vault";
 
@@ -22,11 +23,13 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	process.env.PGLITE_DATA_DIR = opts.pgliteDataDir;
 
 	const vault = new VaultService();
-	const runtime = new RuntimeService(vault);
 	const auth = new AuthService();
 	auth.enableClaudeCodeStealth();
+	const config = new ConfigService(vault);
+	await config.bootstrap(); // load persisted config + push to plugins
+	const runtime = new RuntimeService(vault, auth);
 	const backendOps = new BackendOps(vault);
-	const api = new ApiServer(runtime, vault, auth, backendOps);
+	const api = new ApiServer(runtime, vault, auth, backendOps, config);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);

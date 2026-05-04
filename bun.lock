@@ -2495,6 +2495,8 @@
       "name": "@detour/core",
       "version": "0.0.1",
       "dependencies": {
+        "@detour/plugin-codex-chatgpt": "workspace:*",
+        "@detour/plugin-vault-tools": "workspace:*",
         "@detour/shared": "workspace:*",
         "@elizaos/agent": "workspace:*",
         "@elizaos/core": "workspace:*",
@@ -2502,7 +2504,31 @@
         "@elizaos/plugin-openai": "workspace:*",
         "@elizaos/plugin-sql": "workspace:*",
         "@elizaos/vault": "workspace:*",
+        "@napi-rs/keyring": "^1.3.0",
         "uuid": "^11.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-codex-chatgpt": {
+      "name": "@detour/plugin-codex-chatgpt",
+      "version": "0.0.1",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-vault-tools": {
+      "name": "@detour/plugin-vault-tools",
+      "version": "0.0.1",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+        "@elizaos/vault": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -2519,6 +2545,7 @@
       "dependencies": {
         "@detour/core": "workspace:*",
         "@detour/shared": "workspace:*",
+        "@electric-sql/pglite": "*",
         "electrobun": "1.18.1",
       },
     },
@@ -2944,6 +2971,10 @@
     "@detour/cli": ["@detour/cli@workspace:packages/cli"],
 
     "@detour/core": ["@detour/core@workspace:packages/core"],
+
+    "@detour/plugin-codex-chatgpt": ["@detour/plugin-codex-chatgpt@workspace:packages/plugin-codex-chatgpt"],
+
+    "@detour/plugin-vault-tools": ["@detour/plugin-vault-tools@workspace:packages/plugin-vault-tools"],
 
     "@detour/shared": ["@detour/shared@workspace:packages/shared"],
 

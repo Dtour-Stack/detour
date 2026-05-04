@@ -12,7 +12,20 @@ export class TrayController {
 	private iconClickHandlers: Array<() => void> = [];
 
 	constructor(opts: { title: string }) {
-		this.tray = new Tray({ title: opts.title });
+		// Template PNGs are copied to Resources/app/views/icons/ by the
+		// electrobun.config.ts copy map. The `views://` prefix is what Tray's
+		// resolveImagePath understands; macOS auto-picks @2x / @3x by suffix.
+		// `template: true` → auto-tint for light/dark menu bar.
+		// `title: ""` → image-only (passing opts.title here would render the
+		// app name as text alongside the icon).
+		this.tray = new Tray({
+			title: "",
+			image: "views://icons/iconTemplate.png",
+			template: true,
+			width: 22,
+			height: 22,
+		});
+		void opts.title; // kept on the public API in case callers want to setTitle later
 		this.tray.on("tray-clicked", (event: any) => {
 			const action: string = event?.data?.action ?? "";
 			if (action === "") {

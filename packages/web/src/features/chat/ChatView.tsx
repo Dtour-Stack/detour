@@ -109,7 +109,7 @@ export function ChatView({
 			</div>
 			<div className="composer">
 				<textarea
-					placeholder={activeProvider ? "Message Eliza…" : "Configure a provider in Settings to start"}
+					placeholder={activeProvider ? "Message Detour…" : "Configure a provider in Configuration to start"}
 					disabled={!activeProvider || pending}
 					rows={1}
 					onKeyDown={(e) => {

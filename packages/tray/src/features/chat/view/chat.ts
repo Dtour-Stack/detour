@@ -26,7 +26,7 @@ export function setProviderActive(provider: string | null) {
 	if (composerEl) {
 		composerEl.disabled = !activeProvider;
 		composerEl.placeholder = activeProvider
-			? `Message Eliza…`
+			? `Message Detour…`
 			: "Add an API key in Settings to start chatting";
 	}
 }
@@ -112,7 +112,7 @@ export function mountChat(root: HTMLElement, rpcInstance: ChatRpc) {
 		<div class="chat">
 			<div class="bubbles" id="bubbles"></div>
 			<div class="composer">
-				<textarea id="composer" placeholder="Message Eliza…" rows="1"></textarea>
+				<textarea id="composer" placeholder="Message Detour…" rows="1"></textarea>
 			</div>
 		</div>
 	`;

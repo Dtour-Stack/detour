@@ -4,13 +4,17 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch",
-		"build:canary": "electrobun build --env=canary"
+		"prepare:pglite": "bun scripts/prepare-pglite-assets.ts",
+		"prepare:icons": "bun scripts/build-icons.ts",
+		"prepare": "bun run prepare:icons && bun run prepare:pglite",
+		"start": "bun run prepare && electrobun dev",
+		"dev": "bun run prepare && electrobun dev --watch",
+		"build:canary": "bun run prepare && electrobun build --env=canary"
 	},
 	"dependencies": {
 		"@detour/core": "workspace:*",
 		"@detour/shared": "workspace:*",
+		"@electric-sql/pglite": "*",
 		"electrobun": "1.18.1"
 	}
 }
