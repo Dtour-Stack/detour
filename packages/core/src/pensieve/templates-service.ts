@@ -231,6 +231,36 @@ export class PensieveTemplatesService {
 	static extractVariables(body: string): string[] {
 		return extractVariables(body);
 	}
+
+	/**
+	 * Read every persisted template and merge their bodies into
+	 * `runtime.character.templates` keyed by the template's `name` slug.
+	 *
+	 * elizaOS subsystems (basic-capabilities, advanced-capabilities, message
+	 * service, etc.) all read prompts via `runtime.character.templates?.<name>`
+	 * with a fallback to their built-in default — so any Pensieve template
+	 * with a recognised name (messageHandlerTemplate, replyTemplate,
+	 * shouldRespondTemplate, reflectionTemplate, thinkTemplate, …) takes
+	 * effect immediately. This is the "Eliza is actually using all of this"
+	 * integration point for the templates surface.
+	 *
+	 * Called from the RuntimeService.onAfterBuild hook on every build/rebuild,
+	 * so user edits in the Pensieve UI persist across restarts.
+	 */
+	async applyTemplatesToRuntime(runtime: IAgentRuntime): Promise<{ applied: number; names: string[] }> {
+		const character = (runtime as unknown as { character?: { templates?: Record<string, string> } }).character;
+		if (!character) return { applied: 0, names: [] };
+		if (!character.templates) character.templates = {};
+		const list = await this.listTemplates();
+		const names: string[] = [];
+		for (const t of list) {
+			const detail = await this.getTemplate(t.id);
+			if (!detail) continue;
+			character.templates[t.name] = detail.body;
+			names.push(t.name);
+		}
+		return { applied: names.length, names };
+	}
 }
 
 // Re-export for convenience.

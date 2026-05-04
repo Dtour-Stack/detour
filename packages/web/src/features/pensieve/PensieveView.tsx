@@ -5,12 +5,14 @@ import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";
 import { TemplatesPane } from "./templates/TemplatesPane";
 
-type Section = "memories" | "relationships" | "templates" | "graph";
+type Section = "notes" | "knowledge" | "memories" | "templates" | "relationships" | "graph";
 
 const SECTIONS: { id: Section; label: string }[] = [
+	{ id: "notes", label: "Notes" },
+	{ id: "knowledge", label: "Knowledge" },
 	{ id: "memories", label: "Memories" },
-	{ id: "relationships", label: "Relationships" },
 	{ id: "templates", label: "Templates" },
+	{ id: "relationships", label: "Relationships" },
 	{ id: "graph", label: "Graph" },
 ];
 
@@ -65,9 +67,11 @@ export function PensieveView() {
 				</div>
 			</aside>
 			<main className="settings-main settings-main-flush">
+				{section === "notes" && <MemoriesPane client={client} scope="notes" />}
+				{section === "knowledge" && <MemoriesPane client={client} scope="knowledge" />}
 				{section === "memories" && <MemoriesPane client={client} />}
-				{section === "relationships" && <RelationshipsPane client={client} />}
 				{section === "templates" && <TemplatesPane client={client} />}
+				{section === "relationships" && <RelationshipsPane client={client} />}
 				{section === "graph" && <GraphPane client={client} />}
 			</main>
 		</div>

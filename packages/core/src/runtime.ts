@@ -16,6 +16,7 @@ import type { AuthService } from "./auth";
 import { listAccounts, type AccountCredentialRecord } from "@elizaos/agent/auth";
 import { embeddingStubPlugin } from "./embedding-stub-plugin";
 import { decodeCodexJwt } from "@detour/plugin-codex-chatgpt";
+import { pensieveToolsPlugin } from "@detour/plugin-pensieve-tools";
 import { vaultToolsPlugin } from "@detour/plugin-vault-tools";
 
 const ROOM_ID = stringToUuid("tray-app:default-room");
@@ -33,9 +34,22 @@ const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugi
 	"codex-chatgpt": async () => (await import("@detour/plugin-codex-chatgpt")).default,
 };
 
+type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
+
 export class RuntimeService {
 	private current: RuntimeState | null = null;
 	private buildPromise: Promise<RuntimeState | null> | null = null;
+	private afterBuildHooks: AfterBuildHook[] = [];
+
+	/**
+	 * Subscribe to runtime-built events. Called once for every successful
+	 * build (initial + every rebuild). Used by PensieveService to inject
+	 * persisted prompt templates into runtime.character.templates so
+	 * elizaOS's existing composePromptFromState picks them up.
+	 */
+	onAfterBuild(hook: AfterBuildHook): void {
+		this.afterBuildHooks.push(hook);
+	}
 
 	constructor(
 		private readonly vault: VaultService,
@@ -50,8 +64,15 @@ export class RuntimeService {
 		if (this.current) return this.current;
 		if (!this.buildPromise) {
 			this.buildPromise = this.build()
-				.then((state) => {
+				.then(async (state) => {
 					this.current = state;
+					if (state) {
+						for (const hook of this.afterBuildHooks) {
+							try { await hook(state); } catch (err) {
+								console.warn("[runtime] afterBuild hook failed:", err instanceof Error ? err.message : err);
+							}
+						}
+					}
 					return state;
 				})
 				.finally(() => {
@@ -147,7 +168,7 @@ export class RuntimeService {
 
 		const runtime = new AgentRuntime({
 			character,
-			plugins: [sqlPlugin, llmPlugin, embeddingStubPlugin, vaultToolsPlugin],
+			plugins: [sqlPlugin, llmPlugin, embeddingStubPlugin, vaultToolsPlugin, pensieveToolsPlugin],
 		});
 		await runtime.initialize();
 

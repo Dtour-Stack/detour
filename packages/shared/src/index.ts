@@ -362,6 +362,7 @@ export type PensieveMemorySummary = {
 	worldId?: string;
 	tags?: string[];
 	path: string;
+	tableName: string;
 	preview: string;
 };
 

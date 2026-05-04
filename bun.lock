@@ -2513,6 +2513,7 @@
       "version": "0.2.0",
       "dependencies": {
         "@detour/plugin-codex-chatgpt": "workspace:*",
+        "@detour/plugin-pensieve-tools": "workspace:*",
         "@detour/plugin-vault-tools": "workspace:*",
         "@detour/shared": "workspace:*",
         "@elizaos/agent": "workspace:*",
@@ -2533,6 +2534,18 @@
       "name": "@detour/plugin-codex-chatgpt",
       "version": "0.2.0",
       "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-pensieve-tools": {
+      "name": "@detour/plugin-pensieve-tools",
+      "version": "0.2.0",
+      "dependencies": {
+        "@detour/core": "workspace:*",
         "@elizaos/core": "workspace:*",
       },
       "devDependencies": {
@@ -2990,6 +3003,8 @@
     "@detour/core": ["@detour/core@workspace:packages/core"],
 
     "@detour/plugin-codex-chatgpt": ["@detour/plugin-codex-chatgpt@workspace:packages/plugin-codex-chatgpt"],
+
+    "@detour/plugin-pensieve-tools": ["@detour/plugin-pensieve-tools@workspace:packages/plugin-pensieve-tools"],
 
     "@detour/plugin-vault-tools": ["@detour/plugin-vault-tools@workspace:packages/plugin-vault-tools"],
 

@@ -73,6 +73,19 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	pensieve.start();
 	const activity = new ActivityService(runtime);
 	activity.start();
+
+	// Inject Pensieve templates into runtime.character.templates on every build.
+	// Subsystems (messageHandler/reply/shouldRespond/reflection/think/etc.)
+	// all read via `runtime.character.templates?.<name>` so this is the
+	// integration point that makes user-authored templates actually used.
+	runtime.onAfterBuild(async (state) => {
+		try {
+			const result = await pensieve.templates.applyTemplatesToRuntime(state.runtime);
+			if (result.applied > 0) console.log(`[pensieve] applied ${result.applied} template(s) to character: ${result.names.join(", ")}`);
+		} catch (err) {
+			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
+		}
+	});
 	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity);
 	const { port } = await api.start(opts.port ?? 2138);
 
@@ -108,6 +121,19 @@ export { VaultService } from "./vault";
 export { RuntimeService } from "./runtime";
 export { AuthService } from "./auth";
 export { ApiServer } from "./api/server";
+export { PensieveService } from "./pensieve";
+export { ActivityService } from "./activity";
+export { PensieveMemoryService } from "./pensieve/memory-service";
+export { PensieveRelationshipService } from "./pensieve/relationship-service";
+export { PensieveTemplatesService } from "./pensieve/templates-service";
+export type {
+	PensieveTemplateSummary,
+	PensieveTemplateDetail,
+	PensievePromptVariable,
+	PensieveTemplateRenderResult,
+	PensieveMemorySummary,
+	PensieveMemoryDetail,
+} from "./pensieve";
 
 // Re-export wire types for convenience (clients can also import from @detour/shared directly)
 export type {

@@ -10,6 +10,7 @@
 	},
 	"dependencies": {
 		"@detour/plugin-codex-chatgpt": "workspace:*",
+		"@detour/plugin-pensieve-tools": "workspace:*",
 		"@detour/plugin-vault-tools": "workspace:*",
 		"@detour/shared": "workspace:*",
 		"@elizaos/agent": "workspace:*",

@@ -150,28 +150,55 @@ function summarise(m: Memory, tableName: string): PensieveMemorySummary {
 export class PensieveMemoryService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
 
-	async list(opts: ListMemoriesOptions = {}): Promise<PensieveMemorySummary[]> {
-		const runtime = this.resolveRuntime();
-		if (!runtime) return [];
+	/**
+	 * Fetch from one table. Best-effort — adapters that don't recognise a
+	 * given table name throw; we swallow and return [] so the fan-out keeps
+	 * going for the tables that DO exist.
+	 */
+	private async fetchTable(runtime: IAgentRuntime, tableName: string, count: number, params: Record<string, unknown>): Promise<Memory[]> {
 		const adapter = (runtime as unknown as {
 			getMemories: (p: Record<string, unknown>) => Promise<Memory[]>;
 		}).getMemories;
 		if (typeof adapter !== "function") return [];
+		try {
+			return await adapter.call(runtime, { tableName, count, ...params });
+		} catch {
+			return [];
+		}
+	}
 
-		const { tableName = DEFAULT_TABLE, limit = 100, roomId, entityId, type, q, tag, pathPrefix } = opts;
-		const params: Record<string, unknown> = { tableName, count: limit * 4 };
-		if (roomId) params.roomId = roomId;
-		if (entityId) params.entityId = entityId;
-		const memories: Memory[] = await adapter.call(runtime, params);
+	async list(opts: ListMemoriesOptions = {}): Promise<PensieveMemorySummary[]> {
+		const runtime = this.resolveRuntime();
+		if (!runtime) return [];
+		const { tableName, limit = 100, roomId, entityId, type, q, tag, pathPrefix } = opts;
+		const tables = tableName ? [tableName] : [...KNOWN_MEMORY_TABLES];
+		const fetchParams: Record<string, unknown> = {};
+		if (roomId) fetchParams.roomId = roomId;
+		if (entityId) fetchParams.entityId = entityId;
+		const perTable = Math.max(20, Math.ceil((limit * 4) / Math.max(1, tables.length)));
+		const all: Array<{ m: Memory; t: string }> = [];
+		for (const t of tables) {
+			const rows = await this.fetchTable(runtime, t, perTable, fetchParams);
+			for (const m of rows) all.push({ m, t });
+		}
+		// dedupe by id (some tables may shadow ids in adapter implementations)
+		const seen = new Set<string>();
+		const deduped: typeof all = [];
+		for (const r of all) {
+			const id = String(r.m.id);
+			if (seen.has(id)) continue;
+			seen.add(id);
+			deduped.push(r);
+		}
 		const prefix = pathPrefix ? normalisePath(pathPrefix, undefined) : null;
-		const filtered = memories.filter((m) => {
+		const filtered = deduped.filter(({ m, t }) => {
 			const md = m.metadata as (MemoryMetadata & { path?: unknown; tags?: unknown }) | undefined;
 			if (type && md?.type !== type) return false;
 			if (tag) {
 				if (!Array.isArray(md?.tags) || !(md.tags as string[]).includes(tag)) return false;
 			}
 			if (prefix) {
-				const p = normalisePath(md?.path, md?.type);
+				const p = normalisePath(md?.path, md?.type, t);
 				if (p !== prefix && !p.startsWith(`${prefix}/`)) return false;
 			}
 			if (q) {
@@ -180,20 +207,23 @@ export class PensieveMemoryService {
 			}
 			return true;
 		});
-		return filtered.slice(0, limit).map(summarise);
+		// Sort newest first across tables.
+		filtered.sort((a, b) => (b.m.createdAt ?? 0) - (a.m.createdAt ?? 0));
+		return filtered.slice(0, limit).map(({ m, t }) => summarise(m, t));
 	}
 
-	/** Build a folder hierarchy across all memories. */
+	/** Build a folder hierarchy by fanning out across every known memory table. */
 	async tree(opts: { tableName?: string; max?: number } = {}): Promise<PensieveMemoryTree> {
 		const runtime = this.resolveRuntime();
 		const root: PensieveMemoryTreeNode = { path: "/", name: "/", count: 0, totalCount: 0, children: [] };
 		if (!runtime) return { root, total: 0 };
-		const adapter = (runtime as unknown as {
-			getMemories: (p: Record<string, unknown>) => Promise<Memory[]>;
-		}).getMemories;
-		if (typeof adapter !== "function") return { root, total: 0 };
-		const tableName = opts.tableName ?? DEFAULT_TABLE;
-		const memories: Memory[] = await adapter.call(runtime, { tableName, count: opts.max ?? 5000 });
+		const tables = opts.tableName ? [opts.tableName] : [...KNOWN_MEMORY_TABLES];
+		const perTable = opts.max ?? 5000;
+		const all: Array<{ m: Memory; t: string }> = [];
+		for (const t of tables) {
+			const rows = await this.fetchTable(runtime, t, perTable, {});
+			for (const m of rows) all.push({ m, t });
+		}
 
 		const nodeAt = (path: string): PensieveMemoryTreeNode => {
 			if (path === "/") return root;
@@ -212,12 +242,15 @@ export class PensieveMemoryService {
 			return cur;
 		};
 
-		for (const m of memories) {
+		const seen = new Set<string>();
+		for (const { m, t } of all) {
+			const id = String(m.id);
+			if (seen.has(id)) continue;
+			seen.add(id);
 			const md = m.metadata as { path?: unknown; type?: string } | undefined;
-			const path = normalisePath(md?.path, md?.type);
+			const path = normalisePath(md?.path, md?.type, t);
 			const node = nodeAt(path);
 			node.count += 1;
-			// Bump totalCount up the chain.
 			let acc = "";
 			root.totalCount += 1;
 			for (const seg of pathSegments(path)) {
@@ -233,7 +266,7 @@ export class PensieveMemoryService {
 		};
 		sortChildren(root);
 
-		return { root, total: memories.length };
+		return { root, total: seen.size };
 	}
 
 	/** Create a memory at a path. Used by the agent's PENSIEVE_WRITE action and by ad-hoc UI imports. */
@@ -289,26 +322,41 @@ export class PensieveMemoryService {
 	async get(id: UUID): Promise<PensieveMemoryDetail | null> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return null;
-		const r = runtime as unknown as { getMemoryById?: (id: UUID) => Promise<Memory | null> };
-		const m = typeof r.getMemoryById === "function" ? await r.getMemoryById(id) : null;
-		if (!m) return null;
+		const r = runtime as unknown as {
+			getMemoryById?: (id: UUID) => Promise<Memory | null>;
+			getMemoriesByIds?: (ids: UUID[], tableName?: string) => Promise<Memory[]>;
+		};
+		// Try the global lookup first; if it doesn't reveal the table, fan out.
+		let found: { m: Memory; t: string } | null = null;
+		if (typeof r.getMemoryById === "function") {
+			const m = await r.getMemoryById(id);
+			if (m) found = { m, t: DEFAULT_TABLE };
+		}
+		if (!found && typeof r.getMemoriesByIds === "function") {
+			for (const t of KNOWN_MEMORY_TABLES) {
+				try {
+					const rows = await r.getMemoriesByIds([id], t);
+					if (rows.length > 0 && rows[0]) { found = { m: rows[0], t }; break; }
+				} catch { /* skip table */ }
+			}
+		}
+		if (!found) return null;
 		return {
-			...summarise(m),
-			content: m.content,
-			metadata: m.metadata as MemoryMetadata | undefined,
-			hasEmbedding: Array.isArray(m.embedding) && m.embedding.length > 0,
+			...summarise(found.m, found.t),
+			content: found.m.content,
+			metadata: found.m.metadata as MemoryMetadata | undefined,
+			hasEmbedding: Array.isArray(found.m.embedding) && found.m.embedding.length > 0,
 		};
 	}
 
 	/**
 	 * Vector search when an embedding model is registered; otherwise substring
-	 * fallback over .list().
+	 * fallback over .list(). Searches across all known tables and merges.
 	 */
 	async search(text: string, limit = 30): Promise<PensieveMemorySummary[]> {
 		const runtime = this.resolveRuntime();
 		if (!runtime || !text.trim()) return [];
 
-		// Try real embedding search.
 		try {
 			const useModel = (runtime as unknown as {
 				useModel: (type: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -321,13 +369,26 @@ export class PensieveMemoryService {
 						searchMemories: (p: Record<string, unknown>) => Promise<Memory[]>;
 					}).searchMemories;
 					if (typeof adapter === "function") {
-						const hits: Memory[] = await adapter.call(runtime, {
-							tableName: DEFAULT_TABLE,
-							embedding,
-							count: limit,
-							match_threshold: 0.7,
+						const out: Array<{ m: Memory; t: string }> = [];
+						for (const t of KNOWN_MEMORY_TABLES) {
+							try {
+								const hits = await adapter.call(runtime, {
+									tableName: t,
+									embedding,
+									count: Math.ceil(limit / 2),
+									match_threshold: 0.7,
+								});
+								for (const m of hits) out.push({ m, t });
+							} catch { /* skip table */ }
+						}
+						const seen = new Set<string>();
+						const dedup = out.filter(({ m }) => {
+							const id = String(m.id);
+							if (seen.has(id)) return false;
+							seen.add(id);
+							return true;
 						});
-						return hits.map(summarise);
+						return dedup.slice(0, limit).map(({ m, t }) => summarise(m, t));
 					}
 				}
 			}
@@ -335,7 +396,6 @@ export class PensieveMemoryService {
 			// fall through to substring
 		}
 
-		// Substring fallback.
 		return this.list({ q: text, limit });
 	}
 
