@@ -21,17 +21,12 @@ env:
 
 jobs:
   build-macos:
-    name: macOS canary (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    name: macOS canary
+    # Single arm64 build. Intel Macs run it under Rosetta 2 — standard for
+    # apps shipping in 2026. If we ever need a true universal binary we'd
+    # bring back the matrix and `lipo`-merge the bun binaries.
+    runs-on: macos-14
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            runner: macos-14
-          - arch: x64
-            runner: macos-13
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,40 +64,32 @@ jobs:
         run: bun run build:canary
 
       - name: Locate build artifacts
-        id: artifacts
         working-directory: packages/tray
         run: |
-          ARCH=${{ matrix.arch }}
-          BUILD_DIR="build/canary-macos-${ARCH}"
+          BUILD_DIR="build/canary-macos-arm64"
           if [ ! -d "$BUILD_DIR" ]; then
             echo "::error::Expected ${BUILD_DIR} not found. Listing build/:"
             ls -la build/ || true
             exit 1
           fi
-          # Zip the .app bundle (Gatekeeper-friendly transport).
           APP=$(find "$BUILD_DIR" -maxdepth 2 -name "*.app" -type d | head -1)
           if [ -z "$APP" ]; then
             echo "::error::No .app bundle in ${BUILD_DIR}"
             exit 1
           fi
-          APP_NAME=$(basename "$APP")
-          ZIP="../../Detour-canary-${ARCH}.zip"
-          ditto -c -k --keepParent "$APP" "$ZIP"
-          echo "zip=Detour-canary-${ARCH}.zip" >> $GITHUB_OUTPUT
-          # Find the DMG too if Electrobun produced one.
+          ditto -c -k --keepParent "$APP" "../../Detour-canary.zip"
           DMG=$(find "$BUILD_DIR" -maxdepth 2 -name "*.dmg" -type f | head -1)
           if [ -n "$DMG" ]; then
-            cp "$DMG" "../../Detour-canary-${ARCH}.dmg"
-            echo "dmg=Detour-canary-${ARCH}.dmg" >> $GITHUB_OUTPUT
+            cp "$DMG" "../../Detour-canary.dmg"
           fi
 
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: detour-canary-${{ matrix.arch }}-${{ github.sha }}
+          name: detour-canary-${{ github.sha }}
           path: |
-            Detour-canary-*.zip
-            Detour-canary-*.dmg
+            Detour-canary.zip
+            Detour-canary.dmg
           retention-days: 14
 
       - name: Update rolling Canary release
@@ -121,7 +108,7 @@ jobs:
           prerelease: true
           make_latest: false
           files: |
-            Detour-canary-*.zip
-            Detour-canary-*.dmg
+            Detour-canary.zip
+            Detour-canary.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

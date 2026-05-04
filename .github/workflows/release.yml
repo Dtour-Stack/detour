@@ -62,18 +62,13 @@ jobs:
           echo "Tag: ${TAG} → version=${VERSION} channel=${CHANNEL} env=${ENV} prerelease=${PRE}"
 
   build:
-    name: Build ${{ needs.classify.outputs.channel }} (${{ matrix.arch }})
+    name: Build ${{ needs.classify.outputs.channel }}
     needs: classify
-    runs-on: ${{ matrix.runner }}
+    # Single arm64 build. Intel Macs run via Rosetta 2 — standard for 2026
+    # macOS apps. Universal binary would need a lipo merge step we're
+    # skipping until / unless someone hits a real Intel-native need.
+    runs-on: macos-14
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            runner: macos-14
-          - arch: x64
-            runner: macos-13
     steps:
       - uses: actions/checkout@v4
         with:
@@ -128,8 +123,7 @@ jobs:
           rm /tmp/cert.p12
           # Sign + notarize the .app
           ENV=${{ needs.classify.outputs.env }}
-          ARCH=${{ matrix.arch }}
-          APP=$(find packages/tray/build/${ENV}-macos-${ARCH} -maxdepth 2 -name "*.app" -type d | head -1)
+          APP=$(find packages/tray/build/${ENV}-macos-arm64 -maxdepth 2 -name "*.app" -type d | head -1)
           if [ -z "$APP" ]; then
             echo "::error::No .app to sign"
             exit 1
@@ -147,29 +141,26 @@ jobs:
           xcrun stapler staple "$APP"
 
       - name: Locate + package artifacts
-        id: artifacts
         working-directory: packages/tray
         run: |
           ENV=${{ needs.classify.outputs.env }}
-          ARCH=${{ matrix.arch }}
           CHANNEL=${{ needs.classify.outputs.channel }}
           VERSION=${{ needs.classify.outputs.version }}
-          BUILD_DIR="build/${ENV}-macos-${ARCH}"
+          BUILD_DIR="build/${ENV}-macos-arm64"
           APP=$(find "$BUILD_DIR" -maxdepth 2 -name "*.app" -type d | head -1)
           DMG=$(find "$BUILD_DIR" -maxdepth 2 -name "*.dmg" -type f | head -1)
-          ZIP_NAME="Detour-${VERSION}-${CHANNEL}-${ARCH}.zip"
-          ditto -c -k --keepParent "$APP" "../../${ZIP_NAME}"
+          ditto -c -k --keepParent "$APP" "../../Detour-${VERSION}-${CHANNEL}.zip"
           if [ -n "$DMG" ]; then
-            cp "$DMG" "../../Detour-${VERSION}-${CHANNEL}-${ARCH}.dmg"
+            cp "$DMG" "../../Detour-${VERSION}-${CHANNEL}.dmg"
           fi
 
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: detour-${{ needs.classify.outputs.channel }}-${{ matrix.arch }}-${{ needs.classify.outputs.version }}
+          name: detour-${{ needs.classify.outputs.channel }}-${{ needs.classify.outputs.version }}
           path: |
-            Detour-*-${{ matrix.arch }}.zip
-            Detour-*-${{ matrix.arch }}.dmg
+            Detour-*-${{ needs.classify.outputs.channel }}.zip
+            Detour-*-${{ needs.classify.outputs.channel }}.dmg
           retention-days: 90
 
       - name: Attach to GitHub Release
@@ -181,7 +172,7 @@ jobs:
           make_latest: ${{ needs.classify.outputs.channel == 'stable' }}
           generate_release_notes: true
           files: |
-            Detour-*-${{ matrix.arch }}.zip
-            Detour-*-${{ matrix.arch }}.dmg
+            Detour-*-${{ needs.classify.outputs.channel }}.zip
+            Detour-*-${{ needs.classify.outputs.channel }}.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

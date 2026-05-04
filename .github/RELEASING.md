@@ -8,6 +8,11 @@ Three release channels, all driven by tags:
 | Beta    | `vX.Y.Z-beta.N`     | release-please PR merge on `beta`      | Stable build flavor, marked as pre-release on GitHub.                    |
 | Stable  | `vX.Y.Z`            | release-please PR merge on `main`      | Code-signed + notarized when secrets present, "Latest" on GitHub.        |
 
+**Single DMG per channel**, arm64-native (Apple Silicon). Intel Macs run via
+Rosetta 2 — standard for 2026 macOS apps. If true universal binaries become
+necessary, bring back a build matrix with arm64 + x64 jobs and run `lipo` to
+merge the bundled `bun` binaries.
+
 ## How auto-tagging works
 
 [`release-please`](https://github.com/googleapis/release-please) reads the
