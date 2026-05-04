@@ -102,7 +102,7 @@ jobs:
         working-directory: packages/tray
         run: bun run build:${{ needs.classify.outputs.env }}
 
-      - name: Optional: code-sign + notarize (stable only, when secrets present)
+      - name: "Optional code-sign + notarize (stable only, when secrets present)"
         if: needs.classify.outputs.channel == 'stable' && env.APPLE_CERT_BASE64 != ''
         env:
           APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
