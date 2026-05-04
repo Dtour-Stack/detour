@@ -1,0 +1,58 @@
+{
+	"$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+	"release-type": "node",
+	"include-component-in-tag": false,
+	"separate-pull-requests": false,
+	"bump-minor-pre-major": true,
+	"bump-patch-for-minor-pre-major": false,
+	"draft": false,
+	"prerelease": false,
+	"plugins": [
+		{
+			"type": "node-workspace"
+		}
+	],
+	"packages": {
+		".": {
+			"package-name": "detour",
+			"changelog-path": "CHANGELOG.md",
+			"extra-files": [
+				{
+					"type": "json",
+					"path": "packages/tray/package.json",
+					"jsonpath": "$.version"
+				},
+				{
+					"type": "json",
+					"path": "packages/core/package.json",
+					"jsonpath": "$.version"
+				},
+				{
+					"type": "json",
+					"path": "packages/web/package.json",
+					"jsonpath": "$.version"
+				},
+				{
+					"type": "json",
+					"path": "packages/shared/package.json",
+					"jsonpath": "$.version"
+				},
+				{
+					"type": "json",
+					"path": "packages/cli/package.json",
+					"jsonpath": "$.version"
+				},
+				{
+					"type": "json",
+					"path": "packages/plugin-codex-chatgpt/package.json",
+					"jsonpath": "$.version"
+				},
+				{
+					"type": "json",
+					"path": "packages/plugin-vault-tools/package.json",
+					"jsonpath": "$.version"
+				}
+			]
+		}
+	}
+}

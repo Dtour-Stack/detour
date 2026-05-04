@@ -9,7 +9,9 @@
 		"prepare": "bun run prepare:icons && bun run prepare:pglite",
 		"start": "bun run prepare && electrobun dev",
 		"dev": "bun run prepare && electrobun dev --watch",
-		"build:canary": "bun run prepare && electrobun build --env=canary"
+		"build:dev": "bun run prepare && electrobun build --env=dev",
+		"build:canary": "bun run prepare && electrobun build --env=canary",
+		"build:stable": "bun run prepare && electrobun build --env=stable"
 	},
 	"dependencies": {
 		"@detour/core": "workspace:*",

@@ -1,0 +1,127 @@
+name: Canary build
+
+# Every push to main produces a canary build of the macOS app and updates a
+# rolling "canary" GitHub release with the latest artifact. Canary versions
+# get a -canary.<sha> suffix so users can pin to a specific commit.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: canary-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.3.13"
+
+jobs:
+  build-macos:
+    name: macOS canary (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+          - arch: x64
+            runner: macos-13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0  # release-please reads tag history
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Compute canary version
+        id: version
+        run: |
+          BASE=$(node -p "require('./packages/tray/package.json').version")
+          SHA=$(git rev-parse --short HEAD)
+          VERSION="${BASE}-canary.${SHA}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Computed version: ${VERSION}"
+
+      - name: Stamp canary version into package.json
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const path = 'packages/tray/package.json';
+            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+            pkg.version = '${{ steps.version.outputs.version }}';
+            fs.writeFileSync(path, JSON.stringify(pkg, null, '\t') + '\n');
+          "
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build canary app
+        working-directory: packages/tray
+        run: bun run build:canary
+
+      - name: Locate build artifacts
+        id: artifacts
+        working-directory: packages/tray
+        run: |
+          ARCH=${{ matrix.arch }}
+          BUILD_DIR="build/canary-macos-${ARCH}"
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "::error::Expected ${BUILD_DIR} not found. Listing build/:"
+            ls -la build/ || true
+            exit 1
+          fi
+          # Zip the .app bundle (Gatekeeper-friendly transport).
+          APP=$(find "$BUILD_DIR" -maxdepth 2 -name "*.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::No .app bundle in ${BUILD_DIR}"
+            exit 1
+          fi
+          APP_NAME=$(basename "$APP")
+          ZIP="../../Detour-canary-${ARCH}.zip"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+          echo "zip=Detour-canary-${ARCH}.zip" >> $GITHUB_OUTPUT
+          # Find the DMG too if Electrobun produced one.
+          DMG=$(find "$BUILD_DIR" -maxdepth 2 -name "*.dmg" -type f | head -1)
+          if [ -n "$DMG" ]; then
+            cp "$DMG" "../../Detour-canary-${ARCH}.dmg"
+            echo "dmg=Detour-canary-${ARCH}.dmg" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: detour-canary-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            Detour-canary-*.zip
+            Detour-canary-*.dmg
+          retention-days: 14
+
+      - name: Update rolling Canary release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: canary
+          name: "Canary (rolling)"
+          body: |
+            Latest canary build from `main` @ ${{ github.sha }}.
+
+            Built: ${{ github.event.head_commit.timestamp }}
+            Commit: ${{ github.event.head_commit.message }}
+
+            ⚠️  **Unstable.** No code-signing on canary builds; macOS Gatekeeper will require
+            right-click → Open the first time, or `xattr -d com.apple.quarantine /Applications/Detour.app`.
+          prerelease: true
+          make_latest: false
+          files: |
+            Detour-canary-*.zip
+            Detour-canary-*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

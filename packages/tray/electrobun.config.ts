@@ -1,10 +1,14 @@
 import type { ElectrobunConfig } from "electrobun";
+import pkg from "./package.json" with { type: "json" };
 
+// `app.version` is sourced from this package's package.json so release tooling
+// (release-please) only has to bump one place. CI replaces this value during
+// release builds; dev mode just uses whatever's checked in.
 export default {
 	app: {
 		name: "Detour",
 		identifier: "ai.detour.app",
-		version: "0.0.1",
+		version: pkg.version,
 	},
 	runtime: {
 		exitOnLastWindowClosed: false,
