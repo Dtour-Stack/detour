@@ -1,34 +1,75 @@
 import { useEffect, useMemo, useState } from "react";
 import { WebClient } from "../../api/client";
-import { ActivityPane } from "./ActivityPane";
+import { TrajectoriesPane } from "./TrajectoriesPane";
+import { LogsPane } from "./LogsPane";
+import { RuntimePane } from "./RuntimePane";
+import { TasksPane } from "./TasksPane";
+
+type Tab = "trajectories" | "logs" | "tasks" | "runtime";
+
+const TABS: { id: Tab; label: string }[] = [
+	{ id: "trajectories", label: "Trajectories" },
+	{ id: "logs", label: "Logs" },
+	{ id: "tasks", label: "Tasks" },
+	{ id: "runtime", label: "Runtime" },
+];
 
 /**
- * Top-level Activity window: trajectories + logs + runtime introspection.
+ * Top-level Activity window: trajectories + logs + tasks + runtime introspection.
  * Mounts when the React app is loaded with location.hash === "#activity"
  * (the tray's activityFeature opens a new BrowserWindow with that URL).
+ *
+ * Layout matches settings-shell — left sidebar with section + sub-nav buttons,
+ * main content area for the active pane.
  */
 export function ActivityView() {
 	const client = useMemo(() => new WebClient(), []);
 	const [connected, setConnected] = useState(false);
+	const [tab, setTab] = useState<Tab>(() => {
+		try {
+			return (localStorage.getItem("activity.tab") as Tab) ?? "trajectories";
+		} catch {
+			return "trajectories";
+		}
+	});
 
 	useEffect(() => {
 		client.connect().then(() => setConnected(true)).catch(() => setConnected(true));
 	}, [client]);
 
+	useEffect(() => {
+		try { localStorage.setItem("activity.tab", tab); } catch { /* ignore */ }
+	}, [tab]);
+
 	return (
-		<div className="pensieve-shell">
-			<aside className="pensieve-sidebar">
-				<div className="pensieve-brand">Activity</div>
-				<div className="hint" style={{ padding: "0 14px", lineHeight: 1.5 }}>
-					Live runtime introspection — trajectories, logs, and registered actions/providers/services.
+		<div className="settings-shell">
+			<aside className="settings-sidebar">
+				<div className="window-brand">Activity</div>
+				<div className="sidebar-section">
+					<div className="section-btn active" aria-hidden>Live runtime</div>
+					<div className="sub-nav">
+						{TABS.map((t) => (
+							<button
+								key={t.id}
+								type="button"
+								className={tab === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
+								onClick={() => setTab(t.id)}
+							>
+								{t.label}
+							</button>
+						))}
+					</div>
 				</div>
 				<div style={{ flex: 1 }} />
-				<div className="pensieve-status">
+				<div className="window-status">
 					{connected ? "● connected" : "○ connecting…"}
 				</div>
 			</aside>
-			<main className="pensieve-main">
-				<ActivityPane client={client} />
+			<main className="settings-main settings-main-flush">
+				{tab === "trajectories" && <TrajectoriesPane client={client} />}
+				{tab === "logs" && <LogsPane client={client} />}
+				{tab === "tasks" && <TasksPane client={client} />}
+				{tab === "runtime" && <RuntimePane client={client} />}
 			</main>
 		</div>
 	);

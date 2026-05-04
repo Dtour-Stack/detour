@@ -17,7 +17,7 @@ export interface RuntimeRegistryItem {
 	readonly extras?: Record<string, unknown>;
 }
 
-export interface PensieveRuntimeSnapshot {
+export interface ActivityRuntimeSnapshot {
 	readonly available: boolean;
 	readonly generatedAt: number;
 	readonly agentId?: string;
@@ -107,7 +107,7 @@ function pluginsToItems(plugins: unknown): RuntimeRegistryItem[] {
 		.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function snapshotRuntime(runtime: IAgentRuntime | null): PensieveRuntimeSnapshot {
+export function snapshotRuntime(runtime: IAgentRuntime | null): ActivityRuntimeSnapshot {
 	if (!runtime) {
 		return {
 			available: false,

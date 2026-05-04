@@ -5,7 +5,6 @@ import type { WebClient } from "../../../api/client";
 const KIND_COLORS: Record<string, string> = {
 	memory: "var(--accent)",
 	entity: "var(--ok)",
-	trajectory: "var(--warn)",
 };
 
 interface PositionedNode extends PensieveGraphNode {

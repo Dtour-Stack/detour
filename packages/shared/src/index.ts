@@ -148,7 +148,7 @@ export type SigninResult = {
 
 // ── Pensieve ─────────────────────────────────────────────────────────────────
 
-export type PensieveLogEntry = {
+export type ActivityLogEntry = {
 	time: number;
 	level: number;
 	levelName: string;
@@ -159,7 +159,7 @@ export type PensieveLogEntry = {
 	extras?: Record<string, unknown>;
 };
 
-export type PensieveTrajectoryListItem = {
+export type ActivityTrajectoryListItem = {
 	id: string;
 	source?: string;
 	status?: string;
@@ -171,14 +171,14 @@ export type PensieveTrajectoryListItem = {
 	totalCompletionTokens?: number;
 };
 
-export type PensieveTrajectoryListResult = {
-	trajectories: PensieveTrajectoryListItem[];
+export type ActivityTrajectoryListResult = {
+	trajectories: ActivityTrajectoryListItem[];
 	total: number;
 	limit: number;
 	offset: number;
 };
 
-export type PensieveLlmCall = {
+export type ActivityLlmCall = {
 	callId: string;
 	stepNumber: number;
 	timestamp: number;
@@ -198,7 +198,7 @@ export type PensieveLlmCall = {
 	tags?: string[];
 };
 
-export type PensieveProviderAccess = {
+export type ActivityProviderAccess = {
 	providerId: string;
 	providerName: string;
 	stepNumber: number;
@@ -208,7 +208,7 @@ export type PensieveProviderAccess = {
 	data?: unknown;
 };
 
-export type PensieveActionAttempt = {
+export type ActivityActionAttempt = {
 	attemptId: string;
 	stepNumber: number;
 	timestamp: number;
@@ -222,8 +222,42 @@ export type PensieveActionAttempt = {
 	immediateReward?: number;
 };
 
-export type PensieveTrajectoryDetail = {
-	trajectory: PensieveTrajectoryListItem | null;
+export type ActivityTrajectoryStepSummary = {
+	stepNumber: number;
+	timestamp: number;
+	reasoning?: string;
+	reward?: number;
+	done?: boolean;
+	llmCallCount: number;
+	providerAccessCount: number;
+	hasAction: boolean;
+	actionName?: string;
+	actionSuccess?: boolean;
+	observation?: unknown;
+	environmentState?: Record<string, unknown>;
+	metadata?: Record<string, unknown>;
+};
+
+export type ActivityTrajectoryIdentity = {
+	id: string;
+	agentId?: string;
+	agentName?: string;
+	agentModel?: string;
+	episodeId?: string;
+	scenarioId?: string;
+	batchId?: string;
+	groupIndex?: number;
+	source?: string;
+	status?: string;
+	startTime?: number;
+	endTime?: number;
+	durationMs?: number;
+	totalReward?: number;
+};
+
+export type ActivityTrajectoryDetail = {
+	trajectory: ActivityTrajectoryListItem | null;
+	identity: ActivityTrajectoryIdentity | null;
 	totals: {
 		stepCount: number;
 		llmCallCount: number;
@@ -231,29 +265,31 @@ export type PensieveTrajectoryDetail = {
 		actionCount: number;
 		totalPromptTokens: number;
 		totalCompletionTokens: number;
+		totalLatencyMs: number;
 	};
-	llmCalls: PensieveLlmCall[];
-	providerAccesses: PensieveProviderAccess[];
-	actions: PensieveActionAttempt[];
+	llmCalls: ActivityLlmCall[];
+	providerAccesses: ActivityProviderAccess[];
+	actions: ActivityActionAttempt[];
+	steps: ActivityTrajectoryStepSummary[];
 	metadata: Record<string, unknown> | null;
 	rewardComponents: Record<string, unknown> | null;
 	metrics: Record<string, unknown> | null;
 	raw: Record<string, unknown> | null;
 };
 
-export type PensieveTrajectoryExport = {
+export type ActivityTrajectoryExport = {
 	exportedAt: number;
 	count: number;
-	trajectories: PensieveTrajectoryDetail[];
+	trajectories: ActivityTrajectoryDetail[];
 };
 
-export type PensieveTaskWorker = {
+export type ActivityTaskWorker = {
 	name: string;
 	hasShouldRun: boolean;
 	hasCanExecute: boolean;
 };
 
-export type PensieveTaskRecord = {
+export type ActivityTaskRecord = {
 	id: string;
 	name: string;
 	description?: string;
@@ -275,10 +311,39 @@ export type PensieveTaskRecord = {
 	metadata: Record<string, unknown>;
 };
 
-export type PensieveTasksSnapshot = {
+export type PensieveTemplateSummary = {
+	id: string;
+	name: string;
+	path: string;
+	preview: string;
+	variables: string[];
+	tags: string[];
+	updatedAt?: number;
+};
+
+export type PensieveTemplateDetail = PensieveTemplateSummary & {
+	body: string;
+	currentValues: Record<string, string>;
+	missingVariables: string[];
+};
+
+export type PensievePromptVariable = {
+	name: string;
+	value: string;
+	memoryId: string;
+	updatedAt?: number;
+};
+
+export type PensieveTemplateRenderResult = {
+	rendered: string;
+	usedValues: Record<string, string>;
+	missing: string[];
+};
+
+export type ActivityTasksSnapshot = {
 	available: boolean;
-	workers: PensieveTaskWorker[];
-	tasks: PensieveTaskRecord[];
+	workers: ActivityTaskWorker[];
+	tasks: ActivityTaskRecord[];
 	totals: {
 		workerCount: number;
 		taskCount: number;
@@ -296,7 +361,21 @@ export type PensieveMemorySummary = {
 	entityId?: string;
 	worldId?: string;
 	tags?: string[];
+	path: string;
 	preview: string;
+};
+
+export type PensieveMemoryTreeNode = {
+	path: string;
+	name: string;
+	count: number;
+	totalCount: number;
+	children: PensieveMemoryTreeNode[];
+};
+
+export type PensieveMemoryTree = {
+	root: PensieveMemoryTreeNode;
+	total: number;
 };
 
 export type PensieveMemoryDetail = PensieveMemorySummary & {
@@ -329,14 +408,14 @@ export type PensievePersonDetail = {
 	relationships: PensieveRelationshipSummary[];
 };
 
-export type PensieveRuntimeRegistryItem = {
+export type ActivityRuntimeRegistryItem = {
 	name: string;
 	description?: string;
 	className?: string;
 	id?: string;
 };
 
-export type PensieveRuntimeSnapshot = {
+export type ActivityRuntimeSnapshot = {
 	available: boolean;
 	generatedAt: number;
 	agentId?: string;
@@ -348,14 +427,14 @@ export type PensieveRuntimeSnapshot = {
 		services: number;
 		plugins: number;
 	};
-	actions: PensieveRuntimeRegistryItem[];
-	providers: PensieveRuntimeRegistryItem[];
-	evaluators: PensieveRuntimeRegistryItem[];
-	services: PensieveRuntimeRegistryItem[];
-	plugins: PensieveRuntimeRegistryItem[];
+	actions: ActivityRuntimeRegistryItem[];
+	providers: ActivityRuntimeRegistryItem[];
+	evaluators: ActivityRuntimeRegistryItem[];
+	services: ActivityRuntimeRegistryItem[];
+	plugins: ActivityRuntimeRegistryItem[];
 };
 
-export type PensieveGraphNodeKind = "memory" | "entity" | "trajectory";
+export type PensieveGraphNodeKind = "memory" | "entity";
 
 export type PensieveGraphNode = {
 	id: string;
@@ -368,7 +447,7 @@ export type PensieveGraphNode = {
 export type PensieveGraphEdge = {
 	source: string;
 	target: string;
-	kind: "memory-entity" | "memory-tag" | "entity-relationship" | "trajectory-memory";
+	kind: "memory-entity" | "memory-tag" | "entity-relationship";
 	weight?: number;
 };
 

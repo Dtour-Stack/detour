@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 const PATH = join(homedir(), ".eliza", "audit", "pensieve.jsonl");
 
 export type PensieveAuditAction =
+	| "memory.create"
 	| "memory.update"
 	| "memory.delete"
 	| "relationship.create"
@@ -23,7 +24,13 @@ export type PensieveAuditAction =
 	| "task.run"
 	| "task.pause"
 	| "task.resume"
-	| "task.delete";
+	| "task.delete"
+	| "template.create"
+	| "template.update"
+	| "template.delete"
+	| "template.render"
+	| "promptvar.set"
+	| "promptvar.delete";
 
 export interface PensieveAuditEvent {
 	readonly action: PensieveAuditAction;

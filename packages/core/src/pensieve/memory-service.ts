@@ -16,6 +16,26 @@ import { ModelType } from "@elizaos/core";
 
 const DEFAULT_TABLE = "memories";
 
+/**
+ * elizaOS doesn't write everything to a single `memories` table — different
+ * subsystems use their own (messages, knowledge fragments, knowledge documents,
+ * experience evaluator, character evolution, fact extraction). We fan out
+ * across all of them so Pensieve mirrors what the agent actually records.
+ *
+ * Discovered by grepping eliza/packages/core/src/features/**\/*.ts for
+ * `tableName: "..."`. Add to this list if a future plugin introduces another.
+ */
+export const KNOWN_MEMORY_TABLES = [
+	"memories",
+	"messages",
+	"facts",
+	"documents",
+	"knowledge",
+	"experiences",
+	"character_evolution",
+] as const;
+export type KnownMemoryTable = (typeof KNOWN_MEMORY_TABLES)[number];
+
 export interface PensieveMemorySummary {
 	id: string;
 	type?: string;
@@ -24,6 +44,10 @@ export interface PensieveMemorySummary {
 	entityId?: string;
 	worldId?: string;
 	tags?: string[];
+	/** Folder-style path stored in metadata.path; defaults derived from type/table. */
+	path: string;
+	/** Source table this row came from — useful when fanning out across all tables. */
+	tableName: string;
 	preview: string;
 }
 
@@ -42,6 +66,60 @@ export interface ListMemoriesOptions {
 	offset?: number;
 	tag?: string;
 	tableName?: string;
+	/** Match memories whose path equals this OR descends from it. */
+	pathPrefix?: string;
+}
+
+export interface PensieveMemoryTreeNode {
+	path: string;
+	name: string;
+	/** Memories stored at exactly this path. */
+	count: number;
+	/** Memories at this path or any descendant. */
+	totalCount: number;
+	children: PensieveMemoryTreeNode[];
+}
+
+export interface PensieveMemoryTree {
+	root: PensieveMemoryTreeNode;
+	total: number;
+}
+
+/** Default folder when a memory has no metadata.path. Visible as the "uncategorised" root entry. */
+export const DEFAULT_MEMORY_PATH = "/uncategorized";
+
+/**
+ * Heuristic auto-categorisation when a memory has no metadata.path.
+ * The source table is the primary signal (eliza enforces table-per-domain),
+ * with type as a tiebreak inside the generic `memories` table.
+ */
+function autoPathFor(type: string | undefined, tableName: string | undefined): string {
+	switch (tableName) {
+		case "messages":            return "/messages";
+		case "facts":               return "/facts";
+		case "documents":           return "/knowledge/documents";
+		case "knowledge":           return "/knowledge/fragments";
+		case "experiences":         return "/observations/experiences";
+		case "character_evolution": return "/character/evolution";
+	}
+	switch (type) {
+		case "description": return "/observations";
+		case "document":    return "/knowledge/documents";
+		case "fragment":    return "/knowledge/fragments";
+		case "message":     return "/messages";
+		case "custom":      return "/custom";
+		default:            return DEFAULT_MEMORY_PATH;
+	}
+}
+
+function normalisePath(p: unknown, type: string | undefined, tableName?: string): string {
+	if (typeof p !== "string" || p.length === 0) return autoPathFor(type, tableName);
+	const cleaned = `/${p.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/")}`;
+	return cleaned === "/" ? autoPathFor(type, tableName) : cleaned;
+}
+
+function pathSegments(path: string): string[] {
+	return path.split("/").filter(Boolean);
 }
 
 const PREVIEW_LEN = 240;
@@ -53,8 +131,8 @@ function preview(content: Content | undefined): string {
 	return compact.length > PREVIEW_LEN ? `${compact.slice(0, PREVIEW_LEN)}…` : compact || "(no text)";
 }
 
-function summarise(m: Memory): PensieveMemorySummary {
-	const md = m.metadata as MemoryMetadata | undefined;
+function summarise(m: Memory, tableName: string): PensieveMemorySummary {
+	const md = m.metadata as (MemoryMetadata & { path?: unknown; tags?: unknown }) | undefined;
 	return {
 		id: String(m.id),
 		type: md?.type,
@@ -62,9 +140,9 @@ function summarise(m: Memory): PensieveMemorySummary {
 		...(m.roomId ? { roomId: String(m.roomId) } : {}),
 		...(m.entityId ? { entityId: String(m.entityId) } : {}),
 		...(m.worldId ? { worldId: String(m.worldId) } : {}),
-		...(Array.isArray((md as { tags?: unknown } | undefined)?.tags)
-			? { tags: ((md as { tags?: unknown }).tags as string[]) }
-			: {}),
+		...(Array.isArray(md?.tags) ? { tags: md.tags as string[] } : {}),
+		path: normalisePath(md?.path, md?.type, tableName),
+		tableName,
 		preview: preview(m.content),
 	};
 }
@@ -80,19 +158,21 @@ export class PensieveMemoryService {
 		}).getMemories;
 		if (typeof adapter !== "function") return [];
 
-		const { tableName = DEFAULT_TABLE, limit = 100, roomId, entityId, type, q, tag } = opts;
-		const params: Record<string, unknown> = { tableName, count: limit };
+		const { tableName = DEFAULT_TABLE, limit = 100, roomId, entityId, type, q, tag, pathPrefix } = opts;
+		const params: Record<string, unknown> = { tableName, count: limit * 4 };
 		if (roomId) params.roomId = roomId;
 		if (entityId) params.entityId = entityId;
 		const memories: Memory[] = await adapter.call(runtime, params);
+		const prefix = pathPrefix ? normalisePath(pathPrefix, undefined) : null;
 		const filtered = memories.filter((m) => {
-			if (type) {
-				const t = (m.metadata as MemoryMetadata | undefined)?.type;
-				if (t !== type) return false;
-			}
+			const md = m.metadata as (MemoryMetadata & { path?: unknown; tags?: unknown }) | undefined;
+			if (type && md?.type !== type) return false;
 			if (tag) {
-				const tags = (m.metadata as { tags?: unknown } | undefined)?.tags;
-				if (!Array.isArray(tags) || !tags.includes(tag)) return false;
+				if (!Array.isArray(md?.tags) || !(md.tags as string[]).includes(tag)) return false;
+			}
+			if (prefix) {
+				const p = normalisePath(md?.path, md?.type);
+				if (p !== prefix && !p.startsWith(`${prefix}/`)) return false;
 			}
 			if (q) {
 				const text = (m.content?.text ?? "").toString().toLowerCase();
@@ -101,6 +181,109 @@ export class PensieveMemoryService {
 			return true;
 		});
 		return filtered.slice(0, limit).map(summarise);
+	}
+
+	/** Build a folder hierarchy across all memories. */
+	async tree(opts: { tableName?: string; max?: number } = {}): Promise<PensieveMemoryTree> {
+		const runtime = this.resolveRuntime();
+		const root: PensieveMemoryTreeNode = { path: "/", name: "/", count: 0, totalCount: 0, children: [] };
+		if (!runtime) return { root, total: 0 };
+		const adapter = (runtime as unknown as {
+			getMemories: (p: Record<string, unknown>) => Promise<Memory[]>;
+		}).getMemories;
+		if (typeof adapter !== "function") return { root, total: 0 };
+		const tableName = opts.tableName ?? DEFAULT_TABLE;
+		const memories: Memory[] = await adapter.call(runtime, { tableName, count: opts.max ?? 5000 });
+
+		const nodeAt = (path: string): PensieveMemoryTreeNode => {
+			if (path === "/") return root;
+			const segments = pathSegments(path);
+			let cur = root;
+			let acc = "";
+			for (const seg of segments) {
+				acc += `/${seg}`;
+				let next = cur.children.find((c) => c.path === acc);
+				if (!next) {
+					next = { path: acc, name: seg, count: 0, totalCount: 0, children: [] };
+					cur.children.push(next);
+				}
+				cur = next;
+			}
+			return cur;
+		};
+
+		for (const m of memories) {
+			const md = m.metadata as { path?: unknown; type?: string } | undefined;
+			const path = normalisePath(md?.path, md?.type);
+			const node = nodeAt(path);
+			node.count += 1;
+			// Bump totalCount up the chain.
+			let acc = "";
+			root.totalCount += 1;
+			for (const seg of pathSegments(path)) {
+				acc += `/${seg}`;
+				const cur = nodeAt(acc);
+				cur.totalCount += 1;
+			}
+		}
+
+		const sortChildren = (n: PensieveMemoryTreeNode): void => {
+			n.children.sort((a, b) => a.name.localeCompare(b.name));
+			n.children.forEach(sortChildren);
+		};
+		sortChildren(root);
+
+		return { root, total: memories.length };
+	}
+
+	/** Create a memory at a path. Used by the agent's PENSIEVE_WRITE action and by ad-hoc UI imports. */
+	async create(input: {
+		text: string;
+		path?: string;
+		type?: string;
+		tags?: string[];
+		roomId?: string;
+		entityId?: string;
+		worldId?: string;
+		extraMetadata?: Record<string, unknown>;
+		tableName?: string;
+	}): Promise<{ id: string } | null> {
+		const runtime = this.resolveRuntime();
+		if (!runtime) return null;
+		const r = runtime as unknown as {
+			agentId?: string;
+			createMemory?: (m: Memory, table?: string) => Promise<UUID>;
+			addEmbeddingToMemory?: (m: Memory) => Promise<Memory>;
+		};
+		if (typeof r.createMemory !== "function") return null;
+		const type = input.type ?? "custom";
+		const path = normalisePath(input.path, type);
+		const meta = {
+			type,
+			path,
+			...(Array.isArray(input.tags) ? { tags: input.tags } : {}),
+			...(input.extraMetadata ?? {}),
+		} as unknown as MemoryMetadata;
+		const memory: Memory = {
+			entityId: (input.entityId ?? r.agentId ?? "00000000-0000-0000-0000-000000000000") as UUID,
+			roomId: (input.roomId ?? "00000000-0000-0000-0000-000000000000") as UUID,
+			...(input.worldId ? { worldId: input.worldId as UUID } : {}),
+			content: { text: input.text } as Content,
+			createdAt: Date.now(),
+			metadata: meta,
+		};
+		// Best-effort embedding so the new memory shows up in vector search.
+		try {
+			if (typeof r.addEmbeddingToMemory === "function") {
+				const enriched = await r.addEmbeddingToMemory(memory);
+				const id = await r.createMemory(enriched, input.tableName ?? DEFAULT_TABLE);
+				return { id: String(id) };
+			}
+		} catch {
+			// fall back to write without embedding
+		}
+		const id = await r.createMemory(memory, input.tableName ?? DEFAULT_TABLE);
+		return { id: String(id) };
 	}
 
 	async get(id: UUID): Promise<PensieveMemoryDetail | null> {
@@ -156,7 +339,7 @@ export class PensieveMemoryService {
 		return this.list({ q: text, limit });
 	}
 
-	async update(id: UUID, patch: { contentText?: string; tags?: string[] }): Promise<boolean> {
+	async update(id: UUID, patch: { contentText?: string; tags?: string[]; path?: string }): Promise<boolean> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return false;
 		const update = (runtime as unknown as {
@@ -169,10 +352,18 @@ export class PensieveMemoryService {
 		if (typeof patch.contentText === "string") {
 			next.content = { ...(existing.content ?? {}), text: patch.contentText } as Content;
 		}
+		const md = ((existing.metadata ?? {}) as Record<string, unknown>);
+		const nextMd: Record<string, unknown> = { ...md };
+		let touchedMd = false;
 		if (Array.isArray(patch.tags)) {
-			const md = (existing.metadata ?? {}) as Record<string, unknown>;
-			next.metadata = { ...md, tags: patch.tags } as MemoryMetadata;
+			nextMd.tags = patch.tags;
+			touchedMd = true;
 		}
+		if (typeof patch.path === "string") {
+			nextMd.path = normalisePath(patch.path, existing.type);
+			touchedMd = true;
+		}
+		if (touchedMd) next.metadata = nextMd as MemoryMetadata;
 		return update.call(runtime, next);
 	}
 

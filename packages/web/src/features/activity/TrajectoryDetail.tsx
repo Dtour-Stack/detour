@@ -11,8 +11,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
-	PensieveLlmCall,
-	PensieveTrajectoryDetail,
+	ActivityLlmCall,
+	ActivityTrajectoryDetail,
+	ActivityTrajectoryStepSummary,
 } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 
@@ -39,7 +40,7 @@ const STEP_TO_STAGE: Record<string, StageId> = {
 	turn_complete: "evaluators",
 };
 
-function stageForCall(call: PensieveLlmCall): StageId {
+function stageForCall(call: ActivityLlmCall): StageId {
 	return STEP_TO_STAGE[call.stepType ?? ""] ?? "plan";
 }
 
@@ -87,7 +88,7 @@ export function TrajectoryDetail({
 	trajectoryId: string;
 	onClose: () => void;
 }) {
-	const [detail, setDetail] = useState<PensieveTrajectoryDetail | null>(null);
+	const [detail, setDetail] = useState<ActivityTrajectoryDetail | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [activeStage, setActiveStage] = useState<StageId | null>(null);
@@ -97,7 +98,7 @@ export function TrajectoryDetail({
 		setLoading(true);
 		setError(null);
 		client
-			.pensieveTrajectory(trajectoryId)
+			.activityTrajectory(trajectoryId)
 			.then((res) => {
 				if (cancelled) return;
 				setDetail(res);
@@ -162,6 +163,7 @@ export function TrajectoryDetail({
 
 			<div className="trajectory-summary-grid">
 				<SummaryCard label="Duration" value={fmtMs(t.durationMs)} />
+				<SummaryCard label="LLM time" value={fmtMs(detail.totals.totalLatencyMs || undefined)} />
 				<SummaryCard label="Steps" value={String(detail.totals.stepCount)} />
 				<SummaryCard label="LLM calls" value={String(detail.totals.llmCallCount)} />
 				<SummaryCard label="Provider accesses" value={String(detail.totals.providerAccessCount)} />
@@ -170,7 +172,12 @@ export function TrajectoryDetail({
 					label="Tokens (in / out)"
 					value={`${fmtTokens(detail.totals.totalPromptTokens)} / ${fmtTokens(detail.totals.totalCompletionTokens)}`}
 				/>
+				{detail.identity?.totalReward !== undefined && (
+					<SummaryCard label="Total reward" value={detail.identity.totalReward.toFixed(3)} />
+				)}
 			</div>
+
+			{detail.identity && <IdentityBlock identity={detail.identity} />}
 
 			<div className="trajectory-pipeline">
 				{STAGES.map((stage, i) => {
@@ -206,6 +213,28 @@ export function TrajectoryDetail({
 					</button>
 				)}
 			</div>
+
+			{detail.metrics && Object.keys(detail.metrics).length > 0 && (
+				<DisclosureSection label="Metrics" defaultOpen={true}>
+					<KeyValueTable data={detail.metrics} />
+				</DisclosureSection>
+			)}
+
+			{detail.rewardComponents && Object.keys(detail.rewardComponents).length > 0 && (
+				<DisclosureSection label="Reward components" defaultOpen={false}>
+					<KeyValueTable data={detail.rewardComponents} />
+				</DisclosureSection>
+			)}
+
+			{detail.steps.length > 0 && (
+				<DisclosureSection label={`Steps (${detail.steps.length})`} defaultOpen={false}>
+					<div className="trajectory-step-list">
+						{detail.steps.map((s) => (
+							<StepCard key={s.stepNumber} step={s} />
+						))}
+					</div>
+				</DisclosureSection>
+			)}
 
 			{detail.metadata && Object.keys(detail.metadata).length > 0 && (
 				<DisclosureSection label="Metadata" defaultOpen={false}>
@@ -317,7 +346,7 @@ function DisclosureSection({
 	);
 }
 
-function TrajectoryLlmCallCard({ index, call }: { index: number; call: PensieveLlmCall }) {
+function TrajectoryLlmCallCard({ index, call }: { index: number; call: ActivityLlmCall }) {
 	const [openSystem, setOpenSystem] = useState(false);
 	const [openInput, setOpenInput] = useState(true);
 	const [openOutput, setOpenOutput] = useState(true);
@@ -393,4 +422,91 @@ function statusTone(s?: string): string {
 	if (s === "error") return "err";
 	if (s === "active") return "info";
 	return "muted";
+}
+
+function IdentityBlock({ identity }: { identity: NonNullable<ActivityTrajectoryDetail["identity"]> }) {
+	const rows: Array<[string, string]> = [];
+	if (identity.agentName) rows.push(["Agent", identity.agentName]);
+	if (identity.agentModel) rows.push(["Model", identity.agentModel]);
+	if (identity.agentId) rows.push(["Agent id", identity.agentId]);
+	if (identity.episodeId) rows.push(["Episode", identity.episodeId]);
+	if (identity.scenarioId) rows.push(["Scenario", identity.scenarioId]);
+	if (identity.batchId) rows.push(["Batch", identity.batchId]);
+	if (identity.groupIndex !== undefined) rows.push(["Group index", String(identity.groupIndex)]);
+	rows.push(["Trajectory id", identity.id]);
+	if (rows.length === 0) return null;
+	return (
+		<div className="trajectory-identity">
+			{rows.map(([k, v]) => (
+				<div key={k} className="trajectory-identity-row">
+					<span className="trajectory-identity-key">{k}</span>
+					<span className="trajectory-identity-value">{v}</span>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function KeyValueTable({ data }: { data: Record<string, unknown> }) {
+	const entries = Object.entries(data);
+	if (entries.length === 0) return null;
+	return (
+		<div className="trajectory-kv">
+			{entries.map(([k, v]) => (
+				<div key={k} className="trajectory-kv-row">
+					<span className="trajectory-kv-key">{k}</span>
+					<span className="trajectory-kv-value">{renderValue(v)}</span>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function renderValue(v: unknown): React.ReactNode {
+	if (v === null || v === undefined) return <span className="hint">—</span>;
+	if (typeof v === "boolean") return <span className={`badge ${v ? "ok" : "muted"}`}>{String(v)}</span>;
+	if (typeof v === "number") return <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{v}</span>;
+	if (typeof v === "string") return v;
+	return <pre className="trajectory-pre" style={{ margin: 0, maxHeight: 200 }}>{fmtJson(v)}</pre>;
+}
+
+function StepCard({ step }: { step: ActivityTrajectoryStepSummary }) {
+	return (
+		<div className="trajectory-step-card">
+			<div className="trajectory-step-header">
+				<span className="trajectory-step-number">step {step.stepNumber}</span>
+				<span className="hint">{step.timestamp ? new Date(step.timestamp).toLocaleTimeString() : ""}</span>
+				<span className="badge muted">{step.llmCallCount} LLM</span>
+				<span className="badge muted">{step.providerAccessCount} prov</span>
+				{step.hasAction && (
+					<span className={`badge ${step.actionSuccess === false ? "err" : step.actionSuccess === true ? "ok" : "muted"}`}>
+						{step.actionName ?? "action"}
+					</span>
+				)}
+				{step.reward !== undefined && step.reward !== 0 && (
+					<span className="badge info">reward {step.reward.toFixed(2)}</span>
+				)}
+				{step.done && <span className="badge ok">done</span>}
+			</div>
+			{step.reasoning && <div className="trajectory-step-reasoning">{step.reasoning}</div>}
+			{step.observation !== undefined && (
+				<details className="trajectory-call-section">
+					<summary>observation</summary>
+					<pre className="trajectory-pre">{fmtJson(step.observation)}</pre>
+				</details>
+			)}
+			{step.environmentState && Object.keys(step.environmentState).length > 0 && (
+				<details className="trajectory-call-section">
+					<summary>environment state</summary>
+					<KeyValueTable data={step.environmentState} />
+				</details>
+			)}
+			{step.metadata && Object.keys(step.metadata).length > 0 && (
+				<details className="trajectory-call-section">
+					<summary>metadata</summary>
+					<pre className="trajectory-pre">{fmtJson(step.metadata)}</pre>
+				</details>
+			)}
+		</div>
+	);
 }

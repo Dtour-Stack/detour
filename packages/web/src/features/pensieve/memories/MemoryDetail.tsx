@@ -18,6 +18,7 @@ export function MemoryDetail({
 	const [editing, setEditing] = useState(false);
 	const [draftText, setDraftText] = useState("");
 	const [draftTags, setDraftTags] = useState("");
+	const [draftPath, setDraftPath] = useState("");
 	const [saving, setSaving] = useState(false);
 
 	useEffect(() => {
@@ -30,6 +31,7 @@ export function MemoryDetail({
 				setDetail(d);
 				setDraftText(d.content?.text ?? "");
 				setDraftTags((d.tags ?? []).join(", "));
+				setDraftPath(d.path);
 			})
 			.catch((e) => { if (!cancelled) setError(e.message); });
 		return () => { cancelled = true; };
@@ -40,7 +42,7 @@ export function MemoryDetail({
 		setSaving(true);
 		try {
 			const tags = draftTags.split(",").map((s) => s.trim()).filter(Boolean);
-			await client.pensieveUpdateMemory(memoryId, { contentText: draftText, tags });
+			await client.pensieveUpdateMemory(memoryId, { contentText: draftText, tags, path: draftPath });
 			setEditing(false);
 			onUpdate();
 			const fresh = await client.pensieveMemory(memoryId);
@@ -99,6 +101,23 @@ export function MemoryDetail({
 					/>
 				) : (
 					<div className="pensieve-detail-content">{detail.content?.text ?? "(no text)"}</div>
+				)}
+			</section>
+
+			<section className="pensieve-detail-section">
+				<label>Path</label>
+				{editing ? (
+					<input
+						type="text"
+						value={draftPath}
+						onChange={(e) => setDraftPath(e.target.value)}
+						placeholder="/notes/projects"
+						className="pensieve-input"
+					/>
+				) : (
+					<div className="pensieve-detail-content" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+						{detail.path}
+					</div>
 				)}
 			</section>
 

@@ -1,4 +1,10 @@
 import type {
+	ActivityLogEntry,
+	ActivityRuntimeSnapshot,
+	ActivityTasksSnapshot,
+	ActivityTrajectoryDetail,
+	ActivityTrajectoryExport,
+	ActivityTrajectoryListResult,
 	AgentConfig,
 	BackendStatus,
 	ModelConfig,
@@ -7,16 +13,15 @@ import type {
 	OsPermissionInfo,
 	PensieveEntitySummary,
 	PensieveGraphSnapshot,
-	PensieveLogEntry,
 	PensieveMemoryDetail,
 	PensieveMemorySummary,
+	PensieveMemoryTree,
 	PensievePersonDetail,
 	PensieveRelationshipSummary,
-	PensieveRuntimeSnapshot,
-	PensieveTasksSnapshot,
-	PensieveTrajectoryDetail,
-	PensieveTrajectoryExport,
-	PensieveTrajectoryListResult,
+	PensievePromptVariable,
+	PensieveTemplateDetail,
+	PensieveTemplateRenderResult,
+	PensieveTemplateSummary,
 	ProviderId,
 	ProviderInfo,
 	SigninResult,
@@ -195,8 +200,8 @@ export class WebClient {
 		await this.json("POST", `/api/os/permissions/${encodeURIComponent(id)}/open`);
 	}
 
-	// --- Pensieve ---
-	pensieveLogs(params: { level?: string; source?: string; q?: string; limit?: number; since?: number } = {}): Promise<PensieveLogEntry[]> {
+	// --- Activity (operational: logs, runtime introspection, trajectories, tasks) ---
+	activityLogs(params: { level?: string; source?: string; q?: string; limit?: number; since?: number } = {}): Promise<ActivityLogEntry[]> {
 		const qs = new URLSearchParams();
 		if (params.level) qs.set("level", params.level);
 		if (params.source) qs.set("source", params.source);
@@ -204,12 +209,12 @@ export class WebClient {
 		if (params.limit) qs.set("limit", String(params.limit));
 		if (params.since) qs.set("since", String(params.since));
 		const s = qs.toString();
-		return this.json("GET", `/api/pensieve/logs${s ? `?${s}` : ""}`);
+		return this.json("GET", `/api/activity/logs${s ? `?${s}` : ""}`);
 	}
-	pensieveRuntime(): Promise<PensieveRuntimeSnapshot> {
-		return this.json("GET", "/api/pensieve/runtime");
+	activityRuntime(): Promise<ActivityRuntimeSnapshot> {
+		return this.json("GET", "/api/activity/runtime");
 	}
-	pensieveTrajectories(params: { limit?: number; offset?: number; status?: string; source?: string; q?: string } = {}): Promise<PensieveTrajectoryListResult> {
+	activityTrajectories(params: { limit?: number; offset?: number; status?: string; source?: string; q?: string } = {}): Promise<ActivityTrajectoryListResult> {
 		const qs = new URLSearchParams();
 		if (params.limit) qs.set("limit", String(params.limit));
 		if (params.offset) qs.set("offset", String(params.offset));
@@ -217,30 +222,71 @@ export class WebClient {
 		if (params.source) qs.set("source", params.source);
 		if (params.q) qs.set("q", params.q);
 		const s = qs.toString();
-		return this.json("GET", `/api/pensieve/trajectories${s ? `?${s}` : ""}`);
+		return this.json("GET", `/api/activity/trajectories${s ? `?${s}` : ""}`);
 	}
-	pensieveTrajectory(id: string): Promise<PensieveTrajectoryDetail> {
-		return this.json("GET", `/api/pensieve/trajectories/${encodeURIComponent(id)}`);
+	activityTrajectory(id: string): Promise<ActivityTrajectoryDetail> {
+		return this.json("GET", `/api/activity/trajectories/${encodeURIComponent(id)}`);
 	}
-	pensieveExportTrajectories(ids?: string[]): Promise<PensieveTrajectoryExport> {
-		return this.json("POST", "/api/pensieve/trajectories/export", ids?.length ? { ids } : {});
+	activityExportTrajectories(ids?: string[]): Promise<ActivityTrajectoryExport> {
+		return this.json("POST", "/api/activity/trajectories/export", ids?.length ? { ids } : {});
 	}
-	pensieveTasks(): Promise<PensieveTasksSnapshot> {
-		return this.json("GET", "/api/pensieve/tasks");
+	activityTasks(): Promise<ActivityTasksSnapshot> {
+		return this.json("GET", "/api/activity/tasks");
 	}
-	async pensieveRunTask(id: string): Promise<void> {
-		await this.json("POST", `/api/pensieve/tasks/${encodeURIComponent(id)}/run`);
+	async activityRunTask(id: string): Promise<void> {
+		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/run`);
 	}
-	async pensievePauseTask(id: string): Promise<void> {
-		await this.json("POST", `/api/pensieve/tasks/${encodeURIComponent(id)}/pause`);
+	async activityPauseTask(id: string): Promise<void> {
+		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/pause`);
 	}
-	async pensieveResumeTask(id: string): Promise<void> {
-		await this.json("POST", `/api/pensieve/tasks/${encodeURIComponent(id)}/resume`);
+	async activityResumeTask(id: string): Promise<void> {
+		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/resume`);
 	}
-	async pensieveDeleteTask(id: string): Promise<void> {
-		await this.json("DELETE", `/api/pensieve/tasks/${encodeURIComponent(id)}`);
+	async activityDeleteTask(id: string): Promise<void> {
+		await this.json("DELETE", `/api/activity/tasks/${encodeURIComponent(id)}`);
 	}
-	pensieveMemories(params: { limit?: number; type?: string; roomId?: string; entityId?: string; tag?: string; q?: string } = {}): Promise<PensieveMemorySummary[]> {
+
+	// --- Pensieve (knowledge: memories, relationships, graph, templates) ---
+	pensieveTemplates(): Promise<PensieveTemplateSummary[]> {
+		return this.json("GET", "/api/pensieve/templates");
+	}
+	pensieveTemplate(id: string): Promise<PensieveTemplateDetail> {
+		return this.json("GET", `/api/pensieve/templates/${encodeURIComponent(id)}`);
+	}
+	async pensieveCreateTemplate(input: { name: string; body: string; tags?: string[] }): Promise<{ id: string }> {
+		return this.json("POST", "/api/pensieve/templates", input);
+	}
+	async pensieveUpdateTemplate(id: string, patch: { body?: string; tags?: string[]; path?: string }): Promise<void> {
+		await this.json("PATCH", `/api/pensieve/templates/${encodeURIComponent(id)}`, patch);
+	}
+	async pensieveDeleteTemplate(id: string): Promise<void> {
+		await this.json("DELETE", `/api/pensieve/templates/${encodeURIComponent(id)}`);
+	}
+	pensieveRenderTemplate(id: string, vars: Record<string, string> = {}): Promise<PensieveTemplateRenderResult> {
+		return this.json("POST", `/api/pensieve/templates/${encodeURIComponent(id)}/render`, { vars });
+	}
+	pensieveTemplateVars(): Promise<PensievePromptVariable[]> {
+		return this.json("GET", "/api/pensieve/template-vars");
+	}
+	async pensieveSetTemplateVar(name: string, value: string): Promise<void> {
+		await this.json("PUT", `/api/pensieve/template-vars/${encodeURIComponent(name)}`, { value });
+	}
+	async pensieveDeleteTemplateVar(name: string): Promise<void> {
+		await this.json("DELETE", `/api/pensieve/template-vars/${encodeURIComponent(name)}`);
+	}
+	pensieveMemoryTree(): Promise<PensieveMemoryTree> {
+		return this.json("GET", "/api/pensieve/memories/tree");
+	}
+	async pensieveCreateMemory(input: {
+		text: string;
+		path?: string;
+		type?: string;
+		tags?: string[];
+		extraMetadata?: Record<string, unknown>;
+	}): Promise<{ id: string }> {
+		return this.json("POST", "/api/pensieve/memories", input);
+	}
+	pensieveMemories(params: { limit?: number; type?: string; roomId?: string; entityId?: string; tag?: string; q?: string; pathPrefix?: string } = {}): Promise<PensieveMemorySummary[]> {
 		const qs = new URLSearchParams();
 		for (const [k, v] of Object.entries(params)) {
 			if (v != null && v !== "") qs.set(k, String(v));
@@ -254,7 +300,7 @@ export class WebClient {
 	pensieveMemory(id: string): Promise<PensieveMemoryDetail> {
 		return this.json("GET", `/api/pensieve/memories/${encodeURIComponent(id)}`);
 	}
-	async pensieveUpdateMemory(id: string, patch: { contentText?: string; tags?: string[] }): Promise<void> {
+	async pensieveUpdateMemory(id: string, patch: { contentText?: string; tags?: string[]; path?: string }): Promise<void> {
 		await this.json("PATCH", `/api/pensieve/memories/${encodeURIComponent(id)}`, patch);
 	}
 	async pensieveDeleteMemory(id: string): Promise<void> {

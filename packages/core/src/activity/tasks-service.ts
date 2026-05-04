@@ -1,5 +1,5 @@
 /**
- * Pensieve > Activity > Tasks pane.
+ * Activity > Tasks pane.
  *
  * Surfaces elizaOS's TaskService for observability:
  *  - registered task workers (action types the agent can do autonomously)
@@ -37,13 +37,13 @@ interface TaskServiceShape {
 	runDueTasks?: () => Promise<void>;
 }
 
-export interface PensieveTaskWorker {
+export interface ActivityTaskWorker {
 	name: string;
 	hasShouldRun: boolean;
 	hasCanExecute: boolean;
 }
 
-export interface PensieveTaskRecord {
+export interface ActivityTaskRecord {
 	id: string;
 	name: string;
 	description?: string;
@@ -67,10 +67,10 @@ export interface PensieveTaskRecord {
 	metadata: Record<string, unknown>;
 }
 
-export interface PensieveTasksSnapshot {
+export interface ActivityTasksSnapshot {
 	available: boolean;
-	workers: PensieveTaskWorker[];
-	tasks: PensieveTaskRecord[];
+	workers: ActivityTaskWorker[];
+	tasks: ActivityTaskRecord[];
 	totals: {
 		workerCount: number;
 		taskCount: number;
@@ -80,7 +80,7 @@ export interface PensieveTasksSnapshot {
 	};
 }
 
-const EMPTY_SNAPSHOT: PensieveTasksSnapshot = {
+const EMPTY_SNAPSHOT: ActivityTasksSnapshot = {
 	available: false,
 	workers: [],
 	tasks: [],
@@ -102,7 +102,7 @@ function asObject(v: unknown): Record<string, unknown> {
 	return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): PensieveTaskRecord | null {
+function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityTaskRecord | null {
 	const t = asObject(raw);
 	const id = asString(t.id);
 	if (!id) return null;
@@ -137,15 +137,15 @@ function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): PensieveTas
 	};
 }
 
-export class PensieveTasksService {
+export class ActivityTasksService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
 
-	async snapshot(): Promise<PensieveTasksSnapshot> {
+	async snapshot(): Promise<ActivityTasksSnapshot> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return EMPTY_SNAPSHOT;
 		const r = runtime as unknown as RuntimeTaskShape;
 
-		const workers: PensieveTaskWorker[] = [];
+		const workers: ActivityTaskWorker[] = [];
 		if (r.taskWorkers) {
 			for (const [name, w] of r.taskWorkers.entries()) {
 				workers.push({
@@ -158,7 +158,7 @@ export class PensieveTasksService {
 		workers.sort((a, b) => a.name.localeCompare(b.name));
 
 		const known = new Set(workers.map((w) => w.name));
-		const tasks: PensieveTaskRecord[] = [];
+		const tasks: ActivityTaskRecord[] = [];
 		try {
 			const raw = (await r.getTasks?.({ tags: [] })) ?? [];
 			for (const item of raw) {

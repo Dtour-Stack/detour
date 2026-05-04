@@ -1,6 +1,6 @@
 /**
  * Thin wrapper around elizaOS's TrajectoriesService for the
- * Pensieve > Activity > Trajectories pane.
+ * Activity > Trajectories pane.
  *
  * The service isn't exported from @elizaos/core's package main — it's only
  * registered on the runtime under `serviceType: "trajectories"`. We resolve
@@ -15,7 +15,7 @@ import type { IAgentRuntime } from "@elizaos/core";
 
 const SERVICE_TYPE = "trajectories";
 
-export interface PensieveTrajectoryListItem {
+export interface ActivityTrajectoryListItem {
 	id: string;
 	source?: string;
 	status?: string;
@@ -27,14 +27,14 @@ export interface PensieveTrajectoryListItem {
 	totalCompletionTokens?: number;
 }
 
-export interface PensieveTrajectoryListResult {
-	trajectories: PensieveTrajectoryListItem[];
+export interface ActivityTrajectoryListResult {
+	trajectories: ActivityTrajectoryListItem[];
 	total: number;
 	limit: number;
 	offset: number;
 }
 
-export interface PensieveLlmCall {
+export interface ActivityLlmCall {
 	callId: string;
 	stepNumber: number;
 	timestamp: number;
@@ -54,7 +54,7 @@ export interface PensieveLlmCall {
 	tags?: string[];
 }
 
-export interface PensieveProviderAccess {
+export interface ActivityProviderAccess {
 	providerId: string;
 	providerName: string;
 	stepNumber: number;
@@ -64,7 +64,7 @@ export interface PensieveProviderAccess {
 	data?: unknown;
 }
 
-export interface PensieveActionAttempt {
+export interface ActivityActionAttempt {
 	attemptId: string;
 	stepNumber: number;
 	timestamp: number;
@@ -78,8 +78,42 @@ export interface PensieveActionAttempt {
 	immediateReward?: number;
 }
 
-export interface PensieveTrajectoryDetail {
-	trajectory: PensieveTrajectoryListItem | null;
+export interface ActivityTrajectoryStepSummary {
+	stepNumber: number;
+	timestamp: number;
+	reasoning?: string;
+	reward?: number;
+	done?: boolean;
+	llmCallCount: number;
+	providerAccessCount: number;
+	hasAction: boolean;
+	actionName?: string;
+	actionSuccess?: boolean;
+	observation?: unknown;
+	environmentState?: Record<string, unknown>;
+	metadata?: Record<string, unknown>;
+}
+
+export interface ActivityTrajectoryIdentity {
+	id: string;
+	agentId?: string;
+	agentName?: string;
+	agentModel?: string;
+	episodeId?: string;
+	scenarioId?: string;
+	batchId?: string;
+	groupIndex?: number;
+	source?: string;
+	status?: string;
+	startTime?: number;
+	endTime?: number;
+	durationMs?: number;
+	totalReward?: number;
+}
+
+export interface ActivityTrajectoryDetail {
+	trajectory: ActivityTrajectoryListItem | null;
+	identity: ActivityTrajectoryIdentity | null;
 	totals: {
 		stepCount: number;
 		llmCallCount: number;
@@ -87,10 +121,12 @@ export interface PensieveTrajectoryDetail {
 		actionCount: number;
 		totalPromptTokens: number;
 		totalCompletionTokens: number;
+		totalLatencyMs: number;
 	};
-	llmCalls: PensieveLlmCall[];
-	providerAccesses: PensieveProviderAccess[];
-	actions: PensieveActionAttempt[];
+	llmCalls: ActivityLlmCall[];
+	providerAccesses: ActivityProviderAccess[];
+	actions: ActivityActionAttempt[];
+	steps: ActivityTrajectoryStepSummary[];
 	metadata: Record<string, unknown> | null;
 	rewardComponents: Record<string, unknown> | null;
 	metrics: Record<string, unknown> | null;
@@ -98,7 +134,7 @@ export interface PensieveTrajectoryDetail {
 	raw: Record<string, unknown> | null;
 }
 
-export interface PensieveTrajectoryListOptions {
+export interface ActivityTrajectoryListOptions {
 	limit?: number;
 	offset?: number;
 	status?: string;
@@ -107,8 +143,8 @@ export interface PensieveTrajectoryListOptions {
 }
 
 interface TrajectoriesServiceShape {
-	listTrajectories?: (opts: PensieveTrajectoryListOptions) => Promise<{
-		trajectories: PensieveTrajectoryListItem[];
+	listTrajectories?: (opts: ActivityTrajectoryListOptions) => Promise<{
+		trajectories: ActivityTrajectoryListItem[];
 		total: number;
 		limit?: number;
 		offset?: number;
@@ -138,8 +174,9 @@ function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | nul
 	return null;
 }
 
-const EMPTY_DETAIL: PensieveTrajectoryDetail = {
+const EMPTY_DETAIL: ActivityTrajectoryDetail = {
 	trajectory: null,
+	identity: null,
 	totals: {
 		stepCount: 0,
 		llmCallCount: 0,
@@ -147,10 +184,12 @@ const EMPTY_DETAIL: PensieveTrajectoryDetail = {
 		actionCount: 0,
 		totalPromptTokens: 0,
 		totalCompletionTokens: 0,
+		totalLatencyMs: 0,
 	},
 	llmCalls: [],
 	providerAccesses: [],
 	actions: [],
+	steps: [],
 	metadata: null,
 	rewardComponents: null,
 	metrics: null,
@@ -173,26 +212,31 @@ function asBoolean(v: unknown): boolean | undefined {
 	return typeof v === "boolean" ? v : undefined;
 }
 
-function flattenDetail(traj: Record<string, unknown>): PensieveTrajectoryDetail {
+function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail {
 	const steps = asArray(traj.steps);
-	const llmCalls: PensieveLlmCall[] = [];
-	const providerAccesses: PensieveProviderAccess[] = [];
-	const actions: PensieveActionAttempt[] = [];
+	const llmCalls: ActivityLlmCall[] = [];
+	const providerAccesses: ActivityProviderAccess[] = [];
+	const actions: ActivityActionAttempt[] = [];
+	const stepSummaries: ActivityTrajectoryStepSummary[] = [];
 	let totalPromptTokens = 0;
 	let totalCompletionTokens = 0;
+	let totalLatencyMs = 0;
 
 	for (const stepRaw of steps) {
 		const step = asObject(stepRaw);
 		if (!step) continue;
 		const stepNumber = asNumber(step.stepNumber) ?? 0;
+		const stepCalls: ActivityLlmCall[] = [];
 		for (const callRaw of asArray(step.llmCalls)) {
 			const call = asObject(callRaw);
 			if (!call) continue;
 			const promptTokens = asNumber(call.promptTokens) ?? 0;
 			const completionTokens = asNumber(call.completionTokens) ?? 0;
+			const latencyMs = asNumber(call.latencyMs);
 			totalPromptTokens += promptTokens;
 			totalCompletionTokens += completionTokens;
-			llmCalls.push({
+			if (typeof latencyMs === "number") totalLatencyMs += latencyMs;
+			const normalized: ActivityLlmCall = {
 				callId: asString(call.callId) ?? `${stepNumber}-${llmCalls.length}`,
 				stepNumber,
 				timestamp: asNumber(call.timestamp) ?? 0,
@@ -205,17 +249,20 @@ function flattenDetail(traj: Record<string, unknown>): PensieveTrajectoryDetail 
 				...(asNumber(call.maxTokens) !== undefined && { maxTokens: asNumber(call.maxTokens)! }),
 				promptTokens,
 				completionTokens,
-				...(asNumber(call.latencyMs) !== undefined && { latencyMs: asNumber(call.latencyMs)! }),
+				...(latencyMs !== undefined && { latencyMs }),
 				...(asString(call.purpose) !== undefined && { purpose: asString(call.purpose)! }),
 				...(asString(call.stepType) !== undefined && { stepType: asString(call.stepType)! }),
 				...(asString(call.actionType) !== undefined && { actionType: asString(call.actionType)! }),
 				...(Array.isArray(call.tags) && { tags: (call.tags as unknown[]).map(String) }),
-			});
+			};
+			llmCalls.push(normalized);
+			stepCalls.push(normalized);
 		}
+		const stepProviders: ActivityProviderAccess[] = [];
 		for (const accRaw of asArray(step.providerAccesses)) {
 			const acc = asObject(accRaw);
 			if (!acc) continue;
-			providerAccesses.push({
+			const normalized: ActivityProviderAccess = {
 				providerId: asString(acc.providerId) ?? "",
 				providerName: asString(acc.providerName) ?? "unknown",
 				stepNumber,
@@ -223,11 +270,14 @@ function flattenDetail(traj: Record<string, unknown>): PensieveTrajectoryDetail 
 				...(asString(acc.purpose) !== undefined && { purpose: asString(acc.purpose)! }),
 				...(acc.query !== undefined && { query: acc.query }),
 				...(acc.data !== undefined && { data: acc.data }),
-			});
+			};
+			providerAccesses.push(normalized);
+			stepProviders.push(normalized);
 		}
 		const actionRaw = asObject(step.action);
-		if (actionRaw) {
-			actions.push({
+		let stepAction: ActivityActionAttempt | null = null;
+		if (actionRaw && Object.keys(actionRaw).length > 0) {
+			stepAction = {
 				attemptId: asString(actionRaw.attemptId) ?? `${stepNumber}-action`,
 				stepNumber,
 				timestamp: asNumber(actionRaw.timestamp) ?? 0,
@@ -239,16 +289,37 @@ function flattenDetail(traj: Record<string, unknown>): PensieveTrajectoryDetail 
 				...(actionRaw.result !== undefined && { result: actionRaw.result }),
 				...(asString(actionRaw.error) !== undefined && { error: asString(actionRaw.error)! }),
 				...(asNumber(actionRaw.immediateReward) !== undefined && { immediateReward: asNumber(actionRaw.immediateReward)! }),
-			});
+			};
+			actions.push(stepAction);
 		}
+		const stepEnv = asObject(step.environmentState);
+		const stepMeta = asObject(step.metadata);
+		stepSummaries.push({
+			stepNumber,
+			timestamp: asNumber(step.timestamp) ?? 0,
+			...(asString(step.reasoning) !== undefined && { reasoning: asString(step.reasoning)! }),
+			...(asNumber(step.reward) !== undefined && { reward: asNumber(step.reward)! }),
+			...(asBoolean(step.done) !== undefined && { done: asBoolean(step.done)! }),
+			llmCallCount: stepCalls.length,
+			providerAccessCount: stepProviders.length,
+			hasAction: !!stepAction,
+			...(stepAction?.actionName !== undefined && { actionName: stepAction.actionName }),
+			...(stepAction?.success !== undefined && { actionSuccess: stepAction.success }),
+			...(step.observation !== undefined && { observation: step.observation }),
+			...(stepEnv && Object.keys(stepEnv).length > 0 && { environmentState: stepEnv }),
+			...(stepMeta && Object.keys(stepMeta).length > 0 && { metadata: stepMeta }),
+		});
 	}
 
-	const trajectorySummary: PensieveTrajectoryListItem = {
-		id: asString(traj.trajectoryId) ?? asString(traj.id) ?? "",
+	const meta = asObject(traj.metadata);
+	const metrics = asObject(traj.metrics);
+	const status = asString(metrics?.finalStatus);
+	const trajId = asString(traj.trajectoryId) ?? asString(traj.id) ?? "";
+
+	const trajectorySummary: ActivityTrajectoryListItem = {
+		id: trajId,
 		...(asString(traj.source) !== undefined && { source: asString(traj.source)! }),
-		...(asString((traj.metrics as Record<string, unknown> | undefined)?.finalStatus) !== undefined && {
-			status: asString((traj.metrics as Record<string, unknown>).finalStatus)!,
-		}),
+		...(status !== undefined && { status }),
 		...(asNumber(traj.startTime) !== undefined && { startTime: asNumber(traj.startTime)! }),
 		...(asNumber(traj.endTime) !== undefined && { endTime: asNumber(traj.endTime)! }),
 		...(asNumber(traj.durationMs) !== undefined && { durationMs: asNumber(traj.durationMs)! }),
@@ -257,8 +328,26 @@ function flattenDetail(traj: Record<string, unknown>): PensieveTrajectoryDetail 
 		totalCompletionTokens,
 	};
 
+	const identity: ActivityTrajectoryIdentity = {
+		id: trajId,
+		...(asString(traj.agentId) !== undefined && { agentId: asString(traj.agentId)! }),
+		...(asString(meta?.agentName) !== undefined && { agentName: asString(meta?.agentName)! }),
+		...(asString(meta?.agentModel) !== undefined && { agentModel: asString(meta?.agentModel)! }),
+		...(asString(traj.episodeId) !== undefined && { episodeId: asString(traj.episodeId)! }),
+		...(asString(traj.scenarioId) !== undefined && { scenarioId: asString(traj.scenarioId)! }),
+		...(asString(traj.batchId) !== undefined && { batchId: asString(traj.batchId)! }),
+		...(asNumber(traj.groupIndex) !== undefined && { groupIndex: asNumber(traj.groupIndex)! }),
+		...(asString(traj.source) !== undefined && { source: asString(traj.source)! }),
+		...(status !== undefined && { status }),
+		...(asNumber(traj.startTime) !== undefined && { startTime: asNumber(traj.startTime)! }),
+		...(asNumber(traj.endTime) !== undefined && { endTime: asNumber(traj.endTime)! }),
+		...(asNumber(traj.durationMs) !== undefined && { durationMs: asNumber(traj.durationMs)! }),
+		...(asNumber(traj.totalReward) !== undefined && { totalReward: asNumber(traj.totalReward)! }),
+	};
+
 	return {
 		trajectory: trajectorySummary,
+		identity,
 		totals: {
 			stepCount: steps.length,
 			llmCallCount: llmCalls.length,
@@ -266,21 +355,23 @@ function flattenDetail(traj: Record<string, unknown>): PensieveTrajectoryDetail 
 			actionCount: actions.length,
 			totalPromptTokens,
 			totalCompletionTokens,
+			totalLatencyMs,
 		},
 		llmCalls,
 		providerAccesses,
 		actions,
-		metadata: asObject(traj.metadata),
+		steps: stepSummaries,
+		metadata: meta && Object.keys(meta).length > 0 ? meta : null,
 		rewardComponents: asObject(traj.rewardComponents),
-		metrics: asObject(traj.metrics),
+		metrics: metrics && Object.keys(metrics).length > 0 ? metrics : null,
 		raw: traj,
 	};
 }
 
-export class PensieveTrajectoryService {
+export class ActivityTrajectoryService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
 
-	async list(opts: PensieveTrajectoryListOptions = {}): Promise<PensieveTrajectoryListResult> {
+	async list(opts: ActivityTrajectoryListOptions = {}): Promise<ActivityTrajectoryListResult> {
 		const runtime = this.resolveRuntime();
 		const limit = opts.limit ?? 50;
 		const offset = opts.offset ?? 0;
@@ -296,7 +387,7 @@ export class PensieveTrajectoryService {
 		};
 	}
 
-	async get(id: string): Promise<PensieveTrajectoryDetail> {
+	async get(id: string): Promise<ActivityTrajectoryDetail> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return EMPTY_DETAIL;
 		const svc = findRealService(runtime);
@@ -307,8 +398,8 @@ export class PensieveTrajectoryService {
 	}
 
 	/** For the bulk-export button — fetches detail for every trajectory in `ids`. */
-	async getMany(ids: string[]): Promise<PensieveTrajectoryDetail[]> {
-		const out: PensieveTrajectoryDetail[] = [];
+	async getMany(ids: string[]): Promise<ActivityTrajectoryDetail[]> {
+		const out: ActivityTrajectoryDetail[] = [];
 		for (const id of ids) {
 			out.push(await this.get(id));
 		}

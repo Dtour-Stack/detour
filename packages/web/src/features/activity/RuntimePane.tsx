@@ -1,9 +1,9 @@
 import { useCallback } from "react";
-import type { PensieveRuntimeRegistryItem, PensieveRuntimeSnapshot } from "@detour/shared";
+import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 import { usePoller } from "./usePoller";
 
-const REGISTRIES: { key: keyof Pick<PensieveRuntimeSnapshot, "actions" | "providers" | "evaluators" | "services" | "plugins">; label: string }[] = [
+const REGISTRIES: { key: keyof Pick<ActivityRuntimeSnapshot, "actions" | "providers" | "evaluators" | "services" | "plugins">; label: string }[] = [
 	{ key: "actions", label: "Actions" },
 	{ key: "providers", label: "Providers" },
 	{ key: "evaluators", label: "Evaluators" },
@@ -11,7 +11,7 @@ const REGISTRIES: { key: keyof Pick<PensieveRuntimeSnapshot, "actions" | "provid
 	{ key: "plugins", label: "Plugins" },
 ];
 
-function ItemRow({ item }: { item: PensieveRuntimeRegistryItem }) {
+function ItemRow({ item }: { item: ActivityRuntimeRegistryItem }) {
 	return (
 		<div className="pensieve-runtime-item">
 			<div className="pensieve-runtime-name">
@@ -24,8 +24,8 @@ function ItemRow({ item }: { item: PensieveRuntimeRegistryItem }) {
 }
 
 export function RuntimePane({ client }: { client: WebClient }) {
-	const fetcher = useCallback(() => client.pensieveRuntime(), [client]);
-	const { data, error } = usePoller<PensieveRuntimeSnapshot>(fetcher, 5000);
+	const fetcher = useCallback(() => client.activityRuntime(), [client]);
+	const { data, error } = usePoller<ActivityRuntimeSnapshot>(fetcher, 5000);
 
 	if (error) return <div className="banner error">{error}</div>;
 	if (!data) return <div className="hint">Loading runtime snapshot…</div>;

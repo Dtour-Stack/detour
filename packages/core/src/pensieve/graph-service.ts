@@ -1,17 +1,17 @@
 /**
  * Cross-link / graph computation for the Pensieve > Graph view.
  *
+ * Pensieve is the *knowledge* surface — runtime/operational nodes
+ * (trajectories, logs, tasks) belong in Activity, not here.
+ *
  * Nodes:
  *   - memory:<id>     (color = memory type)
  *   - entity:<id>     (color = green)
- *   - trajectory:<id> (color = orange)
  *
  * Edges:
  *   - memory → entity (entityId / metadata.actorId)
- *   - memory → room   (skipped — rooms aren't first-class in the graph yet)
  *   - memory ↔ memory (shared tag, threshold ≥ 1)
  *   - entity ↔ entity (Relationship rows)
- *   - trajectory → memory (memories created during a trajectory's window)
  *
  * Backlinks for a single memory are derived on demand: any node that has
  * an edge ending at the memory id.
@@ -19,7 +19,7 @@
 
 import type { IAgentRuntime, Memory, Relationship } from "@elizaos/core";
 
-export type GraphNodeKind = "memory" | "entity" | "trajectory";
+export type GraphNodeKind = "memory" | "entity";
 
 export interface GraphNode {
 	id: string; // "<kind>:<uuid>"
@@ -32,7 +32,7 @@ export interface GraphNode {
 export interface GraphEdge {
 	source: string; // node id
 	target: string; // node id
-	kind: "memory-entity" | "memory-tag" | "entity-relationship" | "trajectory-memory";
+	kind: "memory-entity" | "memory-tag" | "entity-relationship";
 	weight?: number;
 }
 
@@ -42,7 +42,6 @@ export interface GraphSnapshot {
 	stats: {
 		memories: number;
 		entities: number;
-		trajectories: number;
 		edges: number;
 	};
 }
@@ -81,7 +80,7 @@ export class PensieveGraphService {
 
 	async snapshot(filter: GraphFilter = {}): Promise<GraphSnapshot> {
 		const runtime = this.resolveRuntime();
-		if (!runtime) return { nodes: [], edges: [], stats: { memories: 0, entities: 0, trajectories: 0, edges: 0 } };
+		if (!runtime) return { nodes: [], edges: [], stats: { memories: 0, entities: 0, edges: 0 } };
 		const a = runtime as unknown as AdapterShape;
 		const memories = (typeof a.getMemories === "function"
 			? await a.getMemories({ tableName: "memories", count: this.hardLimit })
@@ -181,7 +180,6 @@ export class PensieveGraphService {
 			stats: {
 				memories: memoriesFiltered.length,
 				entities: entityIds.size,
-				trajectories: 0,
 				edges: edges.length,
 			},
 		};

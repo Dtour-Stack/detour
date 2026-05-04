@@ -10,14 +10,14 @@
  *  1. Subscribe to `addLogListener` (best path when modules are deduped).
  *  2. Also patch the listener registry into a globalThis-keyed Set so any
  *     other module instance routes to us via `globalThis[symbol]`.
- *  3. Emit a startup probe (`logger.info("[pensieve] log capture started")`)
+ *  3. Emit a startup probe (`logger.info("[activity] log capture started")`)
  *     so we can verify the chain end-to-end at boot.
  */
 
 import { addLogListener, logger, type LogEntry } from "@elizaos/core";
 
 const DEFAULT_CAP = 5000;
-const GLOBAL_KEY = Symbol.for("detour.pensieve.logSinks");
+const GLOBAL_KEY = Symbol.for("detour.activity.logSinks");
 
 type Sink = (entry: LogEntry) => void;
 
@@ -33,7 +33,7 @@ function getGlobalRegistry(): GlobalSinkRegistry {
 	return g[GLOBAL_KEY] as GlobalSinkRegistry;
 }
 
-export interface PensieveLogEntry {
+export interface ActivityLogEntry {
 	readonly time: number;
 	readonly level: number;
 	readonly levelName: string;
@@ -57,11 +57,11 @@ function resolveLevelName(level: number | undefined): string {
 	if (level >= 20) return "debug";
 	return "trace";
 }
-function normalize(entry: LogEntry): PensieveLogEntry {
+function normalize(entry: LogEntry): ActivityLogEntry {
 	const { time, level, msg, agentName, agentId, ...rest } = entry as LogEntry & Record<string, unknown>;
 	const sourceCandidate = (rest.src ?? rest.source ?? rest.module) as string | undefined;
 	const extrasEntries = Object.entries(rest).filter(([k]) => !k.startsWith("_") && !["src", "source", "module"].includes(k));
-	const out: PensieveLogEntry = {
+	const out: ActivityLogEntry = {
 		time: typeof time === "number" ? time : Date.now(),
 		level: typeof level === "number" ? level : 30,
 		levelName: resolveLevelName(typeof level === "number" ? level : 30),
@@ -82,8 +82,8 @@ export interface ListLogsOptions {
 	since?: number;
 }
 
-export class PensieveLogService {
-	private buf: PensieveLogEntry[] = [];
+export class ActivityLogService {
+	private buf: ActivityLogEntry[] = [];
 	private offDirect: (() => void) | null = null;
 	private sink: Sink | null = null;
 
@@ -107,7 +107,7 @@ export class PensieveLogService {
 
 		// Verification probe — proves the chain end-to-end at boot.
 		try {
-			logger.info("[pensieve] log capture started");
+			logger.info("[activity] log capture started");
 		} catch {
 			// some test envs replace logger; ignore
 		}
@@ -121,18 +121,18 @@ export class PensieveLogService {
 		}
 	}
 
-	private push(e: PensieveLogEntry): void {
+	private push(e: ActivityLogEntry): void {
 		this.buf.push(e);
 		if (this.buf.length > this.capacity) {
 			this.buf.splice(0, Math.ceil(this.capacity * 0.05));
 		}
 	}
 
-	list(opts: ListLogsOptions = {}): PensieveLogEntry[] {
+	list(opts: ListLogsOptions = {}): ActivityLogEntry[] {
 		const { level, source, q, limit = 200, since } = opts;
 		const lvlMin = level ? minLevel(level) : 0;
 		const qLower = q?.toLowerCase();
-		const out: PensieveLogEntry[] = [];
+		const out: ActivityLogEntry[] = [];
 		for (let i = this.buf.length - 1; i >= 0 && out.length < limit; i--) {
 			const e = this.buf[i]!;
 			if (since && e.time < since) break;

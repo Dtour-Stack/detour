@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PensieveLogEntry } from "@detour/shared";
+import type { ActivityLogEntry } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 import { usePoller } from "./usePoller";
 
@@ -15,8 +15,8 @@ const LEVEL_COLORS: Record<string, string> = {
 export function LogsPane({ client }: { client: WebClient }) {
 	const [level, setLevel] = useState("info");
 	const [q, setQ] = useState("");
-	const fetcher = useCallback(() => client.pensieveLogs({ level, q: q || undefined, limit: 500 }), [client, level, q]);
-	const { data, error } = usePoller<PensieveLogEntry[]>(fetcher, 5000, [level, q]);
+	const fetcher = useCallback(() => client.activityLogs({ level, q: q || undefined, limit: 500 }), [client, level, q]);
+	const { data, error } = usePoller<ActivityLogEntry[]>(fetcher, 5000, [level, q]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [autoScroll, setAutoScroll] = useState(true);
 

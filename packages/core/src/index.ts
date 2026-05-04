@@ -1,3 +1,4 @@
+import { ActivityService } from "./activity";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
 import { BackendOps } from "./backend-ops";
@@ -70,10 +71,23 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const backendOps = new BackendOps(vault);
 	const pensieve = new PensieveService(runtime);
 	pensieve.start();
-	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve);
+	const activity = new ActivityService(runtime);
+	activity.start();
+	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
+
+	// Eager-build the runtime in the background so Pensieve / Activity have
+	// real data the moment the user opens those windows — instead of
+	// `available: false` until first chat. Failure (e.g. no provider configured
+	// yet) is non-fatal: getOrBuild will simply retry on the next chat send.
+	void runtime.getOrBuild()
+		.then((state) => {
+			if (state) console.log(`[core] runtime warm (provider=${state.provider})`);
+			else console.log("[core] runtime not built — no provider configured");
+		})
+		.catch((err) => console.warn("[core] eager runtime build failed:", err));
 
 	const handle: CoreHandle = {
 		port,
@@ -82,6 +96,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		auth,
 		api,
 		stop: () => {
+			activity.stop();
 			pensieve.stop();
 			api.stop();
 		},

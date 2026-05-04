@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useState } from "react";
-import type { PensieveTasksSnapshot } from "@detour/shared";
+import type { ActivityTasksSnapshot } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 import { usePoller } from "./usePoller";
 
@@ -40,20 +40,20 @@ function fmtInterval(ms?: number): string {
 export function TasksPane({ client }: { client: WebClient }) {
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const fetcher = useCallback(() => client.pensieveTasks(), [client]);
-	const { data, error, refresh } = usePoller<PensieveTasksSnapshot>(fetcher, 5000);
+	const fetcher = useCallback(() => client.activityTasks(), [client]);
+	const { data, error, refresh } = usePoller<ActivityTasksSnapshot>(fetcher, 5000);
 
 	const act = useCallback(
 		async (id: string, op: "run" | "pause" | "resume" | "delete") => {
 			setBusyId(id);
 			setActionError(null);
 			try {
-				if (op === "run") await client.pensieveRunTask(id);
-				else if (op === "pause") await client.pensievePauseTask(id);
-				else if (op === "resume") await client.pensieveResumeTask(id);
+				if (op === "run") await client.activityRunTask(id);
+				else if (op === "pause") await client.activityPauseTask(id);
+				else if (op === "resume") await client.activityResumeTask(id);
 				else if (op === "delete") {
 					if (!confirm("Delete this task? This cannot be undone.")) return;
-					await client.pensieveDeleteTask(id);
+					await client.activityDeleteTask(id);
 				}
 				refresh();
 			} catch (e) {

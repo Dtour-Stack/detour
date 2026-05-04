@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { PensieveTrajectoryListResult } from "@detour/shared";
+import type { ActivityTrajectoryListResult } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 import { usePoller } from "./usePoller";
 import { TrajectoryDetail } from "./TrajectoryDetail";
@@ -33,15 +33,15 @@ export function TrajectoriesPane({ client }: { client: WebClient }) {
 	const [status, setStatus] = useState<string>("");
 	const [exporting, setExporting] = useState(false);
 	const fetcher = useCallback(
-		() => client.pensieveTrajectories({ limit: 100, ...(status ? { status } : {}) }),
+		() => client.activityTrajectories({ limit: 100, ...(status ? { status } : {}) }),
 		[client, status],
 	);
-	const { data, error } = usePoller<PensieveTrajectoryListResult>(fetcher, 5000, [status]);
+	const { data, error } = usePoller<ActivityTrajectoryListResult>(fetcher, 5000, [status]);
 
 	const handleExportAll = useCallback(async () => {
 		setExporting(true);
 		try {
-			const payload = await client.pensieveExportTrajectories();
+			const payload = await client.activityExportTrajectories();
 			downloadJson(`detour-trajectories-${Date.now()}.json`, payload);
 		} catch (e) {
 			console.error("export failed", e);
