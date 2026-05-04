@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta, dev]
   pull_request:
-    branches: [main]
+    branches: [main, beta]
 
 # Cancel in-flight runs when a new commit lands on the same branch — no point
 # spending CI minutes on a superseded SHA.
@@ -82,12 +82,11 @@ jobs:
 
       - name: Test ${{ matrix.package }}
         working-directory: packages/${{ matrix.package }}
-        # Bun's test runner discovers *.test.ts under cwd. Per-package isolation
-        # avoids the cross-package state collisions (shared module state, env)
-        # that show up when running everything in one process.
+        # Per-package isolation avoids cross-package state collisions (shared
+        # module state, env) that show up when running everything in one process.
         run: bun test
 
-  build-icons:
+  verify-assets:
     name: Verify icon + asset pipeline
     runs-on: macos-14
     timeout-minutes: 5
