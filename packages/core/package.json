@@ -1,0 +1,25 @@
+{
+	"name": "@detour/core",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./api": "./src/api/schema.ts"
+	},
+	"dependencies": {
+		"@detour/shared": "workspace:*",
+		"@elizaos/agent": "workspace:*",
+		"@elizaos/core": "workspace:*",
+		"@elizaos/plugin-anthropic": "workspace:*",
+		"@elizaos/plugin-openai": "workspace:*",
+		"@elizaos/plugin-sql": "workspace:*",
+		"@elizaos/vault": "workspace:*",
+		"uuid": "^11.0.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.0"
+	}
+}

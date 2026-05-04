@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Bootstrap: init submodules + install workspace deps.
+# Bun resolves workspace globs before running preinstall hooks, so
+# elizaOS must be on disk before `bun install` runs.
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [ -f .gitmodules ]; then
+	echo "→ initializing git submodules…"
+	git submodule update --init --recursive
+fi
+
+echo "→ installing workspace dependencies…"
+bun install
+
+echo "→ building vendored elizaOS packages…"
+bun run build:eliza
+
+echo "✓ done. Run \`bun run dev\` to start the tray app."

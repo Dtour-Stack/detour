@@ -1,0 +1,290 @@
+:root {
+	color-scheme: light dark;
+	--bg: #ffffff;
+	--bg-elevated: #f5f5f7;
+	--fg: #1d1d1f;
+	--fg-muted: #6e6e73;
+	--accent: #0a84ff;
+	--border: rgba(0, 0, 0, 0.08);
+	--bubble-user: #0a84ff;
+	--bubble-user-fg: #ffffff;
+	--bubble-asst: #f0f0f3;
+	--bubble-asst-fg: #1d1d1f;
+	--error: #ff3b30;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #1c1c1e;
+		--bg-elevated: #2c2c2e;
+		--fg: #f5f5f7;
+		--fg-muted: #98989d;
+		--border: rgba(255, 255, 255, 0.1);
+		--bubble-asst: #2c2c2e;
+		--bubble-asst-fg: #f5f5f7;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	height: 100vh;
+	overflow: hidden;
+	font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+		sans-serif;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--bg);
+}
+
+#root {
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+}
+
+.titlebar {
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 10px;
+	border-bottom: 1px solid var(--border);
+	background: var(--bg-elevated);
+	flex-shrink: 0;
+	cursor: grab;
+}
+
+.titlebar:active {
+	cursor: grabbing;
+}
+
+.titlebar h1 {
+	font-size: 12px;
+	font-weight: 600;
+	margin: 0;
+	color: var(--fg-muted);
+}
+
+.titlebar-actions {
+	display: flex;
+	gap: 4px;
+}
+
+.icon-btn {
+	background: transparent;
+	border: none;
+	color: var(--fg-muted);
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 4px;
+	font-size: 11px;
+}
+
+.icon-btn:hover {
+	background: var(--border);
+	color: var(--fg);
+}
+
+.icon-btn.active {
+	color: var(--accent);
+}
+
+/* ---- chat ---- */
+
+.chat {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.bubbles {
+	flex: 1;
+	overflow-y: auto;
+	padding: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.bubble {
+	max-width: 85%;
+	padding: 8px 12px;
+	border-radius: 14px;
+	white-space: pre-wrap;
+	word-wrap: break-word;
+	line-height: 1.4;
+}
+
+.bubble.user {
+	align-self: flex-end;
+	background: var(--bubble-user);
+	color: var(--bubble-user-fg);
+	border-bottom-right-radius: 4px;
+}
+
+.bubble.assistant {
+	align-self: flex-start;
+	background: var(--bubble-asst);
+	color: var(--bubble-asst-fg);
+	border-bottom-left-radius: 4px;
+}
+
+.bubble.error {
+	align-self: stretch;
+	background: rgba(255, 59, 48, 0.1);
+	color: var(--error);
+	font-size: 12px;
+}
+
+.bubble.thinking {
+	color: var(--fg-muted);
+	font-style: italic;
+}
+
+.bubble.thinking::after {
+	content: "▋";
+	animation: blink 1s steps(1) infinite;
+	margin-left: 2px;
+}
+
+@keyframes blink {
+	50% { opacity: 0; }
+}
+
+.composer {
+	border-top: 1px solid var(--border);
+	padding: 8px;
+	background: var(--bg-elevated);
+	flex-shrink: 0;
+}
+
+.composer textarea {
+	width: 100%;
+	min-height: 36px;
+	max-height: 120px;
+	resize: none;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+	font: inherit;
+	background: var(--bg);
+	color: var(--fg);
+	outline: none;
+}
+
+.composer textarea:focus {
+	border-color: var(--accent);
+}
+
+/* ---- settings ---- */
+
+.settings {
+	flex: 1;
+	overflow-y: auto;
+	padding: 16px;
+}
+
+.settings h2 {
+	font-size: 14px;
+	margin: 0 0 12px;
+}
+
+.settings .hint {
+	color: var(--fg-muted);
+	font-size: 12px;
+	margin-bottom: 16px;
+	line-height: 1.4;
+}
+
+.provider {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 12px;
+	margin-bottom: 10px;
+	background: var(--bg-elevated);
+}
+
+.provider-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+
+.provider-name {
+	font-weight: 600;
+}
+
+.badge {
+	font-size: 10px;
+	padding: 2px 6px;
+	border-radius: 8px;
+	background: var(--accent);
+	color: white;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.badge.muted {
+	background: var(--border);
+	color: var(--fg-muted);
+}
+
+.provider-row {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+}
+
+.provider input[type="password"],
+.provider input[type="text"] {
+	flex: 1;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 6px 8px;
+	font: inherit;
+	background: var(--bg);
+	color: var(--fg);
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 11px;
+	outline: none;
+}
+
+.provider input:focus {
+	border-color: var(--accent);
+}
+
+.btn {
+	background: var(--accent);
+	color: white;
+	border: none;
+	border-radius: 6px;
+	padding: 6px 12px;
+	font: inherit;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.btn.secondary {
+	background: var(--border);
+	color: var(--fg);
+}
+
+.btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.empty-state {
+	text-align: center;
+	color: var(--fg-muted);
+	padding: 32px 16px;
+	font-size: 12px;
+}
