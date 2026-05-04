@@ -17,19 +17,10 @@ export default {
 		bun: {
 			entrypoint: "src/bun/index.ts",
 		},
-		views: {
-			chat: {
-				entrypoint: "src/features/chat/view/index.ts",
-			},
-			settings: {
-				entrypoint: "src/features/settings/view/index.ts",
-			},
-		},
+		// No bundled view entrypoints — the chat window loads the React app
+		// from the Vite dev server (or built /web/dist in production).
+		views: {},
 		copy: {
-			"src/features/chat/view/index.html": "views/chat/index.html",
-			"src/features/chat/view/index.css": "views/chat/index.css",
-			"src/features/settings/view/index.html": "views/settings/index.html",
-			"src/features/settings/view/index.css": "views/settings/index.css",
 			// Tray icons (template PNGs). Electrobun's Tray API resolves the
 			// `image` path against the views folder when prefixed with views://,
 			// so place them at Resources/app/views/icons/ and reference as
