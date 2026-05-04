@@ -87,6 +87,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: Build eliza submodule packages
+        # Tests import from `@elizaos/core` etc. — Bun runs source TS but the
+        # vendored eliza packages have generated files (i18n keyword data)
+        # that aren't checked in, plus their own dist/ entries some imports
+        # resolve through. Build them first.
+        run: bun run build:eliza
+
       - name: Test ${{ matrix.package }}
         working-directory: packages/${{ matrix.package }}
         # Per-package isolation avoids cross-package state collisions (shared
