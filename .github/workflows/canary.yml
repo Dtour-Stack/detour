@@ -59,6 +59,11 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: Build eliza submodule packages
+        # Electrobun's bundler can't resolve `@elizaos/*` until the vendored
+        # eliza packages have built dist/ + their proto-generated files.
+        run: bun run build:eliza
+
       - name: Build canary app
         working-directory: packages/tray
         run: bun run build:canary
