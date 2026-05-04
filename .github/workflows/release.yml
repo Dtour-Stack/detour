@@ -145,7 +145,20 @@ jobs:
             --wait
           xcrun stapler staple "$APP"
 
-      - name: Locate + package artifacts
+      - name: Ad-hoc sign (skip if Apple Developer signing already happened above)
+        if: needs.classify.outputs.channel != 'stable' || env.APPLE_CERT_BASE64 == ''
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+        working-directory: packages/tray
+        run: |
+          ENV=${{ needs.classify.outputs.env }}
+          APP=$(find build/${ENV}-macos-arm64 -maxdepth 2 -name "*.app" -type d | head -1)
+          # Ad-hoc sign so the bundle is internally consistent. Doesn't bypass
+          # Gatekeeper — users still need to de-quarantine — but prevents
+          # App-Translocation oddness on macOS 14+.
+          codesign --force --deep --sign - "$APP"
+
+      - name: Package artifacts
         working-directory: packages/tray
         run: |
           ENV=${{ needs.classify.outputs.env }}
@@ -168,6 +181,32 @@ jobs:
             Detour-*-${{ needs.classify.outputs.channel }}.dmg
           retention-days: 90
 
+      - name: Compose release body
+        id: body
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          cat > release-body.md <<EOF
+          ## Install
+
+          One-liner (handles download + de-quarantine + install to /Applications):
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/Dexploarer/detour/main/scripts/install.sh | bash -s -- ${VERSION}
+          \`\`\`
+
+          Or manually:
+
+          1. Download \`Detour-${VERSION}-${{ needs.classify.outputs.channel }}.zip\`, unzip, drag \`Detour.app\` into \`/Applications/\`.
+          2. Strip the macOS quarantine flag (the build is unsigned by Apple Developer ID — free OSS):
+             \`\`\`sh
+             xattr -dr com.apple.quarantine /Applications/Detour.app
+             \`\`\`
+          3. Open. macOS won't ask again after the first launch.
+
+          ---
+          EOF
+
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -175,6 +214,8 @@ jobs:
           name: ${{ needs.classify.outputs.channel == 'stable' && format('Detour {0}', needs.classify.outputs.version) || format('Detour {0} ({1})', needs.classify.outputs.version, needs.classify.outputs.channel) }}
           prerelease: ${{ needs.classify.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.classify.outputs.channel == 'stable' }}
+          body_path: release-body.md
+          append_body: true
           generate_release_notes: true
           files: |
             Detour-*-${{ needs.classify.outputs.channel }}.zip

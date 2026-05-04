@@ -68,25 +68,21 @@ jobs:
         working-directory: packages/tray
         run: bun run build:canary
 
-      - name: Locate build artifacts
+      - name: Ad-hoc sign + package artifacts
         working-directory: packages/tray
         run: |
           BUILD_DIR="build/canary-macos-arm64"
-          if [ ! -d "$BUILD_DIR" ]; then
-            echo "::error::Expected ${BUILD_DIR} not found. Listing build/:"
-            ls -la build/ || true
-            exit 1
-          fi
           APP=$(find "$BUILD_DIR" -maxdepth 2 -name "*.app" -type d | head -1)
           if [ -z "$APP" ]; then
-            echo "::error::No .app bundle in ${BUILD_DIR}"
-            exit 1
+            echo "::error::No .app bundle in ${BUILD_DIR}"; ls -la build/ || true; exit 1
           fi
+          # Ad-hoc sign (`-` identity) — free, doesn't bypass Gatekeeper but
+          # makes the bundle internally consistent so de-quarantined installs
+          # don't get translocation false-positives on macOS 14+.
+          codesign --force --deep --sign - "$APP"
           ditto -c -k --keepParent "$APP" "../../Detour-canary.zip"
           DMG=$(find "$BUILD_DIR" -maxdepth 2 -name "*.dmg" -type f | head -1)
-          if [ -n "$DMG" ]; then
-            cp "$DMG" "../../Detour-canary.dmg"
-          fi
+          if [ -n "$DMG" ]; then cp "$DMG" "../../Detour-canary.dmg"; fi
 
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v4
@@ -108,8 +104,22 @@ jobs:
             Built: ${{ github.event.head_commit.timestamp }}
             Commit: ${{ github.event.head_commit.message }}
 
-            ⚠️  **Unstable.** No code-signing on canary builds; macOS Gatekeeper will require
-            right-click → Open the first time, or `xattr -d com.apple.quarantine /Applications/Detour.app`.
+            ## Install
+
+            One-liner (handles download + de-quarantine + install to /Applications):
+
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/Dexploarer/detour/main/scripts/install.sh | bash
+            ```
+
+            Or manually:
+
+            1. Download `Detour-canary.zip`, unzip, drag `Detour.app` into `/Applications/`.
+            2. Strip the macOS quarantine flag (required since the build isn't notarized):
+               ```sh
+               xattr -dr com.apple.quarantine /Applications/Detour.app
+               ```
+            3. Open. ⚠️  **Unstable** — canary tracks `main` and may break.
           prerelease: true
           make_latest: false
           files: |
