@@ -3,12 +3,14 @@ import type { WebClient } from "../../api/client";
 import { TrajectoriesPane } from "./TrajectoriesPane";
 import { LogsPane } from "./LogsPane";
 import { RuntimePane } from "./RuntimePane";
+import { TasksPane } from "./TasksPane";
 
-type Tab = "trajectories" | "logs" | "runtime";
+type Tab = "trajectories" | "logs" | "runtime" | "tasks";
 
 const TABS: { id: Tab; label: string }[] = [
 	{ id: "trajectories", label: "Trajectories" },
 	{ id: "logs", label: "Logs" },
+	{ id: "tasks", label: "Tasks" },
 	{ id: "runtime", label: "Runtime" },
 ];
 
@@ -31,6 +33,7 @@ export function ActivityPane({ client }: { client: WebClient }) {
 			<div className="pensieve-pane-body">
 				{tab === "trajectories" && <TrajectoriesPane client={client} />}
 				{tab === "logs" && <LogsPane client={client} />}
+				{tab === "tasks" && <TasksPane client={client} />}
 				{tab === "runtime" && <RuntimePane client={client} />}
 			</div>
 		</div>

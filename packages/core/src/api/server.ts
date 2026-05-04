@@ -484,6 +484,18 @@ export class ApiServer {
 					if (req.method === "GET" && trajGet) {
 						return json(await this.pensieve.trajectories.get(decodeURIComponent(trajGet[1] ?? "")));
 					}
+					if (req.method === "POST" && path === "/api/pensieve/trajectories/export") {
+						const body = (await req.json().catch(() => ({}))) as { ids?: string[] };
+						const ids = Array.isArray(body.ids) && body.ids.length > 0
+							? body.ids
+							: ((await this.pensieve.trajectories.list({ limit: 500 })).trajectories.map((t) => t.id));
+						const details = await this.pensieve.trajectories.getMany(ids);
+						return json({
+							exportedAt: Date.now(),
+							count: details.length,
+							trajectories: details,
+						});
+					}
 					if (req.method === "GET" && path === "/api/pensieve/memories") {
 						const opts: Record<string, unknown> = {
 							limit: Number(url.searchParams.get("limit") ?? 100),
@@ -623,6 +635,54 @@ export class ApiServer {
 						});
 						return success ? ok() : error(errMsg ?? "delete failed", 400);
 					}
+					// --- Pensieve tasks (heartbeat / cron / autonomous) ---
+					if (req.method === "GET" && path === "/api/pensieve/tasks") {
+						return json(await this.pensieve.tasks.snapshot());
+					}
+					const taskAction = path.match(/^\/api\/pensieve\/tasks\/([^/]+)\/(run|pause|resume)$/);
+					if (req.method === "POST" && taskAction) {
+						const id = decodeURIComponent(taskAction[1] ?? "");
+						const action = taskAction[2] ?? "";
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							if (action === "run") success = await this.pensieve.tasks.runNow(id);
+							else if (action === "pause") success = await this.pensieve.tasks.pause(id, true);
+							else if (action === "resume") success = await this.pensieve.tasks.pause(id, false);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: `task.${action}` as "task.run" | "task.pause" | "task.resume",
+							target: id,
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? `${action} failed`, 400);
+					}
+					const taskDelete = path.match(/^\/api\/pensieve\/tasks\/([^/]+)$/);
+					if (req.method === "DELETE" && taskDelete) {
+						const id = decodeURIComponent(taskDelete[1] ?? "");
+						let success = false;
+						let errMsg: string | undefined;
+						try {
+							success = await this.pensieve.tasks.remove(id);
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "task.delete",
+							target: id,
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success ? ok() : error(errMsg ?? "delete failed", 400);
+					}
+
 					if (req.method === "GET" && path === "/api/pensieve/graph") {
 						const filter: Record<string, unknown> = {};
 						const dateFrom = url.searchParams.get("dateFrom");

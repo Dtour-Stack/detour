@@ -19,7 +19,11 @@ export type PensieveAuditAction =
 	| "relationship.update"
 	| "relationship.delete"
 	| "relationship.merge"
-	| "entity.update";
+	| "entity.update"
+	| "task.run"
+	| "task.pause"
+	| "task.resume"
+	| "task.delete";
 
 export interface PensieveAuditEvent {
 	readonly action: PensieveAuditAction;

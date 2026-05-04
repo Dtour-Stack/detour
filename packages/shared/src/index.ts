@@ -178,6 +178,116 @@ export type PensieveTrajectoryListResult = {
 	offset: number;
 };
 
+export type PensieveLlmCall = {
+	callId: string;
+	stepNumber: number;
+	timestamp: number;
+	model: string;
+	systemPrompt?: string;
+	userPrompt?: string;
+	response?: string;
+	reasoning?: string;
+	temperature?: number;
+	maxTokens?: number;
+	promptTokens?: number;
+	completionTokens?: number;
+	latencyMs?: number;
+	purpose?: string;
+	stepType?: string;
+	actionType?: string;
+	tags?: string[];
+};
+
+export type PensieveProviderAccess = {
+	providerId: string;
+	providerName: string;
+	stepNumber: number;
+	timestamp: number;
+	purpose?: string;
+	query?: unknown;
+	data?: unknown;
+};
+
+export type PensieveActionAttempt = {
+	attemptId: string;
+	stepNumber: number;
+	timestamp: number;
+	actionType?: string;
+	actionName?: string;
+	parameters?: unknown;
+	reasoning?: string;
+	success?: boolean;
+	result?: unknown;
+	error?: string;
+	immediateReward?: number;
+};
+
+export type PensieveTrajectoryDetail = {
+	trajectory: PensieveTrajectoryListItem | null;
+	totals: {
+		stepCount: number;
+		llmCallCount: number;
+		providerAccessCount: number;
+		actionCount: number;
+		totalPromptTokens: number;
+		totalCompletionTokens: number;
+	};
+	llmCalls: PensieveLlmCall[];
+	providerAccesses: PensieveProviderAccess[];
+	actions: PensieveActionAttempt[];
+	metadata: Record<string, unknown> | null;
+	rewardComponents: Record<string, unknown> | null;
+	metrics: Record<string, unknown> | null;
+	raw: Record<string, unknown> | null;
+};
+
+export type PensieveTrajectoryExport = {
+	exportedAt: number;
+	count: number;
+	trajectories: PensieveTrajectoryDetail[];
+};
+
+export type PensieveTaskWorker = {
+	name: string;
+	hasShouldRun: boolean;
+	hasCanExecute: boolean;
+};
+
+export type PensieveTaskRecord = {
+	id: string;
+	name: string;
+	description?: string;
+	tags: string[];
+	roomId?: string;
+	worldId?: string;
+	entityId?: string;
+	createdAt?: number;
+	updatedAt?: number;
+	dueAt?: number;
+	updateInterval?: number;
+	nextRunAt?: number;
+	lastExecuted?: number;
+	lastError?: string;
+	failureCount: number;
+	maxFailures?: number;
+	paused: boolean;
+	hasWorker: boolean;
+	metadata: Record<string, unknown>;
+};
+
+export type PensieveTasksSnapshot = {
+	available: boolean;
+	workers: PensieveTaskWorker[];
+	tasks: PensieveTaskRecord[];
+	totals: {
+		workerCount: number;
+		taskCount: number;
+		recurringCount: number;
+		pausedCount: number;
+		failingCount: number;
+	};
+};
+
 export type PensieveMemorySummary = {
 	id: string;
 	type?: string;

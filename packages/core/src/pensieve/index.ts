@@ -13,6 +13,7 @@ import { PensieveMemoryService } from "./memory-service";
 import { PensieveRelationshipService } from "./relationship-service";
 import { PensieveTrajectoryService } from "./trajectory-service";
 import { PensieveGraphService } from "./graph-service";
+import { PensieveTasksService } from "./tasks-service";
 import { snapshotRuntime, type PensieveRuntimeSnapshot } from "./runtime-introspect";
 
 export class PensieveService {
@@ -21,6 +22,7 @@ export class PensieveService {
 	readonly relationships: PensieveRelationshipService;
 	readonly trajectories: PensieveTrajectoryService;
 	readonly graph: PensieveGraphService;
+	readonly tasks: PensieveTasksService;
 
 	constructor(private readonly runtimeService: RuntimeService) {
 		const resolve = (): IAgentRuntime | null => {
@@ -32,6 +34,7 @@ export class PensieveService {
 		this.relationships = new PensieveRelationshipService(resolve);
 		this.trajectories = new PensieveTrajectoryService(resolve);
 		this.graph = new PensieveGraphService(resolve);
+		this.tasks = new PensieveTasksService(resolve);
 	}
 
 	start(): void {
@@ -59,7 +62,15 @@ export type {
 	PensieveTrajectoryListResult,
 	PensieveTrajectoryDetail,
 	PensieveTrajectoryListOptions,
+	PensieveLlmCall,
+	PensieveProviderAccess,
+	PensieveActionAttempt,
 } from "./trajectory-service";
+export type {
+	PensieveTaskWorker,
+	PensieveTaskRecord,
+	PensieveTasksSnapshot,
+} from "./tasks-service";
 export type { GraphNode, GraphEdge, GraphSnapshot, GraphFilter, BacklinksResult } from "./graph-service";
 export type { PensieveRuntimeSnapshot, RuntimeRegistryItem } from "./runtime-introspect";
 export { pensieveAudit, type PensieveAuditEvent, type PensieveAuditAction } from "./audit";

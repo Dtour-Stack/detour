@@ -13,6 +13,9 @@ import type {
 	PensievePersonDetail,
 	PensieveRelationshipSummary,
 	PensieveRuntimeSnapshot,
+	PensieveTasksSnapshot,
+	PensieveTrajectoryDetail,
+	PensieveTrajectoryExport,
 	PensieveTrajectoryListResult,
 	ProviderId,
 	ProviderInfo,
@@ -216,8 +219,26 @@ export class WebClient {
 		const s = qs.toString();
 		return this.json("GET", `/api/pensieve/trajectories${s ? `?${s}` : ""}`);
 	}
-	pensieveTrajectory(id: string): Promise<{ trajectory: Record<string, unknown> | null }> {
+	pensieveTrajectory(id: string): Promise<PensieveTrajectoryDetail> {
 		return this.json("GET", `/api/pensieve/trajectories/${encodeURIComponent(id)}`);
+	}
+	pensieveExportTrajectories(ids?: string[]): Promise<PensieveTrajectoryExport> {
+		return this.json("POST", "/api/pensieve/trajectories/export", ids?.length ? { ids } : {});
+	}
+	pensieveTasks(): Promise<PensieveTasksSnapshot> {
+		return this.json("GET", "/api/pensieve/tasks");
+	}
+	async pensieveRunTask(id: string): Promise<void> {
+		await this.json("POST", `/api/pensieve/tasks/${encodeURIComponent(id)}/run`);
+	}
+	async pensievePauseTask(id: string): Promise<void> {
+		await this.json("POST", `/api/pensieve/tasks/${encodeURIComponent(id)}/pause`);
+	}
+	async pensieveResumeTask(id: string): Promise<void> {
+		await this.json("POST", `/api/pensieve/tasks/${encodeURIComponent(id)}/resume`);
+	}
+	async pensieveDeleteTask(id: string): Promise<void> {
+		await this.json("DELETE", `/api/pensieve/tasks/${encodeURIComponent(id)}`);
 	}
 	pensieveMemories(params: { limit?: number; type?: string; roomId?: string; entityId?: string; tag?: string; q?: string } = {}): Promise<PensieveMemorySummary[]> {
 		const qs = new URLSearchParams();
