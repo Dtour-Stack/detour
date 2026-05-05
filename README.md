@@ -2,16 +2,15 @@
 
 A macOS menu-bar app that wraps an [elizaOS](https://github.com/elizaOS/eliza) AgentRuntime. Chat with the agent in a popup, watch it think, browse what it remembers, hook it up to Discord / Telegram / iMessage, and run a local embedding server — all from the tray.
 
-> **This project is opinionated and personal.** Detour is the way **I** choose to run an eliza stack on my own machine. It will evolve as my taste evolves: features land when I want them, get cut when I don't. It is not, and is not trying to be, a comprehensive eliza distribution.
+> ### Where Detour fits
 >
-> **Detour is the playground.** It's where my eliza experiments show up — the place I cash in on random intrusive thoughts I have about agents ("what if the inbox prompted the agent through the real reply pipeline?", "what if I bundled llama.cpp for free local embeddings?", "what if the tray icon told me whether the agent was alive?"). So **expect it to break often.** That's the whole point. lol.
+> The thing I actually care about, and where my real work goes, is **[elizaOS/eliza](https://github.com/elizaOS/eliza)** — the agent framework upstream. Detour is downstream of it. If you want to understand the agent runtime, the plugin protocol, or build your own version of any of this, **start there.**
 >
-> If you want a complete representation of what eliza can do, use one of these instead:
+> The polished consumer-facing app built on eliza is **[Milady](https://github.com/milady-ai/milady)** — desktop + mobile, larger plugin surface, broader skills, the experience the team actually ships to users. **If you want a complete, supported representation of what eliza can do, use Milady.**
 >
-> - **[Milady](https://github.com/milady-ai/milady)** — the upstream agent app this work is downstream of. Larger surface, more skills, mobile + desktop, the full vendor experience.
-> - **[elizaOS/eliza](https://github.com/elizaOS/eliza)** — the framework itself. Build your own agent, your own UI, your own opinions.
+> **Detour is a developer's experimental playground.** It is the way **I** choose to run an eliza stack on my own machine — a tray-app sandbox where I cash in on random intrusive thoughts I have about agents ("what if the inbox prompted the agent through the real reply pipeline?", "what if I bundled llama.cpp for free local embeddings?", "what if the tray icon told me whether the agent was alive?"). Things land when I want them, get ripped out when I don't.
 >
-> Detour is here because I wanted a small, fast tray app that fits the way I work *today*. You may, too. If not — see above.
+> So **expect it to break often.** That's the whole point of having a sandbox separate from eliza and Milady. If you want stability, use Milady. If you want to study the framework, use eliza. Detour is the place to watch me poke at it.
 
 ---
 
