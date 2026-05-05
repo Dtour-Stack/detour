@@ -4,12 +4,14 @@ A macOS menu-bar app that wraps an [elizaOS](https://github.com/elizaOS/eliza) A
 
 > **This project is opinionated and personal.** Detour is the way **I** choose to run an eliza stack on my own machine. It will evolve as my taste evolves: features land when I want them, get cut when I don't. It is not, and is not trying to be, a comprehensive eliza distribution.
 >
+> **Detour is the playground.** It's where my eliza experiments show up — the place I cash in on random intrusive thoughts I have about agents ("what if the inbox prompted the agent through the real reply pipeline?", "what if I bundled llama.cpp for free local embeddings?", "what if the tray icon told me whether the agent was alive?"). So **expect it to break often.** That's the whole point. lol.
+>
 > If you want a complete representation of what eliza can do, use one of these instead:
 >
 > - **[Milady](https://github.com/milady-ai/milady)** — the upstream agent app this work is downstream of. Larger surface, more skills, mobile + desktop, the full vendor experience.
 > - **[elizaOS/eliza](https://github.com/elizaOS/eliza)** — the framework itself. Build your own agent, your own UI, your own opinions.
 >
-> Detour is here because I wanted a small, fast tray app that fits the way I work. You may, too. If not — see above.
+> Detour is here because I wanted a small, fast tray app that fits the way I work *today*. You may, too. If not — see above.
 
 ---
 
