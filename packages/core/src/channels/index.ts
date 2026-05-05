@@ -171,7 +171,7 @@ export interface ChannelDefinition {
  */
 async function loadDiscord(): Promise<Plugin | null> {
 	try {
-		// @ts-expect-error eliza dynamic plugin — types unavailable when dist isn't built
+		// @ts-ignore eliza dynamic plugin — types unavailable when dist isn't built
 		const mod = await import("@elizaos/plugin-discord");
 		return pickPlugin(mod, "discord");
 	} catch (err) {
@@ -181,7 +181,7 @@ async function loadDiscord(): Promise<Plugin | null> {
 }
 async function loadTelegram(): Promise<Plugin | null> {
 	try {
-		// @ts-expect-error eliza dynamic plugin — types unavailable when dist isn't built
+		// @ts-ignore eliza dynamic plugin — types unavailable when dist isn't built
 		const mod = await import("@elizaos/plugin-telegram");
 		return pickPlugin(mod, "telegram");
 	} catch (err) {
@@ -192,7 +192,7 @@ async function loadTelegram(): Promise<Plugin | null> {
 async function loadImessage(): Promise<Plugin | null> {
 	if (process.platform !== "darwin") return null;
 	try {
-		// @ts-expect-error eliza dynamic plugin — types unavailable when dist isn't built
+		// @ts-ignore eliza dynamic plugin — types unavailable when dist isn't built
 		const mod = await import("@elizaos/plugin-imessage");
 		return pickPlugin(mod, "imessage");
 	} catch (err) {
