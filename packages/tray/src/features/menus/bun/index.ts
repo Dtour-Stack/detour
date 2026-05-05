@@ -53,6 +53,12 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
+				label: "Channels",
+				submenu: [
+					{ label: "Open Channels", action: "channels:open", accelerator: "CommandOrControl+Shift+C" },
+				],
+			},
+			{
 				label: "Window",
 				submenu: [
 					{ role: "minimize" },
@@ -78,6 +84,9 @@ export const menusFeature: Feature = {
 					break;
 				case "activity:open":
 					deps.events.emit("ui:open-activity", {});
+					break;
+				case "channels:open":
+					deps.events.emit("ui:open-channels", {});
 					break;
 			}
 		});

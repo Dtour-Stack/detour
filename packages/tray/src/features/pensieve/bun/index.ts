@@ -3,7 +3,7 @@ import type { WindowHandle } from "../../../bun/kernel/windows";
 
 const DEFAULT_WIDTH = 1200;
 const DEFAULT_HEIGHT = 800;
-const VITE_URL = process.env.DETOUR_DEV_URL ?? "http://localhost:5181";
+import { resolveViewUrl } from "../../../bun/kernel/view-url";
 
 /**
  * Pensieve = activity / memories / relationships / graph browser.
@@ -35,7 +35,7 @@ export const pensieveFeature: Feature = {
 				width: DEFAULT_WIDTH,
 				height: DEFAULT_HEIGHT,
 				centered: true,
-				url: `${VITE_URL}/#pensieve`,
+				url: resolveViewUrl("pensieve"),
 				rpc: {
 					maxRequestTime: 60_000,
 					handlers: { requests: {}, messages: {} },

@@ -20,7 +20,6 @@ import {
 	type ImageDescriptionParams,
 	type ObjectGenerationParams,
 	type Plugin,
-	type TextEmbeddingParams,
 } from "@elizaos/core";
 import {
 	CodexResponsesClient,
@@ -92,7 +91,10 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 		// required". Fall back to a minimal default so the call succeeds even
 		// when the caller (and the prompt's system message) didn't provide one.
 		instructions: instructions ?? "You are a helpful assistant.",
-		...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+		// Codex Responses API rejects `temperature` with HTTP 400 ("Unsupported
+		// parameter: temperature"). Eliza's reflection/fact-extractor evaluators
+		// pass temperature in their generateText params; we silently drop it
+		// here so those follow-up calls don't fail and crash the trajectory.
 		...(params.maxTokens !== undefined ? { max_output_tokens: params.maxTokens } : {}),
 	};
 
@@ -236,19 +238,11 @@ export const codexChatGptPlugin: Plugin = {
 			}
 		},
 
-		// Embeddings — Codex/ChatGPT subscription does NOT expose embeddings
-		// through this endpoint. Return zero vector so the runtime doesn't
-		// blow up; consumers needing real embeddings should configure a
-		// dedicated provider (plugin-openai with API key, local Llama).
-		[ModelType.TEXT_EMBEDDING]: async (
-			_runtime: IAgentRuntime,
-			_params: TextEmbeddingParams | string | null,
-		): Promise<number[]> => {
-			logger.warn(
-				"[codex-chatgpt] TEXT_EMBEDDING called but ChatGPT subscription doesn't expose embeddings — returning zero vector. Configure a real embeddings provider for memory/RAG.",
-			);
-			return new Array(1536).fill(0);
-		},
+		// Embeddings: ChatGPT subscription doesn't expose embeddings, so we
+		// don't register a TEXT_EMBEDDING handler here. The runtime falls
+		// through to whichever plugin owns embeddings (embedding-stub or a
+		// real provider). Registering a handler here would mask better
+		// providers since we'd just return zeros.
 	},
 };
 

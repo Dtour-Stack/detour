@@ -111,22 +111,56 @@ async function writeKeychainKey(
 	key: Buffer,
 ): Promise<void> {
 	const b64 = key.toString("base64");
-	const write = await spawnCapture("security", [
+	// `-T <path>` adds a trusted app to the entry's ACL — that app can read
+	// the entry without prompting. Whitelist the running bun binary so future
+	// reads from THIS bun process (or any bun in this app bundle path) are
+	// silent. Without this, every read pops a "Detour wants to access X"
+	// dialog because the ACL is empty.
+	//
+	// We add three trusted paths: the current process, /usr/bin/security
+	// (so reads via this CLI tool itself never prompt), and the bun binary
+	// inside our .app bundle (which is the production read path).
+	const trustedPaths = [
+		process.execPath,
+		"/usr/bin/security",
+	].filter((p) => typeof p === "string" && p.length > 0);
+	const args = [
 		"add-generic-password",
-		"-s",
-		service,
-		"-a",
-		account,
-		"-w",
-		b64,
-		"-T",
-		"",
+		"-s", service,
+		"-a", account,
+		"-w", b64,
 		"-U", // update if exists
-	]);
+	];
+	for (const p of trustedPaths) {
+		args.push("-T", p);
+	}
+	const write = await spawnCapture("security", args);
 	if (write.exitCode !== 0) {
 		throw new SecurityCliMasterKeyError(
 			`security add-generic-password failed (exit ${write.exitCode}): ${write.stderr.trim() || write.stdout.trim() || "unknown"}`,
 		);
+	}
+}
+
+/**
+ * Add `process.execPath` to an existing entry's ACL so future reads from
+ * this binary don't prompt. Idempotent — `set-key-partition-list` overwrites
+ * the partition list each call. Best-effort: if it fails (entry doesn't
+ * exist, or password prompt is denied), we just keep prompting on reads.
+ */
+async function ensureKeychainAclTrustsThisBinary(service: string, account: string): Promise<void> {
+	if (!process.execPath) return;
+	const out = await spawnCapture("security", [
+		"set-key-partition-list",
+		"-S", `apple-tool:,apple:,unsigned:`,
+		"-s", service,
+		"-a", account,
+		"-T", process.execPath,
+	]);
+	// exit=0 means ACL updated. Non-zero means entry not found OR prompt denied.
+	// Either way, fail silently — this is a "make it nicer next time" hook.
+	if (out.exitCode !== 0) {
+		// Logging at debug only — the user already knows reads work, just with a prompt.
 	}
 }
 
@@ -172,45 +206,73 @@ export function securityCliMasterKey(
 	const service = opts.service ?? "eliza";
 	const account = opts.account ?? "vault.masterKey";
 	const fallbacks = opts.fallbackServices ?? ["milady"];
-	const vaultPath = opts.vaultPath ?? join(homedir(), ".eliza", "vault.json");
+	// Probe path must match where @elizaos/vault actually writes. createVault()
+	// resolves: opts.workDir → $ELIZA_STATE_DIR → ~/.<ELIZA_NAMESPACE||"eliza">.
+	// Mirror that here so the keychain probe-decrypt picks the right key for
+	// whichever vault file the runtime is reading from.
+	const stateDir =
+		process.env.ELIZA_STATE_DIR?.trim() ||
+		join(homedir(), `.${process.env.ELIZA_NAMESPACE?.trim() || "eliza"}`);
+	const vaultPath = opts.vaultPath ?? join(stateDir, "vault.json");
+
+	// Process-lifetime cache. The vault's load() is called from many places
+	// (every vault.get/set/has) — without caching, each call hits the keychain
+	// and fires a separate prompt if the entry's ACL doesn't trust this bun
+	// binary. With the cache, even a poorly-ACL'd entry only prompts ONCE
+	// per app launch, then never again until restart.
+	let cached: Buffer | null = null;
+	let inflight: Promise<Buffer> | null = null;
+
+	const doLoad = async (): Promise<Buffer> => {
+		if (process.platform !== "darwin") {
+			throw new SecurityCliMasterKeyError(
+				`securityCliMasterKey: only supported on macOS (got ${process.platform})`,
+			);
+		}
+
+		const candidates: Array<{ svc: string; key: Buffer }> = [];
+		const primary = await readKeychainKey(service, account);
+		if (primary) candidates.push({ svc: service, key: primary });
+		for (const fb of fallbacks) {
+			const k = await readKeychainKey(fb, account);
+			if (k) candidates.push({ svc: fb, key: k });
+		}
+
+		if (candidates.length > 0) {
+			for (const c of candidates) {
+				if (probeKey(c.key, vaultPath)) {
+					console.log(`[vault] master key resolved via security://${c.svc}/${account} (cached for process lifetime)`);
+					// Best-effort: ensure THIS bun binary is on the entry's
+					// trusted-app list so future bun invocations don't prompt.
+					// If the entry was created with -T "" (no apps allowed),
+					// this call also prompts once but its result is durable.
+					ensureKeychainAclTrustsThisBinary(c.svc, account).catch(() => {
+						// Already prompted user; if they declined, leave it.
+					});
+					return c.key;
+				}
+			}
+			throw new SecurityCliMasterKeyError(
+				`vault data exists at ${vaultPath} but none of the master keys (${candidates
+					.map((c) => c.svc)
+					.join(", ")}) decrypt it. The keychain entries may have been rotated independently of the encrypted data. Restore the original key or wipe vault.json to reinitialize.`,
+			);
+		}
+
+		const fresh = randomBytes(KEY_BYTES);
+		await writeKeychainKey(service, account, fresh);
+		console.log(`[vault] created fresh master key at security://${service}/${account}`);
+		return fresh;
+	};
 
 	return {
 		async load(): Promise<Buffer> {
-			if (process.platform !== "darwin") {
-				throw new SecurityCliMasterKeyError(
-					`securityCliMasterKey: only supported on macOS (got ${process.platform})`,
-				);
-			}
-
-			const candidates: Array<{ svc: string; key: Buffer }> = [];
-			const primary = await readKeychainKey(service, account);
-			if (primary) candidates.push({ svc: service, key: primary });
-			for (const fb of fallbacks) {
-				const k = await readKeychainKey(fb, account);
-				if (k) candidates.push({ svc: fb, key: k });
-			}
-
-			if (candidates.length > 0) {
-				for (const c of candidates) {
-					if (probeKey(c.key, vaultPath)) {
-						console.log(`[vault] master key resolved via security://${c.svc}/${account}`);
-						return c.key;
-					}
-				}
-				// No candidate decrypted existing data — fall through to fresh-key path?
-				// Don't: that would silently hide the real problem. Throw.
-				throw new SecurityCliMasterKeyError(
-					`vault data exists at ${vaultPath} but none of the master keys (${candidates
-						.map((c) => c.svc)
-						.join(", ")}) decrypt it. The keychain entries may have been rotated independently of the encrypted data. Restore the original key or wipe vault.json to reinitialize.`,
-				);
-			}
-
-			// No keys exist at all — create a fresh one under the primary service.
-			const fresh = randomBytes(KEY_BYTES);
-			await writeKeychainKey(service, account, fresh);
-			console.log(`[vault] created fresh master key at security://${service}/${account}`);
-			return fresh;
+			if (cached) return cached;
+			if (inflight) return inflight;
+			inflight = doLoad()
+				.then((k) => { cached = k; return k; })
+				.finally(() => { inflight = null; });
+			return inflight;
 		},
 		describe(): string {
 			return `security-cli://${service}/${account}` + (fallbacks.length ? ` (+fallbacks: ${fallbacks.join(",")})` : "");

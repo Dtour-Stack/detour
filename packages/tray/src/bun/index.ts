@@ -11,7 +11,7 @@ console.log(`[main] dataDir=${dataDir}`);
 
 console.log("[main] booting core (in-process)");
 const { startCore } = await import("@detour/core");
-const core = await startCore({ pgliteDataDir, port: 2138 });
+const core = await startCore({ dataDir, pgliteDataDir, port: 2138 });
 console.log(`[main] core listening on http://127.0.0.1:${core.port}`);
 
 const { ApiClient } = await import("./kernel/api-client");
@@ -25,6 +25,7 @@ const { chatFeature } = await import("../features/chat/bun");
 const { settingsFeature } = await import("../features/settings/bun");
 const { pensieveFeature } = await import("../features/pensieve/bun");
 const { activityFeature } = await import("../features/activity/bun");
+const { channelsFeature } = await import("../features/channels/bun");
 const { shortcutsFeature } = await import("../features/shortcuts/bun");
 const { notificationsFeature } = await import("../features/notifications/bun");
 const { menusFeature } = await import("../features/menus/bun");
@@ -38,6 +39,7 @@ await loadFeatures(kernel, [
 	settingsFeature,
 	pensieveFeature,
 	activityFeature,
+	channelsFeature,
 	shortcutsFeature,
 	notificationsFeature,
 	menusFeature,

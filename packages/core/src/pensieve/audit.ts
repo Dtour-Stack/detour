@@ -30,7 +30,12 @@ export type PensieveAuditAction =
 	| "template.delete"
 	| "template.render"
 	| "promptvar.set"
-	| "promptvar.delete";
+	| "promptvar.delete"
+	| "autonomy.enable"
+	| "autonomy.disable"
+	| "autonomy.interval"
+	| "knowledge.ingest"
+	| "knowledge.delete";
 
 export interface PensieveAuditEvent {
 	readonly action: PensieveAuditAction;

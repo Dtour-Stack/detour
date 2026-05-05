@@ -4,16 +4,34 @@ import { MemoriesPane } from "./memories/MemoriesPane";
 import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";
 import { TemplatesPane } from "./templates/TemplatesPane";
+import { EmbeddingMapPane } from "./embeddings/EmbeddingMapPane";
+import { InboxPane } from "./inbox/InboxPane";
+import { GatewayPane } from "./gateway/GatewayPane";
 
-type Section = "notes" | "knowledge" | "memories" | "templates" | "relationships" | "graph";
+type Section =
+	| "inbox"
+	| "gateway"
+	| "notes"
+	| "knowledge"
+	| "memories"
+	| "templates"
+	| "relationships"
+	| "graph"
+	| "embeddings";
 
-const SECTIONS: { id: Section; label: string }[] = [
+const LIVE_SECTIONS: { id: Section; label: string }[] = [
+	{ id: "inbox", label: "Inbox" },
+	{ id: "gateway", label: "Channel feed" },
+];
+
+const KNOWLEDGE_SECTIONS: { id: Section; label: string }[] = [
 	{ id: "notes", label: "Notes" },
 	{ id: "knowledge", label: "Knowledge" },
 	{ id: "memories", label: "Memories" },
 	{ id: "templates", label: "Templates" },
 	{ id: "relationships", label: "Relationships" },
 	{ id: "graph", label: "Graph" },
+	{ id: "embeddings", label: "Embedding map" },
 ];
 
 /**
@@ -28,9 +46,9 @@ export function PensieveView() {
 	const [connected, setConnected] = useState(false);
 	const [section, setSection] = useState<Section>(() => {
 		try {
-			return (localStorage.getItem("pensieve.section") as Section) ?? "memories";
+			return (localStorage.getItem("pensieve.section") as Section) ?? "inbox";
 		} catch {
-			return "memories";
+			return "inbox";
 		}
 	});
 
@@ -47,9 +65,24 @@ export function PensieveView() {
 			<aside className="settings-sidebar">
 				<div className="window-brand">Pensieve</div>
 				<div className="sidebar-section">
+					<div className="section-btn active" aria-hidden>Live</div>
+					<div className="sub-nav">
+						{LIVE_SECTIONS.map((s) => (
+							<button
+								key={s.id}
+								type="button"
+								className={section === s.id ? "sub-nav-btn active" : "sub-nav-btn"}
+								onClick={() => setSection(s.id)}
+							>
+								{s.label}
+							</button>
+						))}
+					</div>
+				</div>
+				<div className="sidebar-section">
 					<div className="section-btn active" aria-hidden>Knowledge</div>
 					<div className="sub-nav">
-						{SECTIONS.map((s) => (
+						{KNOWLEDGE_SECTIONS.map((s) => (
 							<button
 								key={s.id}
 								type="button"
@@ -67,12 +100,15 @@ export function PensieveView() {
 				</div>
 			</aside>
 			<main className="settings-main settings-main-flush">
+				{section === "inbox" && <InboxPane client={client} />}
+				{section === "gateway" && <GatewayPane client={client} />}
 				{section === "notes" && <MemoriesPane client={client} scope="notes" />}
 				{section === "knowledge" && <MemoriesPane client={client} scope="knowledge" />}
 				{section === "memories" && <MemoriesPane client={client} />}
 				{section === "templates" && <TemplatesPane client={client} />}
 				{section === "relationships" && <RelationshipsPane client={client} />}
 				{section === "graph" && <GraphPane client={client} />}
+				{section === "embeddings" && <EmbeddingMapPane client={client} />}
 			</main>
 		</div>
 	);

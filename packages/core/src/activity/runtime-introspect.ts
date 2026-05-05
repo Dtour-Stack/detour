@@ -9,6 +9,29 @@
 
 import type { IAgentRuntime } from "@elizaos/core";
 
+export interface ActivityPluginDetail {
+	readonly name: string;
+	readonly description?: string;
+	readonly actionCount: number;
+	readonly actionNames: string[];
+	readonly providerCount: number;
+	readonly providerNames: string[];
+	readonly evaluatorCount: number;
+	readonly evaluatorNames: string[];
+	readonly serviceCount: number;
+	readonly serviceTypes: string[];
+	readonly hasInit: boolean;
+	readonly hasRoutes: boolean;
+	readonly hasModels: boolean;
+}
+
+export interface ActivityPluginsSnapshot {
+	readonly available: boolean;
+	readonly generatedAt: number;
+	readonly count: number;
+	readonly plugins: ActivityPluginDetail[];
+}
+
 export interface RuntimeRegistryItem {
 	readonly name: string;
 	readonly description?: string;
@@ -105,6 +128,71 @@ function pluginsToItems(plugins: unknown): RuntimeRegistryItem[] {
 			return out;
 		})
 		.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function pickArrayNames(obj: unknown, key: string): string[] {
+	if (!obj || typeof obj !== "object") return [];
+	const arr = (obj as Record<string, unknown>)[key];
+	if (!Array.isArray(arr)) return [];
+	return arr
+		.map((entry) => pickString(entry, "name"))
+		.filter((n): n is string => typeof n === "string" && n.length > 0)
+		.sort((a, b) => a.localeCompare(b));
+}
+
+function pickServiceTypes(p: unknown): string[] {
+	const services = (p as { services?: unknown })?.services;
+	if (!Array.isArray(services)) return [];
+	const out: string[] = [];
+	for (const cls of services) {
+		const t = (cls as { serviceType?: string })?.serviceType ?? pickString(cls, "name");
+		if (t) out.push(t);
+	}
+	return out.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Per-plugin breakdown — what each registered plugin contributes to the
+ * runtime (actions, providers, evaluators, services). Used by the Activity >
+ * Plugins pane to give a "what is each plugin doing" view that the basic
+ * runtime snapshot doesn't.
+ */
+export function snapshotPlugins(runtime: IAgentRuntime | null): ActivityPluginsSnapshot {
+	if (!runtime) {
+		return { available: false, generatedAt: Date.now(), count: 0, plugins: [] };
+	}
+	const plugins = (runtime as unknown as { plugins?: unknown[] }).plugins;
+	if (!Array.isArray(plugins)) {
+		return { available: true, generatedAt: Date.now(), count: 0, plugins: [] };
+	}
+	const details: ActivityPluginDetail[] = plugins.map((p) => {
+		const actionNames = pickArrayNames(p, "actions");
+		const providerNames = pickArrayNames(p, "providers");
+		const evaluatorNames = pickArrayNames(p, "evaluators");
+		const serviceTypes = pickServiceTypes(p);
+		return {
+			name: pickString(p, "name") ?? "(unnamed plugin)",
+			...(pickString(p, "description") ? { description: pickString(p, "description") } : {}),
+			actionCount: actionNames.length,
+			actionNames,
+			providerCount: providerNames.length,
+			providerNames,
+			evaluatorCount: evaluatorNames.length,
+			evaluatorNames,
+			serviceCount: serviceTypes.length,
+			serviceTypes,
+			hasInit: typeof (p as { init?: unknown })?.init === "function",
+			hasRoutes: Array.isArray((p as { routes?: unknown[] })?.routes) && (p as { routes: unknown[] }).routes.length > 0,
+			hasModels: !!((p as { models?: unknown })?.models),
+		};
+	});
+	details.sort((a, b) => a.name.localeCompare(b.name));
+	return {
+		available: true,
+		generatedAt: Date.now(),
+		count: details.length,
+		plugins: details,
+	};
 }
 
 export function snapshotRuntime(runtime: IAgentRuntime | null): ActivityRuntimeSnapshot {

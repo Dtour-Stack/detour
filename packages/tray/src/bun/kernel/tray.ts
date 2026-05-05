@@ -10,6 +10,7 @@ export class TrayController {
 	private items: MenuItem[] = [];
 	private handlers = new Map<string, ClickHandler>();
 	private iconClickHandlers: Array<() => void> = [];
+	private statusLabel: string | null = null;
 
 	constructor(opts: { title: string }) {
 		// Template PNGs are copied to Resources/app/views/icons/ by the
@@ -48,6 +49,13 @@ export class TrayController {
 		this.rebuildMenu();
 	}
 
+	/** Sets a non-clickable status label at the top of the menu. Pass null to hide. */
+	setStatus(label: string | null): void {
+		if (this.statusLabel === label) return;
+		this.statusLabel = label;
+		this.rebuildMenu();
+	}
+
 	onIconClicked(handler: () => void): void {
 		this.iconClickHandlers.push(handler);
 	}
@@ -64,14 +72,20 @@ export class TrayController {
 		const sorted = [...this.items].sort(
 			(a, b) => (a.order ?? 100) - (b.order ?? 100),
 		);
-		const menu = sorted.flatMap((item, idx) => {
-			const isLast = idx === sorted.length - 1;
-			return [
-				{ type: "normal" as const, label: item.label, action: item.action },
-				...(isLast ? [{ type: "divider" as const }] : []),
-			];
-		});
-		menu.push({ type: "normal" as const, label: "Quit", action: QUIT_ACTION });
+		const menu: Array<
+			| { type: "normal"; label: string; action?: string; enabled?: boolean }
+			| { type: "divider" }
+		> = [];
+		if (this.statusLabel !== null) {
+			menu.push({ type: "normal", label: this.statusLabel, enabled: false });
+			menu.push({ type: "divider" });
+		}
+		for (let i = 0; i < sorted.length; i += 1) {
+			const item = sorted[i]!;
+			menu.push({ type: "normal", label: item.label, action: item.action });
+			if (i === sorted.length - 1) menu.push({ type: "divider" });
+		}
+		menu.push({ type: "normal", label: "Quit", action: QUIT_ACTION });
 		this.tray.setMenu(menu);
 	}
 }

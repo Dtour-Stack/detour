@@ -1,10 +1,10 @@
+import { resolveViewUrl } from "../../../bun/kernel/view-url";
 import type { Feature } from "../../../bun/kernel/registry";
 import type { WindowHandle } from "../../../bun/kernel/windows";
 import type { ChatRPC } from "./rpc-schema";
 
 const DEFAULT_WIDTH = 480;
 const DEFAULT_HEIGHT = 720;
-const VITE_URL = process.env.DETOUR_DEV_URL ?? "http://localhost:5181";
 
 export const chatFeature: Feature = {
 	id: "chat",
@@ -40,7 +40,7 @@ export const chatFeature: Feature = {
 				viewKey: "chat",
 				width: currentWidth,
 				height: currentHeight,
-				url: VITE_URL,
+				url: resolveViewUrl(),
 				hideOnBlur: false,
 				alwaysOnTop: true,
 				rpc: {

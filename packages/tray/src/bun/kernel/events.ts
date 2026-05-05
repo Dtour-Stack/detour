@@ -26,5 +26,6 @@ export type KernelEvents = {
 	"ui:toggle-chat": Record<string, never>;
 	"ui:open-pensieve": Record<string, never>;
 	"ui:open-activity": Record<string, never>;
+	"ui:open-channels": Record<string, never>;
 	notify: { title: string; body?: string; subtitle?: string };
 };

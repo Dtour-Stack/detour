@@ -14,12 +14,16 @@ import { PensieveMemoryService } from "./memory-service";
 import { PensieveRelationshipService } from "./relationship-service";
 import { PensieveGraphService } from "./graph-service";
 import { PensieveTemplatesService } from "./templates-service";
+import { PensieveKnowledgeService } from "./knowledge-service";
+import { PensieveEmbeddingMapService } from "./embedding-map-service";
 
 export class PensieveService {
 	readonly memories: PensieveMemoryService;
 	readonly relationships: PensieveRelationshipService;
 	readonly graph: PensieveGraphService;
 	readonly templates: PensieveTemplatesService;
+	readonly knowledge: PensieveKnowledgeService;
+	readonly embeddingMap: PensieveEmbeddingMapService;
 
 	constructor(private readonly runtimeService: RuntimeService) {
 		const resolve = (): IAgentRuntime | null => {
@@ -30,6 +34,8 @@ export class PensieveService {
 		this.relationships = new PensieveRelationshipService(resolve);
 		this.graph = new PensieveGraphService(resolve);
 		this.templates = new PensieveTemplatesService(this.memories, resolve);
+		this.knowledge = new PensieveKnowledgeService(resolve);
+		this.embeddingMap = new PensieveEmbeddingMapService(resolve);
 	}
 
 	start(): void {}
@@ -56,5 +62,7 @@ export type {
 	PensieveTemplateRenderResult,
 } from "./templates-service";
 export { extractTemplateVariables, PensieveTemplatesService } from "./templates-service";
+export type { PensieveKnowledgeIngestInput, PensieveKnowledgeIngestResult } from "./knowledge-service";
+export type { EmbeddingPoint, EmbeddingMapResult } from "./embedding-map-service";
 export type { GraphNode, GraphEdge, GraphSnapshot, GraphFilter, BacklinksResult } from "./graph-service";
 export { pensieveAudit, type PensieveAuditEvent, type PensieveAuditAction } from "./audit";

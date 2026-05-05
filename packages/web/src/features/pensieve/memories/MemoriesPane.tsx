@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PensieveMemorySummary, PensieveMemoryTree, PensieveMemoryTreeNode } from "@detour/shared";
 import type { WebClient } from "../../../api/client";
+import { KnowledgeUploadDropzone } from "./KnowledgeUploadDropzone";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryTree } from "./MemoryTree";
 import { NewMemoryDialog } from "./NewMemoryDialog";
@@ -143,6 +144,12 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 						)}
 						<span className="hint" style={{ marginLeft: "auto" }}>{items.length} shown</span>
 					</div>
+					{scope === "knowledge" && (
+						<KnowledgeUploadDropzone
+							client={client}
+							onIngested={() => { void load(); void loadTree(); }}
+						/>
+					)}
 					{error && <div className="banner error">{error}</div>}
 					{loading && items.length === 0 && <div className="hint" style={{ padding: 12 }}>Loading…</div>}
 					<div className="pensieve-list">

@@ -4,13 +4,19 @@ import { TrajectoriesPane } from "./TrajectoriesPane";
 import { LogsPane } from "./LogsPane";
 import { RuntimePane } from "./RuntimePane";
 import { TasksPane } from "./TasksPane";
+import { AutonomyPane } from "./AutonomyPane";
+import { PluginsPane } from "./PluginsPane";
+import { DbPane } from "./DbPane";
 
-type Tab = "trajectories" | "logs" | "tasks" | "runtime";
+type Tab = "trajectories" | "logs" | "tasks" | "autonomy" | "plugins" | "db" | "runtime";
 
 const TABS: { id: Tab; label: string }[] = [
 	{ id: "trajectories", label: "Trajectories" },
 	{ id: "logs", label: "Logs" },
 	{ id: "tasks", label: "Tasks" },
+	{ id: "autonomy", label: "Autonomy" },
+	{ id: "plugins", label: "Plugins" },
+	{ id: "db", label: "DB" },
 	{ id: "runtime", label: "Runtime" },
 ];
 
@@ -69,6 +75,9 @@ export function ActivityView() {
 				{tab === "trajectories" && <TrajectoriesPane client={client} />}
 				{tab === "logs" && <LogsPane client={client} />}
 				{tab === "tasks" && <TasksPane client={client} />}
+				{tab === "autonomy" && <AutonomyPane client={client} />}
+				{tab === "plugins" && <PluginsPane client={client} />}
+				{tab === "db" && <DbPane client={client} />}
 				{tab === "runtime" && <RuntimePane client={client} />}
 			</main>
 		</div>

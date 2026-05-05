@@ -54,7 +54,6 @@ export interface CreateResponseRequest {
 	stream?: boolean;
 	previous_response_id?: string;
 	reasoning?: { effort?: "minimal" | "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
-	temperature?: number;
 	max_output_tokens?: number;
 	store?: boolean;
 }

@@ -8,7 +8,7 @@
  * the agent's permission state survives restarts without env vars.
  */
 
-import type { AgentConfig, ModelConfig, WindowConfig } from "@detour/shared";
+import type { AgentConfig, ChroniclerConfig, ModelConfig, WindowConfig } from "@detour/shared";
 import { setPermissionConfig, type AgentVaultMode } from "@detour/plugin-vault-tools";
 import type { VaultService } from "./vault";
 
@@ -33,9 +33,17 @@ const DEFAULT_WINDOW: WindowConfig = {
 	alwaysOnTop: true,
 };
 
+const DEFAULT_CHRONICLER: ChroniclerConfig = {
+	enabled: false,
+	intervalMs: 60_000,
+	includeWindowTitles: true,
+	maxWindowsPerScreen: 8,
+};
+
 const KEY_AGENT = "config.agent";
 const KEY_MODELS = "config.models";
 const KEY_WINDOW = "config.window";
+const KEY_CHRONICLER = "config.chronicler";
 
 export class ConfigService {
 	constructor(private readonly vault: VaultService) {}
@@ -125,10 +133,42 @@ export class ConfigService {
 		await this.writeJson(KEY_WINDOW, next);
 	}
 
+	async getChronicler(): Promise<ChroniclerConfig> {
+		const raw = await this.readJson(KEY_CHRONICLER);
+		if (!raw) return { ...DEFAULT_CHRONICLER };
+		return this.sanitizeChronicler(raw);
+	}
+
+	async setChronicler(next: ChroniclerConfig): Promise<ChroniclerConfig> {
+		const sanitized = this.sanitizeChronicler({
+			enabled: next.enabled,
+			intervalMs: next.intervalMs,
+			includeWindowTitles: next.includeWindowTitles,
+			maxWindowsPerScreen: next.maxWindowsPerScreen,
+		});
+		await this.writeJson(KEY_CHRONICLER, sanitized);
+		return sanitized;
+	}
+
 	// ── Helpers ────────────────────────────────────────────────────────
 
 	private parseMode(value: unknown): AgentVaultMode {
 		return value === "off" || value === "read" || value === "read-write" ? value : "read";
+	}
+
+	private sanitizeChronicler(raw: Record<string, unknown>): ChroniclerConfig {
+		const intervalMs = typeof raw.intervalMs === "number" && Number.isFinite(raw.intervalMs)
+			? Math.max(15_000, Math.min(600_000, Math.round(raw.intervalMs)))
+			: DEFAULT_CHRONICLER.intervalMs;
+		const maxWindowsPerScreen = typeof raw.maxWindowsPerScreen === "number" && Number.isFinite(raw.maxWindowsPerScreen)
+			? Math.max(1, Math.min(30, Math.round(raw.maxWindowsPerScreen)))
+			: DEFAULT_CHRONICLER.maxWindowsPerScreen;
+		return {
+			enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CHRONICLER.enabled,
+			intervalMs,
+			includeWindowTitles: typeof raw.includeWindowTitles === "boolean" ? raw.includeWindowTitles : DEFAULT_CHRONICLER.includeWindowTitles,
+			maxWindowsPerScreen,
+		};
 	}
 
 	private async readJson(key: string): Promise<Record<string, unknown> | null> {

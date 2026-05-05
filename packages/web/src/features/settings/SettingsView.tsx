@@ -9,16 +9,18 @@ import { AgentPermissionsTab } from "./AgentPermissionsTab";
 import { ModelsTab } from "./ModelsTab";
 import { WindowTab } from "./WindowTab";
 import { OsPermissionsTab } from "./OsPermissionsTab";
+import { LocalAITab } from "./LocalAITab";
 
 type Section = "configuration" | "vault";
 
-type ConfigTab = "appearance" | "providers" | "models" | "agent" | "os" | "window";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "agent" | "os" | "window";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 
 const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "appearance", label: "Appearance" },
 	{ id: "providers", label: "Providers" },
 	{ id: "models", label: "Models & Routing" },
+	{ id: "local-ai", label: "Local AI" },
 	{ id: "agent", label: "Agent Permissions" },
 	{ id: "os", label: "OS Permissions" },
 	{ id: "window", label: "Window" },
@@ -93,6 +95,7 @@ export function SettingsView({ client }: { client: WebClient }) {
 						{configTab === "appearance" && <AppearanceTab client={client} />}
 						{configTab === "providers" && <ProvidersTab client={client} />}
 						{configTab === "models" && <ModelsTab client={client} />}
+						{configTab === "local-ai" && <LocalAITab client={client} />}
 						{configTab === "agent" && <AgentPermissionsTab client={client} />}
 						{configTab === "os" && <OsPermissionsTab client={client} />}
 						{configTab === "window" && <WindowTab client={client} />}

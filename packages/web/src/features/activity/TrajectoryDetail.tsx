@@ -236,6 +236,8 @@ export function TrajectoryDetail({
 				</DisclosureSection>
 			)}
 
+			<RagTraceSection providerAccesses={detail.providerAccesses} />
+
 			{detail.metadata && Object.keys(detail.metadata).length > 0 && (
 				<DisclosureSection label="Metadata" defaultOpen={false}>
 					<pre className="trajectory-pre">{fmtJson(detail.metadata)}</pre>
@@ -468,6 +470,84 @@ function renderValue(v: unknown): React.ReactNode {
 	if (typeof v === "number") return <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{v}</span>;
 	if (typeof v === "string") return v;
 	return <pre className="trajectory-pre" style={{ margin: 0, maxHeight: 200 }}>{fmtJson(v)}</pre>;
+}
+
+function RagTraceSection({ providerAccesses }: { providerAccesses: ActivityTrajectoryDetail["providerAccesses"] }) {
+	const ragAccesses = providerAccesses.filter((p) => /knowledge|rag/i.test(p.providerName));
+	if (ragAccesses.length === 0) return null;
+	const fragments = ragAccesses.flatMap((acc) => extractFragments(acc.data));
+	return (
+		<DisclosureSection label={`RAG retrieval (${fragments.length} fragment${fragments.length === 1 ? "" : "s"})`} defaultOpen={true}>
+			{fragments.length === 0 ? (
+				<div className="hint">Knowledge provider ran but returned no fragments.</div>
+			) : (
+				<div className="trajectory-rag-list">
+					{fragments.map((f, i) => (
+						<div key={f.fragmentId ?? i} className="trajectory-rag-card">
+							<div className="trajectory-rag-header">
+								{typeof f.similarityScore === "number" && (
+									<span className="badge info">sim {f.similarityScore.toFixed(3)}</span>
+								)}
+								{f.documentTitle && <span className="trajectory-rag-doc">{f.documentTitle}</span>}
+								{f.fragmentId && (
+									<span className="hint" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 10 }}>
+										{f.fragmentId.slice(0, 8)}
+									</span>
+								)}
+							</div>
+							<div className="trajectory-rag-preview">{f.contentPreview}</div>
+						</div>
+					))}
+				</div>
+			)}
+			{ragAccesses.length > 1 && (
+				<div className="hint" style={{ marginTop: 6 }}>
+					{ragAccesses.length} retrieval calls across this trajectory.
+				</div>
+			)}
+		</DisclosureSection>
+	);
+}
+
+interface RagFragment {
+	fragmentId?: string;
+	documentTitle?: string;
+	similarityScore?: number;
+	contentPreview: string;
+}
+
+function extractFragments(data: unknown): RagFragment[] {
+	if (!data) return [];
+	const tryArrays: unknown[] = [];
+	if (Array.isArray(data)) tryArrays.push(data);
+	else if (typeof data === "object") {
+		const obj = data as Record<string, unknown>;
+		for (const k of ["fragments", "retrievedFragments", "results", "values", "knowledge"]) {
+			if (Array.isArray(obj[k])) tryArrays.push(obj[k]);
+		}
+	}
+	for (const arr of tryArrays) {
+		if (!Array.isArray(arr) || arr.length === 0) continue;
+		const out: RagFragment[] = [];
+		for (const f of arr) {
+			if (!f || typeof f !== "object") continue;
+			const o = f as Record<string, unknown>;
+			const preview = (typeof o.contentPreview === "string" && o.contentPreview)
+				|| (typeof o.content === "string" && o.content)
+				|| (typeof o.text === "string" && o.text)
+				|| "";
+			if (!preview) continue;
+			out.push({
+				...(typeof o.fragmentId === "string" && { fragmentId: o.fragmentId }),
+				...(typeof o.documentTitle === "string" && { documentTitle: o.documentTitle }),
+				...(typeof o.similarityScore === "number" && { similarityScore: o.similarityScore }),
+				...(typeof o.score === "number" && { similarityScore: o.score }),
+				contentPreview: String(preview).slice(0, 480),
+			});
+		}
+		if (out.length > 0) return out;
+	}
+	return [];
 }
 
 function StepCard({ step }: { step: ActivityTrajectoryStepSummary }) {

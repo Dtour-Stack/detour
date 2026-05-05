@@ -28,5 +28,48 @@ export function createKernel(opts: {
 		}
 	});
 
+	// Tray status poller — surfaces "● Agent ready (Codex + local embeds)"
+	// at the top of the menu so the user sees lifecycle state without
+	// opening Settings. Polls every 4 seconds; calls setStatus(text) which
+	// no-ops when the text hasn't changed.
+	const baseUrl = `http://127.0.0.1:${opts.core.port}`;
+	const refreshTrayStatus = async (): Promise<void> => {
+		try {
+			const [providers, llama] = await Promise.all([
+				fetch(`${baseUrl}/api/providers`).then((r) => r.json() as Promise<Array<{ id: string; active?: boolean }>>),
+				fetch(`${baseUrl}/api/llama/status`).then((r) => r.json() as Promise<{ running?: boolean; downloadProgress?: { percent?: number } | null; lastError?: string | null }>),
+			]);
+			const active = providers.find((p) => p.active)?.id ?? null;
+			const providerLabel = active === "openai" ? "Codex" : active === "anthropic" ? "Claude" : null;
+			const dl = llama.downloadProgress;
+			let llamaLabel: string;
+			if (dl && (dl.percent ?? 0) < 100) {
+				llamaLabel = `embed model ${dl.percent}%`;
+			} else if (llama.running) {
+				llamaLabel = "local embeds";
+			} else if (llama.lastError) {
+				llamaLabel = "embed error";
+			} else {
+				llamaLabel = "embeds starting";
+			}
+			let label: string;
+			if (active && llama.running) {
+				label = `● Detour: ${providerLabel} + ${llamaLabel}`;
+			} else if (active) {
+				label = `● Detour: ${providerLabel} (${llamaLabel})`;
+			} else if (llama.running) {
+				label = `○ Detour: no LLM provider (${llamaLabel})`;
+			} else {
+				label = "○ Detour: starting…";
+			}
+			tray.setStatus(label);
+		} catch {
+			tray.setStatus("✕ Detour: not reachable");
+		}
+	};
+	void refreshTrayStatus();
+	const statusTimer = setInterval(() => void refreshTrayStatus(), 4_000);
+	(statusTimer as unknown as { unref?: () => void }).unref?.();
+
 	return { api: opts.api, core: opts.core, windows, tray, events };
 }

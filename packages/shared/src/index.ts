@@ -101,6 +101,59 @@ export type WindowConfig = {
 	alwaysOnTop: boolean;
 };
 
+export type ChroniclerConfig = {
+	enabled: boolean;
+	intervalMs: number;
+	includeWindowTitles: boolean;
+	maxWindowsPerScreen: number;
+};
+
+export type ChroniclerWindow = {
+	app: string;
+	title?: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	focused: boolean;
+};
+
+export type ChroniclerScreen = {
+	id: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	windows: ChroniclerWindow[];
+	focusedApp?: string;
+	focusedTitle?: string;
+};
+
+export type ChroniclerObservation = {
+	id: string;
+	ts: number;
+	screens: ChroniclerScreen[];
+	focusedApp?: string;
+	focusedTitle?: string;
+	windowCount: number;
+	summary: string;
+};
+
+export type ChroniclerStatus = {
+	available: boolean;
+	enabled: boolean;
+	running: boolean;
+	intervalMs: number;
+	includeWindowTitles: boolean;
+	maxWindowsPerScreen: number;
+	pensievePath: string;
+	lastSampleAt?: number;
+	lastMemoryId?: string;
+	lastError?: string;
+	screenCount: number;
+	windowCount: number;
+};
+
 export type OsPermissionId =
 	| "camera"
 	| "microphone"
@@ -311,6 +364,24 @@ export type ActivityTaskRecord = {
 	metadata: Record<string, unknown>;
 };
 
+export type PensieveEmbeddingPoint = {
+	memoryId: string;
+	type?: string;
+	path: string;
+	preview: string;
+	createdAt?: number;
+	x: number;
+	y: number;
+	dim: number;
+};
+
+export type PensieveEmbeddingMap = {
+	available: boolean;
+	count: number;
+	points: PensieveEmbeddingPoint[];
+	source: "random-projection";
+};
+
 export type PensieveTemplateSummary = {
 	id: string;
 	name: string;
@@ -338,6 +409,97 @@ export type PensieveTemplateRenderResult = {
 	rendered: string;
 	usedValues: Record<string, string>;
 	missing: string[];
+};
+
+export type ChannelId = "discord" | "telegram" | "imessage";
+
+export type ChannelLiveStatus =
+	| "off"
+	| "loaded"
+	| "connecting"
+	| "online"
+	| "invalid-token"
+	| "error";
+
+export type ChannelStatus = {
+	id: ChannelId;
+	label: string;
+	description: string;
+	platform: "any" | "macos";
+	requiredVaultKeys: string[];
+	optionalVaultKeys: string[];
+	pluginPackage: string;
+	configured: boolean;
+	missingKeys: string[];
+	platformAvailable: boolean;
+	pluginLoaded: boolean;
+	liveStatus: ChannelLiveStatus;
+	liveDetail?: string;
+};
+
+export type ChannelsSnapshot = {
+	channels: ChannelStatus[];
+};
+
+export type ActivityDbColumn = {
+	name: string;
+	type: string;
+	nullable: boolean;
+	default?: string;
+};
+
+export type ActivityDbTable = {
+	schema: string;
+	name: string;
+	rowCount: number;
+	columnCount: number;
+};
+
+export type ActivityDbTableDetail = {
+	schema: string;
+	name: string;
+	rowCount: number;
+	columns: ActivityDbColumn[];
+	sample: { rows: Record<string, unknown>[]; truncated: boolean };
+};
+
+export type ActivityDbQueryResult = {
+	columns: string[];
+	rows: Record<string, unknown>[];
+	durationMs: number;
+	truncated: boolean;
+};
+
+export type ActivityPluginDetail = {
+	name: string;
+	description?: string;
+	actionCount: number;
+	actionNames: string[];
+	providerCount: number;
+	providerNames: string[];
+	evaluatorCount: number;
+	evaluatorNames: string[];
+	serviceCount: number;
+	serviceTypes: string[];
+	hasInit: boolean;
+	hasRoutes: boolean;
+	hasModels: boolean;
+};
+
+export type ActivityPluginsSnapshot = {
+	available: boolean;
+	generatedAt: number;
+	count: number;
+	plugins: ActivityPluginDetail[];
+};
+
+export type ActivityAutonomySnapshot = {
+	available: boolean;
+	enabled: boolean;
+	running: boolean;
+	thinking: boolean;
+	intervalMs: number;
+	autonomousRoomId?: string;
 };
 
 export type ActivityTasksSnapshot = {

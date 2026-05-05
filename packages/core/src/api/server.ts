@@ -9,6 +9,10 @@ import { ALL_PROVIDER_IDS, PROVIDER_ENV } from "../auth";
 import type { BackendOps, InstallableBackendId } from "../backend-ops";
 import type { ConfigService } from "../config-service";
 import type { ActivityService } from "../activity";
+import type { ChannelsService } from "../channels";
+import type { ChannelGatewayService } from "../channels/gateway";
+import type { InboxService, InboxKind, InboxStatus } from "../inbox";
+import type { LlamaServerService } from "../llama/server-service";
 import type { PensieveService } from "../pensieve";
 import { pensieveAudit } from "../pensieve";
 import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
@@ -59,6 +63,25 @@ export class ApiServer {
 	private subscribers = new Map<string, ServerWebSocket<WsData>>();
 	private lockFile = join(homedir(), ".detour", "runtime.json");
 	private windowController: WindowController | null = null;
+	private channelReloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * Debounce runtime reloads triggered by channel credential changes.
+	 * Without this, pasting Discord token + Telegram token + iMessage flag
+	 * back-to-back fires three rebuilds; each restarts the Telegraf poll
+	 * before the previous one's long-poll has timed out, triggering
+	 * Telegram's "409 Conflict: terminated by other getUpdates request"
+	 * cascade. Coalesce changes within 1.5s into a single rebuild.
+	 */
+	private scheduleChannelReload(): void {
+		if (this.channelReloadTimer) clearTimeout(this.channelReloadTimer);
+		this.channelReloadTimer = setTimeout(() => {
+			this.channelReloadTimer = null;
+			void this.runtime.rebuild().catch((err) => {
+				console.warn("[channels] debounced auto-reload failed:", err);
+			});
+		}, 1500);
+	}
 
 	setWindowController(fn: WindowController | null): void {
 		this.windowController = fn;
@@ -72,6 +95,10 @@ export class ApiServer {
 		private readonly config: ConfigService,
 		private readonly pensieve: PensieveService,
 		private readonly activity: ActivityService,
+		private readonly channels: ChannelsService,
+		private readonly gateway: ChannelGatewayService,
+		private readonly inbox: InboxService,
+		private readonly llama: LlamaServerService,
 	) {}
 
 	async start(preferredPort = 2138): Promise<{ port: number }> {
@@ -513,6 +540,45 @@ export class ApiServer {
 						}
 						return json(await this.pensieve.memories.list(opts as Parameters<typeof this.pensieve.memories.list>[0]));
 					}
+					if (req.method === "GET" && path === "/api/pensieve/knowledge/status") {
+						return json({ available: this.pensieve.knowledge.available() });
+					}
+					if (req.method === "GET" && path === "/api/pensieve/embedding-map") {
+						return json(await this.pensieve.embeddingMap.snapshot());
+					}
+					if (req.method === "POST" && path === "/api/pensieve/knowledge/ingest") {
+						const body = (await req.json()) as {
+							filename: string;
+							contentType?: string;
+							content: string;
+							metadata?: Record<string, unknown>;
+						};
+						let success = false;
+						let result: unknown = null;
+						let errMsg: string | undefined;
+						try {
+							result = await this.pensieve.knowledge.ingest({
+								filename: body.filename,
+								contentType: body.contentType ?? "text/plain",
+								content: body.content,
+								...(body.metadata ? { metadata: body.metadata } : {}),
+							});
+							success = !!result;
+						} catch (err) {
+							errMsg = err instanceof Error ? err.message : String(err);
+						}
+						pensieveAudit({
+							action: "knowledge.ingest",
+							target: body.filename,
+							success,
+							...(errMsg ? { error: errMsg } : {}),
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return success
+							? json({ ok: true, ...result as Record<string, unknown> })
+							: error(errMsg ?? "knowledge service not available", 400);
+					}
 					if (req.method === "POST" && path === "/api/pensieve/memories") {
 						const body = (await req.json()) as {
 							text: string;
@@ -794,6 +860,288 @@ export class ApiServer {
 						return success ? ok() : error("not found", 404);
 					}
 
+					// --- Channels (Discord/Telegram/iMessage) ---
+					if (req.method === "GET" && path === "/api/channels") {
+						const snap = this.activity.pluginsSnapshot();
+						const loadedNames = snap.plugins.map((p) => p.name);
+						const liveRuntime = this.runtime.peek();
+						return json(await this.channels.snapshot(loadedNames, liveRuntime));
+					}
+					if (req.method === "POST" && path === "/api/channels/credentials") {
+						const body = (await req.json()) as { key: string; value: string; skipValidate?: boolean };
+						// Pre-flight validation against the channel's authoritative
+						// API. We'd rather reject a dead token loudly than save it
+						// and have the user wonder why the bot is silently broken
+						// (the historical Discord pain point). Pass skipValidate=true
+						// to bypass — useful if the API is briefly down.
+						if (!body.skipValidate) {
+							const validation = await validateChannelCredential(body.key, body.value);
+							if (!validation.ok) {
+								return error(validation.error, 400);
+							}
+						}
+						await this.channels.setCredential(body.key, body.value);
+						this.scheduleChannelReload();
+						return json({ ok: true, reloadScheduled: true, validated: !body.skipValidate });
+					}
+					const credDelete = path.match(/^\/api\/channels\/credentials\/([^/]+)$/);
+					if (req.method === "DELETE" && credDelete) {
+						await this.channels.clearCredential(decodeURIComponent(credDelete[1] ?? ""));
+						this.scheduleChannelReload();
+						return json({ ok: true, reloadScheduled: true });
+					}
+					if (req.method === "POST" && path === "/api/channels/reload") {
+						// Fire-and-forget — telegram's 5-attempt retry-with-backoff
+						// can stall the rebuild promise for up to ~3 minutes on a
+						// bad/conflicted token. Schedule via the same debouncer so
+						// double-clicks coalesce, and let the UI poll status.
+						this.scheduleChannelReload();
+						return json({ ok: true, reloadScheduled: true });
+					}
+
+					// --- Discord channel discovery + history backfill ---
+					// List the bot's reachable guilds + text channels.
+					if (req.method === "GET" && path === "/api/channels/discord/guilds") {
+						const live = this.runtime.peek();
+						const svc = live ? (live as unknown as { getService?: (t: string) => unknown }).getService?.("discord") as
+							{ client?: { guilds?: { cache?: Map<string, { id: string; name: string; channels?: { cache?: Map<string, { id: string; name: string; type?: number }> } }> } } } | null
+							: null;
+						const cache = svc?.client?.guilds?.cache;
+						if (!cache) return json({ guilds: [] });
+						const out: Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> = [];
+						for (const [, g] of cache) {
+							const channels: Array<{ id: string; name: string; type: number }> = [];
+							const ch = g.channels?.cache;
+							if (ch) for (const [, c] of ch) {
+								channels.push({ id: c.id, name: c.name, type: c.type ?? -1 });
+							}
+							out.push({ id: g.id, name: g.name, channels });
+						}
+						return json({ guilds: out });
+					}
+					// Backfill a Discord channel's history into memories.
+					// Fire-and-forget — backfill can take minutes on large channels.
+					if (req.method === "POST" && path === "/api/channels/discord/backfill") {
+						const body = (await req.json()) as { channelId: string; limit?: number; force?: boolean };
+						const live = this.runtime.peek();
+						const svc = live ? (live as unknown as { getService?: (t: string) => unknown }).getService?.("discord") as
+							{ fetchChannelHistory?: (channelId: string, opts: { limit?: number; force?: boolean }) => Promise<{ stats: { fetched: number; stored: number; pages: number; fullyBackfilled: boolean } }> }
+							: null;
+						if (!svc?.fetchChannelHistory) return error("Discord service not loaded", 400);
+						// Run in background; client polls trajectories/memories to see progress.
+						void svc.fetchChannelHistory(body.channelId, { limit: body.limit ?? 200, force: !!body.force })
+							.then((r) => console.log(`[discord] backfill complete for ${body.channelId}:`, r.stats))
+							.catch((err) => console.warn(`[discord] backfill failed for ${body.channelId}:`, err instanceof Error ? err.message : err));
+						return json({ ok: true, scheduled: true, channelId: body.channelId });
+					}
+
+					// --- Channel gateway (unified inbound/outbound feed) ---
+					if (req.method === "GET" && path === "/api/gateway/feed") {
+						const channel = url.searchParams.get("channel") ?? undefined;
+						const direction = url.searchParams.get("direction") ?? undefined;
+						const roomId = url.searchParams.get("roomId") ?? undefined;
+						const entityId = url.searchParams.get("entityId") ?? undefined;
+						const q = url.searchParams.get("q") ?? undefined;
+						const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : undefined;
+						const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
+						return json(this.gateway.list({
+							...(channel ? { channel: channel as never } : {}),
+							...(direction ? { direction: direction as never } : {}),
+							...(roomId ? { roomId } : {}),
+							...(entityId ? { entityId } : {}),
+							...(q ? { q } : {}),
+							...(since ? { since } : {}),
+							...(limit ? { limit } : {}),
+						}));
+					}
+					if (req.method === "GET" && path === "/api/gateway/identities") {
+						const all = url.searchParams.get("all") === "1";
+						return json({
+							identities: all ? this.gateway.allIdentities() : this.gateway.identityCandidates(),
+						});
+					}
+
+					// --- Inbox (notifications + actionable channel signals) ---
+					if (req.method === "GET" && path === "/api/inbox") {
+						const status = url.searchParams.get("status") as InboxStatus | null;
+						const kind = url.searchParams.get("kind") as InboxKind | null;
+						const source = url.searchParams.get("source") ?? undefined;
+						const channel = url.searchParams.get("channel") ?? undefined;
+						const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : undefined;
+						const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
+						return json(this.inbox.list({
+							...(status ? { status } : {}),
+							...(kind ? { kind } : {}),
+							...(source ? { source } : {}),
+							...(channel ? { channel } : {}),
+							...(since ? { since } : {}),
+							...(limit ? { limit } : {}),
+						}));
+					}
+					if (req.method === "GET" && path === "/api/inbox/stats") {
+						return json(this.inbox.stats());
+					}
+
+					// --- Local llama server status ---
+					if (req.method === "GET" && path === "/api/llama/status") {
+						return json(this.llama.status());
+					}
+
+					// --- Debug: probe embedding pipeline end-to-end ---
+					if (req.method === "POST" && path === "/api/debug/embedding") {
+						const body = (await req.json().catch(() => ({}))) as { text?: string; storeAs?: string };
+						const text = body.text ?? "hello world";
+						const live = this.runtime.peek();
+						if (!live) return error("runtime not built", 503);
+						const r = live as unknown as {
+							useModel?: (type: string, params: unknown) => Promise<unknown>;
+							getModel?: (type: string) => unknown;
+							services?: Map<string, unknown>;
+							getService?: (t: string) => unknown;
+							adapter?: { embeddingDimension?: string };
+							createMemory?: (m: unknown, table: string) => Promise<string>;
+							queueEmbeddingGeneration?: (m: unknown, prio?: string) => Promise<void>;
+							updateMemory?: (m: unknown) => Promise<boolean>;
+							agentId?: string;
+						};
+						const hasModel = typeof r.getModel === "function" && r.getModel("TEXT_EMBEDDING") !== undefined;
+						const embSvc = r.getService?.("embedding-generation") as {
+							isDisabled?: boolean;
+							batchQueue?: { size?: number; isStarted?: boolean } | null;
+						} | null | undefined;
+						const adapter = r.adapter as { embeddingDimension?: string } | undefined;
+						let vec: unknown = null;
+						let modelErr: string | null = null;
+						const t0 = Date.now();
+						try {
+							if (typeof r.useModel === "function") {
+								vec = await r.useModel("TEXT_EMBEDDING", { text });
+							}
+						} catch (err) {
+							modelErr = err instanceof Error ? err.message : String(err);
+						}
+						const ms = Date.now() - t0;
+						const arr = Array.isArray(vec) ? (vec as number[]) : [];
+						const nonZero = arr.filter((n) => Math.abs(n) > 1e-9).length;
+						// If asked, write a memory + manually call updateMemory with embedding
+						// to bypass the queue and test the storage path directly.
+						let writeResult: { ok: boolean; memoryId?: string; error?: string } | null = null;
+						if (body.storeAs && typeof r.createMemory === "function" && typeof r.updateMemory === "function") {
+							try {
+								const memId = await r.createMemory({
+									entityId: r.agentId,
+									roomId: r.agentId,
+									agentId: r.agentId,
+									content: { text, source: "debug" },
+									createdAt: Date.now(),
+								}, body.storeAs);
+								await r.updateMemory({ id: memId, embedding: arr });
+								writeResult = { ok: true, memoryId: String(memId) };
+							} catch (err) {
+								writeResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
+							}
+						}
+						return json({
+							hasModel,
+							adapterEmbeddingDimension: adapter?.embeddingDimension ?? null,
+							embeddingServiceRegistered: embSvc !== null && embSvc !== undefined,
+							embeddingServiceDisabled: embSvc?.isDisabled ?? null,
+							queueStarted: embSvc?.batchQueue?.isStarted ?? null,
+							queueSize: embSvc?.batchQueue?.size ?? null,
+							durationMs: ms,
+							dim: arr.length,
+							nonZero,
+							first5: arr.slice(0, 5),
+							modelErr,
+							writeResult,
+						});
+					}
+					if (req.method === "POST" && path === "/api/inbox") {
+						const body = (await req.json()) as {
+							kind?: InboxKind;
+							title?: string;
+							body?: string;
+							source?: string;
+							channel?: string;
+							fromHandle?: string;
+							meta?: Record<string, unknown>;
+							prompt?: boolean;
+						};
+						if (!body.title) return error("title required", 400);
+						const item = await this.inbox.post({
+							kind: body.kind ?? "notification",
+							title: body.title,
+							body: body.body ?? "",
+							...(body.source ? { source: body.source } : {}),
+							...(body.channel ? { channel: body.channel } : {}),
+							...(body.fromHandle ? { fromHandle: body.fromHandle } : {}),
+							...(body.meta ? { meta: body.meta } : {}),
+							...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+						});
+						return json({ ok: true, item });
+					}
+					const inboxStatusUpdate = path.match(/^\/api\/inbox\/([^/]+)\/status$/);
+					if (req.method === "PATCH" && inboxStatusUpdate) {
+						const id = decodeURIComponent(inboxStatusUpdate[1] ?? "");
+						const body = (await req.json()) as { status?: InboxStatus };
+						if (!body.status) return error("status required", 400);
+						const updated = this.inbox.updateStatus(id, body.status);
+						if (!updated) return error("inbox item not found", 404);
+						return json({ ok: true, item: updated });
+					}
+
+					// --- Activity DB inspector (read-only) ---
+					if (req.method === "GET" && path === "/api/activity/db/tables") {
+						return json({ available: this.activity.db.available(), tables: await this.activity.db.listTables() });
+					}
+					const dbDescribe = path.match(/^\/api\/activity\/db\/tables\/([^/]+)\/([^/]+)$/);
+					if (req.method === "GET" && dbDescribe) {
+						const schema = decodeURIComponent(dbDescribe[1] ?? "");
+						const name = decodeURIComponent(dbDescribe[2] ?? "");
+						const detail = await this.activity.db.describeTable(schema, name);
+						return detail ? json(detail) : error("not found", 404);
+					}
+					if (req.method === "POST" && path === "/api/activity/db/query") {
+						const body = (await req.json()) as { sql: string };
+						try {
+							const result = await this.activity.db.query(body.sql);
+							return json(result);
+						} catch (err) {
+							const m = err instanceof Error ? err.message : String(err);
+							return error(m, 400);
+						}
+					}
+
+					// --- Activity plugins ---
+					if (req.method === "GET" && path === "/api/activity/plugins") {
+						return json(this.activity.pluginsSnapshot());
+					}
+					if (req.method === "POST" && path === "/api/activity/plugins/rebuild") {
+						const result = await this.runtime.rebuild();
+						return json({ ok: !!result, provider: result?.provider ?? null });
+					}
+
+					// --- Activity autonomy ---
+					if (req.method === "GET" && path === "/api/activity/autonomy") {
+						return json(this.activity.autonomy.snapshot());
+					}
+					if (req.method === "POST" && path === "/api/activity/autonomy/enable") {
+						const success = await this.activity.autonomy.setEnabled(true);
+						pensieveAudit({ action: "autonomy.enable", success, caller: "ui-activity", ts: Date.now() });
+						return success ? ok() : error("autonomy service not available", 400);
+					}
+					if (req.method === "POST" && path === "/api/activity/autonomy/disable") {
+						const success = await this.activity.autonomy.setEnabled(false);
+						pensieveAudit({ action: "autonomy.disable", success, caller: "ui-activity", ts: Date.now() });
+						return success ? ok() : error("autonomy service not available", 400);
+					}
+					if (req.method === "POST" && path === "/api/activity/autonomy/interval") {
+						const body = (await req.json()) as { intervalMs: number };
+						const success = await this.activity.autonomy.setIntervalMs(body.intervalMs);
+						pensieveAudit({ action: "autonomy.interval", target: String(body.intervalMs), success, caller: "ui-activity", ts: Date.now() });
+						return success ? ok() : error("could not set interval", 400);
+					}
+
 					// --- Activity tasks (heartbeat / cron / autonomous) ---
 					if (req.method === "GET" && path === "/api/activity/tasks") {
 						return json(await this.activity.tasks.snapshot());
@@ -1047,6 +1395,79 @@ export class ApiServer {
 			// best effort
 		}
 	}
+}
+
+/**
+ * Pre-flight check that a channel credential is actually valid before we
+ * commit it to vault. Each channel hits its authoritative `/me`-style
+ * endpoint with the supplied token; a non-2xx response means we reject
+ * the save and tell the user exactly what's wrong, instead of silently
+ * storing a dead token and letting the plugin fail at next runtime build.
+ *
+ * Returns `{ok: true}` on successful validation OR if we don't know how
+ * to validate the key (not a token we recognize). Returns `{ok: false,
+ * error: "..."}` only when validation actively failed (auth rejection,
+ * network reachable but bad token).
+ */
+async function validateChannelCredential(
+	key: string,
+	value: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return { ok: false, error: `${key} is empty` };
+	const TIMEOUT = 5000;
+	const fetchWithTimeout = async (url: string, init: RequestInit = {}): Promise<Response> => {
+		const ctl = new AbortController();
+		const t = setTimeout(() => ctl.abort(), TIMEOUT);
+		try {
+			return await fetch(url, { ...init, signal: ctl.signal });
+		} finally {
+			clearTimeout(t);
+		}
+	};
+	if (key === "DISCORD_API_TOKEN" || key === "DISCORD_BOT_TOKEN") {
+		try {
+			const res = await fetchWithTimeout("https://discord.com/api/v10/users/@me", {
+				headers: { Authorization: `Bot ${trimmed}` },
+			});
+			if (res.status === 401) return { ok: false, error: "Discord rejected the token (401 Unauthorized) — regenerate it in Developer Portal → Bot → Reset Token." };
+			if (res.status === 403) return { ok: false, error: "Discord rejected the token (403 Forbidden) — bot lacks required permissions." };
+			if (!res.ok) return { ok: false, error: `Discord token check failed: HTTP ${res.status}` };
+			const body = await res.json() as { username?: string; id?: string };
+			if (!body.id || !body.username) return { ok: false, error: "Discord responded but token didn't return a bot user" };
+			return { ok: true };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `Could not reach Discord to validate token: ${msg}` };
+		}
+	}
+	if (key === "TELEGRAM_BOT_TOKEN") {
+		try {
+			const res = await fetchWithTimeout(`https://api.telegram.org/bot${encodeURIComponent(trimmed)}/getMe`);
+			const body = await res.json() as { ok?: boolean; description?: string; result?: { username?: string } };
+			if (!body.ok) return { ok: false, error: `Telegram rejected the token: ${body.description ?? "unknown error"}` };
+			if (!body.result?.username) return { ok: false, error: "Telegram responded but didn't return bot info" };
+			return { ok: true };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `Could not reach Telegram to validate token: ${msg}` };
+		}
+	}
+	if (key === "OPENAI_EMBEDDING_API_KEY" || key === "OPENAI_API_KEY") {
+		try {
+			const res = await fetchWithTimeout("https://api.openai.com/v1/models", {
+				headers: { Authorization: `Bearer ${trimmed}` },
+			});
+			if (res.status === 401) return { ok: false, error: "OpenAI rejected the API key (401 Unauthorized)." };
+			if (!res.ok) return { ok: false, error: `OpenAI key check failed: HTTP ${res.status}` };
+			return { ok: true };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `Could not reach OpenAI to validate key: ${msg}` };
+		}
+	}
+	// Unknown / non-validatable key — accept silently.
+	return { ok: true };
 }
 
 /**

@@ -1,5 +1,11 @@
 import type {
+	ActivityAutonomySnapshot,
+	ActivityDbQueryResult,
+	ActivityDbTable,
+	ActivityDbTableDetail,
 	ActivityLogEntry,
+	ActivityPluginsSnapshot,
+	ChannelsSnapshot,
 	ActivityRuntimeSnapshot,
 	ActivityTasksSnapshot,
 	ActivityTrajectoryDetail,
@@ -11,6 +17,7 @@ import type {
 	OpDiagnostic,
 	OsPermissionId,
 	OsPermissionInfo,
+	PensieveEmbeddingMap,
 	PensieveEntitySummary,
 	PensieveGraphSnapshot,
 	PensieveMemoryDetail,
@@ -233,6 +240,50 @@ export class WebClient {
 	activityTasks(): Promise<ActivityTasksSnapshot> {
 		return this.json("GET", "/api/activity/tasks");
 	}
+	activityAutonomy(): Promise<ActivityAutonomySnapshot> {
+		return this.json("GET", "/api/activity/autonomy");
+	}
+	activityPlugins(): Promise<ActivityPluginsSnapshot> {
+		return this.json("GET", "/api/activity/plugins");
+	}
+	activityDbTables(): Promise<{ available: boolean; tables: ActivityDbTable[] }> {
+		return this.json("GET", "/api/activity/db/tables");
+	}
+	activityDbTable(schema: string, name: string): Promise<ActivityDbTableDetail> {
+		return this.json("GET", `/api/activity/db/tables/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`);
+	}
+	async activityDbQuery(sqlText: string): Promise<ActivityDbQueryResult> {
+		return this.json("POST", "/api/activity/db/query", { sql: sqlText });
+	}
+	async activityRebuildRuntime(): Promise<{ ok: boolean; provider: string | null }> {
+		return this.json("POST", "/api/activity/plugins/rebuild");
+	}
+
+	// --- Channels ---
+	channelsList(): Promise<ChannelsSnapshot> {
+		return this.json("GET", "/api/channels");
+	}
+	async channelSetCredential(key: string, value: string): Promise<void> {
+		await this.json("POST", "/api/channels/credentials", { key, value });
+	}
+	async channelClearCredential(key: string): Promise<void> {
+		await this.json("DELETE", `/api/channels/credentials/${encodeURIComponent(key)}`);
+	}
+	async channelsReload(): Promise<{ ok: boolean; provider: string | null }> {
+		return this.json("POST", "/api/channels/reload");
+	}
+	async discordGuilds(): Promise<{ guilds: Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> }> {
+		return this.json("GET", "/api/channels/discord/guilds");
+	}
+	async discordBackfill(channelId: string, limit = 200, force = false): Promise<{ ok: boolean; scheduled: boolean; channelId: string }> {
+		return this.json("POST", "/api/channels/discord/backfill", { channelId, limit, force });
+	}
+	async activitySetAutonomy(enabled: boolean): Promise<void> {
+		await this.json("POST", `/api/activity/autonomy/${enabled ? "enable" : "disable"}`);
+	}
+	async activitySetAutonomyInterval(intervalMs: number): Promise<void> {
+		await this.json("POST", "/api/activity/autonomy/interval", { intervalMs });
+	}
 	async activityRunTask(id: string): Promise<void> {
 		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/run`);
 	}
@@ -276,6 +327,20 @@ export class WebClient {
 	}
 	pensieveMemoryTree(): Promise<PensieveMemoryTree> {
 		return this.json("GET", "/api/pensieve/memories/tree");
+	}
+	pensieveKnowledgeStatus(): Promise<{ available: boolean }> {
+		return this.json("GET", "/api/pensieve/knowledge/status");
+	}
+	pensieveEmbeddingMap(): Promise<PensieveEmbeddingMap> {
+		return this.json("GET", "/api/pensieve/embedding-map");
+	}
+	async pensieveIngestKnowledge(input: {
+		filename: string;
+		content: string;
+		contentType?: string;
+		metadata?: Record<string, unknown>;
+	}): Promise<{ clientDocumentId: string; storedDocumentMemoryId: string; fragmentCount: number }> {
+		return this.json("POST", "/api/pensieve/knowledge/ingest", input);
 	}
 	async pensieveCreateMemory(input: {
 		text: string;
@@ -387,6 +452,41 @@ export class WebClient {
 		await this.json("DELETE", `/api/auth/flows/${encodeURIComponent(sessionId)}`);
 	}
 
+	// --- Inbox (notifications + actionable channel signals) ---
+	listInbox(opts: { status?: string; kind?: string; limit?: number } = {}): Promise<{ items: InboxItem[]; total: number }> {
+		const params = new URLSearchParams();
+		if (opts.status) params.set("status", opts.status);
+		if (opts.kind) params.set("kind", opts.kind);
+		if (opts.limit) params.set("limit", String(opts.limit));
+		const q = params.toString();
+		return this.json("GET", `/api/inbox${q ? `?${q}` : ""}`);
+	}
+	postInboxNotification(body: { title: string; body: string; prompt?: boolean }): Promise<{ ok: boolean; item: InboxItem }> {
+		return this.json("POST", "/api/inbox", { kind: "notification", ...body });
+	}
+	updateInboxStatus(id: string, status: string): Promise<{ ok: boolean; item: InboxItem }> {
+		return this.json("PATCH", `/api/inbox/${encodeURIComponent(id)}/status`, { status });
+	}
+
+	// --- Gateway (unified inbound/outbound feed across channels) ---
+	listGatewayFeed(opts: { channel?: string; direction?: string; q?: string; limit?: number } = {}): Promise<{ messages: GatewayMessage[]; total: number }> {
+		const params = new URLSearchParams();
+		if (opts.channel) params.set("channel", opts.channel);
+		if (opts.direction) params.set("direction", opts.direction);
+		if (opts.q) params.set("q", opts.q);
+		if (opts.limit) params.set("limit", String(opts.limit));
+		const q = params.toString();
+		return this.json("GET", `/api/gateway/feed${q ? `?${q}` : ""}`);
+	}
+	listGatewayIdentities(): Promise<{ identities: GatewayIdentityCandidate[] }> {
+		return this.json("GET", "/api/gateway/identities");
+	}
+
+	// --- Local llama-server status ---
+	getLlamaStatus(): Promise<LlamaServerStatus> {
+		return this.json("GET", "/api/llama/status");
+	}
+
 	private async json<T = unknown>(
 		method: string,
 		path: string,
@@ -403,4 +503,53 @@ export class WebClient {
 		}
 		return res.json() as Promise<T>;
 	}
+}
+
+export interface InboxItem {
+	readonly id: string;
+	readonly time: number;
+	readonly kind: string;
+	readonly status: string;
+	readonly title: string;
+	readonly body: string;
+	readonly source: string;
+	readonly channel?: string;
+	readonly fromHandle?: string;
+	readonly entityId?: string;
+	readonly prompted?: boolean;
+	readonly replyText?: string;
+	readonly meta?: Record<string, unknown>;
+}
+
+export interface GatewayMessage {
+	readonly id: string;
+	readonly time: number;
+	readonly direction: "in" | "out" | "deleted" | "interaction";
+	readonly channel: string;
+	readonly source: string;
+	readonly roomId: string;
+	readonly entityId: string;
+	readonly externalHandle?: string;
+	readonly text: string;
+	readonly meta?: Record<string, unknown>;
+}
+
+export interface GatewayIdentityCandidate {
+	readonly key: string;
+	readonly channel: string;
+	readonly externalHandle: string;
+	readonly entityIds: string[];
+	readonly firstSeen: number;
+	readonly lastSeen: number;
+	readonly messageCount: number;
+}
+
+export interface LlamaServerStatus {
+	readonly running: boolean;
+	readonly url: string | null;
+	readonly modelPath: string | null;
+	readonly pid: number | null;
+	readonly startedAt: number | null;
+	readonly lastError: string | null;
+	readonly downloadProgress?: { downloadedBytes: number; totalBytes: number; percent: number } | null;
 }

@@ -27,6 +27,11 @@ function applyAccent(accent: string) {
 	document.documentElement.style.setProperty("--accent", accent);
 }
 
+const PROVIDER_LABELS: Record<string, string> = {
+	openai: "Codex",
+	anthropic: "Claude",
+};
+
 export function App() {
 	const client = useMemo(() => new WebClient(), []);
 	const [connected, setConnected] = useState(false);
@@ -35,6 +40,9 @@ export function App() {
 	const [accent, setAccent] = useState("#0a84ff");
 	const [appearancePopover, setAppearancePopover] = useState(false);
 	const appearanceRef = useRef<HTMLDivElement>(null);
+	const [activeProvider, setActiveProvider] = useState<string | null>(null);
+	const [llamaReady, setLlamaReady] = useState<boolean | null>(null);
+	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
 
 	useEffect(() => {
 		client
@@ -60,8 +68,36 @@ export function App() {
 		// Listen for tray menu / global-shortcut requests to open settings.
 		const off = client.on((m) => {
 			if (m.kind === "ui:open-settings") setDrawerOpen(true);
+			else if (m.kind === "provider:changed") setActiveProvider(m.activeProvider);
 		});
-		return off;
+		// Active provider for the header chip.
+		void client.listProviders().then((ps) => {
+			setActiveProvider(ps.find((p) => p.active)?.id ?? null);
+		}).catch(() => {});
+		// Llama-server status: poll every 4s while connected. The header chip
+		// flips from "downloading" → "ready" once the bundled embedding model
+		// is loaded; gives the user visibility into first-launch progress
+		// without forcing them to open Settings → Local AI.
+		const refreshLlama = () => {
+			void client.getLlamaStatus().then((s) => {
+				setLlamaReady(s.running && !s.lastError);
+				if (s.downloadProgress && s.downloadProgress.percent < 100) {
+					setLlamaProgress({
+						percent: s.downloadProgress.percent,
+						downloaded: s.downloadProgress.downloadedBytes,
+						total: s.downloadProgress.totalBytes,
+					});
+				} else {
+					setLlamaProgress(null);
+				}
+			}).catch(() => setLlamaReady(false));
+		};
+		refreshLlama();
+		const llamaTimer = setInterval(refreshLlama, 4_000);
+		return () => {
+			off();
+			clearInterval(llamaTimer);
+		};
 	}, [client, connected]);
 
 	// Pin window while drawer is open so click-out / focus loss doesn't dismiss.
@@ -119,7 +155,56 @@ export function App() {
 	return (
 		<div className="popup-shell">
 			<header className="popup-header electrobun-webkit-app-region-drag">
-				<div className="popup-title">Detour</div>
+				<div className="popup-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+					<span>Detour</span>
+					{activeProvider && (
+						<span
+							style={{
+								fontSize: 10,
+								padding: "2px 8px",
+								borderRadius: 999,
+								background: "var(--accent, #0a84ff)",
+								color: "white",
+								opacity: 0.85,
+								fontWeight: 600,
+								letterSpacing: 0.3,
+							}}
+							title={`Active LLM provider: ${activeProvider}`}
+						>
+							via {PROVIDER_LABELS[activeProvider] ?? activeProvider}
+						</span>
+					)}
+					{llamaReady === true && !llamaProgress && (
+						<span
+							style={{
+								fontSize: 10,
+								padding: "2px 6px",
+								borderRadius: 999,
+								background: "rgba(48,209,88,0.18)",
+								color: "#30d158",
+								fontWeight: 600,
+							}}
+							title="Local embedding server is running"
+						>
+							● local
+						</span>
+					)}
+					{llamaProgress && (
+						<span
+							style={{
+								fontSize: 10,
+								padding: "2px 6px",
+								borderRadius: 999,
+								background: "rgba(255,159,10,0.18)",
+								color: "#ff9f0a",
+								fontWeight: 600,
+							}}
+							title="Downloading the bundled embedding model"
+						>
+							⇣ embed model {llamaProgress.percent}%
+						</span>
+					)}
+				</div>
 				<div className="popup-actions" style={{ WebkitAppRegion: "no-drag" } as any}>
 					<div className="appearance-wrap" ref={appearanceRef}>
 						<button

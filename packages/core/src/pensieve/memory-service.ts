@@ -269,7 +269,13 @@ export class PensieveMemoryService {
 		return { root, total: seen.size };
 	}
 
-	/** Create a memory at a path. Used by the agent's PENSIEVE_WRITE action and by ad-hoc UI imports. */
+	/** Create a memory at a path. Used by the agent's PENSIEVE_WRITE action and by ad-hoc UI imports.
+	 *
+	 *  Foreign-key safety: the `memories` table requires roomId/entityId to
+	 *  reference existing rows. We default to the agent's primary room (set
+	 *  up by RuntimeService.ensureConnection at build time) and the agent
+	 *  itself as the entity so writes from the UI/agent always succeed
+	 *  without the caller having to thread roomId through every call. */
 	async create(input: {
 		text: string;
 		path?: string;
@@ -287,6 +293,7 @@ export class PensieveMemoryService {
 			agentId?: string;
 			createMemory?: (m: Memory, table?: string) => Promise<UUID>;
 			addEmbeddingToMemory?: (m: Memory) => Promise<Memory>;
+			getRoomsForParticipant?: (entityId: string) => Promise<string[]>;
 		};
 		if (typeof r.createMemory !== "function") return null;
 		const type = input.type ?? "custom";
@@ -297,9 +304,26 @@ export class PensieveMemoryService {
 			...(Array.isArray(input.tags) ? { tags: input.tags } : {}),
 			...(input.extraMetadata ?? {}),
 		} as unknown as MemoryMetadata;
+
+		// Pick a real room: caller-provided > agent's first known room > fail.
+		// Zero-UUID would fail FK constraint on the memories.room_id column.
+		let roomId = input.roomId;
+		if (!roomId && typeof r.getRoomsForParticipant === "function" && r.agentId) {
+			try {
+				const rooms = await r.getRoomsForParticipant(r.agentId);
+				if (rooms.length > 0) roomId = rooms[0];
+			} catch { /* fall through */ }
+		}
+		if (!roomId) {
+			console.warn("[pensieve.memory.create] no room available for write — agent has no rooms yet");
+			return null;
+		}
+		const entityId = input.entityId ?? r.agentId;
+		if (!entityId) return null;
+
 		const memory: Memory = {
-			entityId: (input.entityId ?? r.agentId ?? "00000000-0000-0000-0000-000000000000") as UUID,
-			roomId: (input.roomId ?? "00000000-0000-0000-0000-000000000000") as UUID,
+			entityId: entityId as UUID,
+			roomId: roomId as UUID,
 			...(input.worldId ? { worldId: input.worldId as UUID } : {}),
 			content: { text: input.text } as Content,
 			createdAt: Date.now(),

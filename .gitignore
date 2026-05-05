@@ -9,6 +9,7 @@ artifacts/
 packages/tray/build-assets/tray/
 packages/tray/build-assets/app-icon/
 packages/tray/build-assets/pglite/
+packages/tray/build-assets/llama/
 packages/web/public/favicon-*.png
 packages/web/public/favicon.ico
 packages/web/public/apple-touch-icon.png

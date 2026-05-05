@@ -6,12 +6,15 @@
 	"scripts": {
 		"prepare:pglite": "bun scripts/prepare-pglite-assets.ts",
 		"prepare:icons": "bun scripts/build-icons.ts",
-		"prepare": "bun run prepare:icons && bun run prepare:pglite",
+		"prepare:llama": "bun scripts/prepare-llama-assets.ts",
+		"prepare:web": "bun run --cwd ../web build",
+		"prepare": "bun run prepare:icons && bun run prepare:pglite && bun run prepare:llama",
+		"prepare:prod": "bun run prepare && bun run prepare:web",
 		"start": "bun run prepare && electrobun dev",
 		"dev": "bun run prepare && electrobun dev --watch",
 		"build:dev": "bun run prepare && electrobun build --env=dev",
-		"build:canary": "bun run prepare && electrobun build --env=canary",
-		"build:stable": "bun run prepare && electrobun build --env=stable"
+		"build:canary": "bun run prepare:prod && electrobun build --env=canary",
+		"build:stable": "bun run prepare:prod && electrobun build --env=stable"
 	},
 	"dependencies": {
 		"@detour/core": "workspace:*",

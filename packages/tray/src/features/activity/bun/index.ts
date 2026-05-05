@@ -3,7 +3,7 @@ import type { WindowHandle } from "../../../bun/kernel/windows";
 
 const DEFAULT_WIDTH = 1100;
 const DEFAULT_HEIGHT = 750;
-const VITE_URL = process.env.DETOUR_DEV_URL ?? "http://localhost:5181";
+import { resolveViewUrl } from "../../../bun/kernel/view-url";
 
 /**
  * Activity = trajectories + logs + runtime introspection. Operational view
@@ -30,7 +30,7 @@ export const activityFeature: Feature = {
 				width: DEFAULT_WIDTH,
 				height: DEFAULT_HEIGHT,
 				centered: true,
-				url: `${VITE_URL}/#activity`,
+				url: resolveViewUrl("activity"),
 				rpc: {
 					maxRequestTime: 60_000,
 					handlers: { requests: {}, messages: {} },
