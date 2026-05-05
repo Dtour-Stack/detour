@@ -160,9 +160,18 @@ export interface ChannelDefinition {
 
 /** Lazy + safe loaders. Each await import() string is hardcoded so the
  *  bundler picks up the dependency, but evaluation only happens when the
- *  channel is actually being enabled — and we catch any native-dep failure. */
+ *  channel is actually being enabled — and we catch any native-dep failure.
+ *
+ *  The @ts-expect-error suppressions exist because the upstream eliza
+ *  channel plugins (plugin-telegram especially) have a tsup DTS build
+ *  step that fails on TS6.0 baseUrl deprecation in their tsconfig. We
+ *  ship them at runtime fine via Bun's source resolver, and runtime
+ *  failure is already handled by the try/catch — losing the type
+ *  surface here is the right trade.
+ */
 async function loadDiscord(): Promise<Plugin | null> {
 	try {
+		// @ts-expect-error eliza dynamic plugin — types unavailable when dist isn't built
 		const mod = await import("@elizaos/plugin-discord");
 		return pickPlugin(mod, "discord");
 	} catch (err) {
@@ -172,6 +181,7 @@ async function loadDiscord(): Promise<Plugin | null> {
 }
 async function loadTelegram(): Promise<Plugin | null> {
 	try {
+		// @ts-expect-error eliza dynamic plugin — types unavailable when dist isn't built
 		const mod = await import("@elizaos/plugin-telegram");
 		return pickPlugin(mod, "telegram");
 	} catch (err) {
@@ -182,6 +192,7 @@ async function loadTelegram(): Promise<Plugin | null> {
 async function loadImessage(): Promise<Plugin | null> {
 	if (process.platform !== "darwin") return null;
 	try {
+		// @ts-expect-error eliza dynamic plugin — types unavailable when dist isn't built
 		const mod = await import("@elizaos/plugin-imessage");
 		return pickPlugin(mod, "imessage");
 	} catch (err) {
