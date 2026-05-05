@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Detour — a playground for elizaOS agent experiments</title>
+<meta name="description" content="A macOS menu-bar app that wraps an elizaOS AgentRuntime. A developer playground for random intrusive thoughts about agents — bundled local embeddings, unified channel feed, agent-driven inbox. Expect it to break often." />
+<meta property="og:title" content="Detour — a playground for elizaOS agent experiments" />
+<meta property="og:description" content="A macOS menu-bar app wrapping an elizaOS AgentRuntime. Developer sandbox: bundled llama.cpp embeddings, unified channel gateway, agent-driven inbox. Expect breakage." />
+<meta property="og:type" content="website" />
+<link rel="icon" type="image/png" href="../packages/web/public/favicon-32.png" />
+<style>
+:root {
+  --bg: #06060a;
+  --bg-card: #0d0d14;
+  --fg: #f4f4f7;
+  --fg-muted: #8c8c9c;
+  --fg-dim: #525261;
+  --accent: #ff6b35;
+  --accent-2: #22d3ee;
+  --line: rgba(255,255,255,0.06);
+  --grad: linear-gradient(135deg, var(--accent) 0%, #ff3d7f 50%, var(--accent-2) 100%);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-feature-settings: "ss01", "ss02", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  position: relative;
+}
+
+/* Subtle film grain overlay — gives the dark surface depth */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  z-index: 1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Hero canvas fills the viewport behind the content */
+#bg-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+/* All real content sits above the canvas */
+.shell {
+  position: relative;
+  z-index: 2;
+}
+
+/* ── Nav ────────────────────────────────────────────────────────────── */
+nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28px 40px;
+  font-size: 13px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.brand .dot {
+  width: 7px; height: 7px; border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+nav .links { display: flex; gap: 28px; }
+nav a {
+  color: var(--fg-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+nav a:hover { color: var(--fg); }
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+.hero {
+  padding: 80px 40px 120px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 28px;
+  background: rgba(255,255,255,0.02);
+  backdrop-filter: blur(8px);
+}
+.tag .blip {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--accent-2);
+  box-shadow: 0 0 8px var(--accent-2);
+}
+
+h1 {
+  font-size: clamp(48px, 9vw, 128px);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  margin-bottom: 28px;
+  background: linear-gradient(180deg, var(--fg) 0%, var(--fg-muted) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+h1 .accent {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.lede {
+  font-size: clamp(18px, 2.2vw, 26px);
+  line-height: 1.45;
+  color: var(--fg-muted);
+  max-width: 720px;
+  margin-bottom: 48px;
+}
+.lede strong { color: var(--fg); font-weight: 600; }
+
+/* ── Install command box ───────────────────────────────────────────── */
+.install {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 800px;
+  margin-bottom: 24px;
+  box-shadow: 0 30px 80px -30px rgba(255, 107, 53, 0.25),
+              inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.install-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.install-label .dots span {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 999px;
+  margin-right: 4px;
+  background: var(--fg-dim);
+  opacity: 0.4;
+}
+.install-label .dots span:nth-child(1) { background: #ff5f57; }
+.install-label .dots span:nth-child(2) { background: #febc2e; }
+.install-label .dots span:nth-child(3) { background: #28c840; }
+.install-cmd {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--fg);
+  word-break: break-all;
+}
+.install-cmd .prompt { color: var(--accent); user-select: none; flex-shrink: 0; }
+.install-cmd code { flex: 1; }
+.install-cmd .copy {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.install-cmd .copy:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+  background: rgba(255,255,255,0.04);
+}
+.install-cmd .copy.copied {
+  color: var(--accent-2);
+  border-color: var(--accent-2);
+}
+
+.install-hint {
+  font-size: 13px;
+  color: var(--fg-dim);
+  margin-bottom: 56px;
+}
+.install-hint a { color: var(--fg-muted); text-decoration: underline; text-decoration-color: var(--fg-dim); }
+.install-hint a:hover { color: var(--fg); }
+
+/* ── Section spacing ───────────────────────────────────────────────── */
+section {
+  padding: 80px 40px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+section h2 {
+  font-size: clamp(32px, 4.5vw, 56px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin-bottom: 20px;
+  line-height: 1.0;
+}
+section h2 .accent {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+section .sub {
+  font-size: 17px;
+  color: var(--fg-muted);
+  max-width: 640px;
+  margin-bottom: 48px;
+  line-height: 1.55;
+}
+
+/* ── Hierarchy cards ───────────────────────────────────────────────── */
+.tiers { display: grid; gap: 16px; grid-template-columns: 1fr; }
+@media (min-width: 768px) { .tiers { grid-template-columns: repeat(3, 1fr); } }
+.tier {
+  position: relative;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-card);
+  transition: transform 0.2s, border-color 0.2s;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+.tier:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255,255,255,0.14);
+}
+.tier .order {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  margin-bottom: 18px;
+}
+.tier .name {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+.tier.eliza .name { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tier.milady .name { color: #c4b5fd; }
+.tier.detour .name { color: var(--accent); }
+.tier .desc {
+  color: var(--fg-muted);
+  line-height: 1.55;
+  font-size: 14px;
+  margin-bottom: 18px;
+  flex-grow: 1;
+}
+.tier .cta {
+  font-size: 13px;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tier .cta::after { content: "→"; transition: transform 0.2s; }
+.tier:hover .cta::after { transform: translateX(4px); }
+
+/* ── Feature grid ──────────────────────────────────────────────────── */
+.features {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 768px) { .features { grid-template-columns: repeat(2, 1fr); } }
+.feature {
+  padding: 32px 28px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.feature .icon {
+  width: 36px; height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(255, 107, 53, 0.1);
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.feature h3 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.feature p { color: var(--fg-muted); line-height: 1.55; font-size: 14px; }
+
+/* ── Stack diagram ─────────────────────────────────────────────────── */
+.stack {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 28px;
+  color: var(--fg-muted);
+  white-space: pre;
+  overflow-x: auto;
+}
+.stack .hl { color: var(--accent); }
+.stack .hl2 { color: var(--accent-2); }
+.stack .com { color: var(--fg-dim); font-style: italic; }
+
+/* ── Footer ────────────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--line);
+  padding: 40px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--fg-dim);
+  position: relative;
+  z-index: 2;
+}
+footer a { color: var(--fg-muted); text-decoration: none; margin: 0 12px; }
+footer a:hover { color: var(--fg); }
+.footer-version { font-family: ui-monospace, monospace; }
+
+@media (max-width: 640px) {
+  nav { padding: 20px; }
+  .hero { padding: 50px 20px 80px; }
+  section { padding: 50px 20px; }
+  .install { padding: 18px; }
+  .install-cmd { font-size: 12px; flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+
+<div class="shell">
+
+<nav>
+  <div class="brand">
+    <span class="dot"></span>
+    <span>Detour</span>
+  </div>
+  <div class="links">
+    <a href="#install">Install</a>
+    <a href="#hierarchy">Where it fits</a>
+    <a href="#features">Inside</a>
+    <a href="https://github.com/Dexploarer/detour" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="tag">
+    <span class="blip"></span>
+    <span>v0.3.0 — playground edition</span>
+  </div>
+
+  <h1>A <span class="accent">playground</span><br>for elizaOS<br>agent experiments.</h1>
+
+  <p class="lede">
+    A macOS menu-bar app that wraps an <strong>elizaOS</strong> AgentRuntime.
+    Chat with the agent, watch it think, browse what it remembers, hook it
+    up to Discord / Telegram / iMessage, and run a bundled local embedding
+    server — all from the tray. <strong>Expect it to break often.</strong>
+    That's the whole point.
+  </p>
+
+  <div id="install" class="install">
+    <div class="install-label">
+      <span class="dots"><span></span><span></span><span></span></span>
+      <span>install — macos arm64</span>
+    </div>
+    <div class="install-cmd">
+      <span class="prompt">$</span>
+      <code id="install-cmd-text">curl -fsSL https://raw.githubusercontent.com/Dexploarer/detour/main/scripts/install.sh | bash</code>
+      <button class="copy" id="copy-btn" aria-label="Copy install command">copy</button>
+    </div>
+  </div>
+  <p class="install-hint">
+    Apple Silicon, macOS 14+. The installer downloads the latest stable
+    release from <a href="https://github.com/Dexploarer/detour/releases" target="_blank" rel="noopener">GitHub Releases</a>,
+    strips the macOS quarantine flag, and drops <code>Detour.app</code>
+    into <code>/Applications</code>. For the rolling canary, append
+    <code>-s -- canary</code>.
+  </p>
+</header>
+
+<section id="hierarchy">
+  <h2>Where Detour <span class="accent">fits.</span></h2>
+  <p class="sub">
+    There's a hierarchy here. Pick the one that matches what you're trying
+    to do, not the one with the prettiest landing page.
+  </p>
+
+  <div class="tiers">
+    <a class="tier eliza" href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">
+      <div class="order">01 — the framework</div>
+      <div class="name">elizaOS</div>
+      <div class="desc">
+        The agent runtime, the plugin protocol, the upstream. The thing
+        I actually care about. If you want to <strong>understand or build
+        on top of</strong> any of this, start here.
+      </div>
+      <span class="cta">elizaOS/eliza</span>
+    </a>
+
+    <a class="tier milady" href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">
+      <div class="order">02 — the polished app</div>
+      <div class="name">Milady</div>
+      <div class="desc">
+        The supported, consumer-facing eliza app. Desktop and mobile,
+        larger plugin surface, broader skills. <strong>If you want a
+        complete experience, use Milady.</strong>
+      </div>
+      <span class="cta">milady-ai/milady</span>
+    </a>
+
+    <a class="tier detour" href="https://github.com/Dexploarer/detour" target="_blank" rel="noopener">
+      <div class="order">03 — the playground</div>
+      <div class="name">Detour</div>
+      <div class="desc">
+        A developer's experimental sandbox — the way <em>I</em> choose
+        to run an eliza stack on my machine. Random intrusive thoughts
+        about agents land here first. <strong>Will break.</strong>
+      </div>
+      <span class="cta">you are here</span>
+    </a>
+  </div>
+</section>
+
+<section id="features">
+  <h2>What's <span class="accent">in the box.</span></h2>
+  <p class="sub">
+    The slice of capabilities I'm actively running today. Subject to
+    rearrangement at the speed of curiosity.
+  </p>
+
+  <div class="features">
+    <div class="feature">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <h3>Chat with Codex/ChatGPT</h3>
+      <p>Tray popup talks to your existing ChatGPT subscription via the system Codex CLI. No API key, no re-auth. Auto-detects from <code>~/.codex/auth.json</code>.</p>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
+      <h3>Local embeddings, bundled</h3>
+      <p>llama.cpp server ships inside the .app. bge-small-en-v1.5, 384-dim, ~30 ms per embedding. Auto-downloads the model on first launch. No network after that. No API key. Free.</p>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </div>
+      <h3>Unified channel feed</h3>
+      <p>Every inbound + outbound message across Discord, Telegram, iMessage, and the in-app chat lands in one timeline. Recorded by a <code>ChannelGateway</code> that hooks elizaOS's MESSAGE_RECEIVED / MESSAGE_SENT events.</p>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      </div>
+      <h3>Inbox that drives the agent</h3>
+      <p>Programmatic notifications go through the <em>real</em> eliza pipeline — <code>messageService.handleMessage</code> → planner → action → REPLY. Captures the agent's reply text and back-annotates the inbox item.</p>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </div>
+      <h3>Pensieve memory browser</h3>
+      <p>Obsidian-style browser for the agent's memories, relationships, and the cross-cutting graph. Vector + substring search using the local embeddings.</p>
+    </div>
+
+    <div class="feature">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </div>
+      <h3>Activity inspector</h3>
+      <p>Trajectories with the full LLM call sequence (prompt + response + duration), live runtime introspection, raw PGlite query console, log filtering. Watch your agent think.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>The <span class="accent">stack.</span></h2>
+  <p class="sub">
+    Single .app bundle. No Electron, no Chromium. Bun runtime in-process,
+    Electrobun for the native shell, llama.cpp for embeddings, PGlite
+    for memory.
+  </p>
+
+  <div class="stack">
+<span class="com">Detour.app</span>
+├── <span class="hl">Electrobun launcher</span>      <span class="com">native macOS shell, single .app artifact</span>
+├── <span class="hl">Bun runtime</span>              <span class="com">in-process API + WebSocket on :2138</span>
+│   ├── @detour/core               <span class="com">composition root, vault, channels, gateway, inbox, llama</span>
+│   ├── @detour/plugin-codex-chatgpt    <span class="com">chat via chatgpt.com/backend-api/codex</span>
+│   ├── @detour/plugin-embedding-openai <span class="com">OpenAI-compat client → local llama-server</span>
+│   ├── @detour/plugin-pensieve-tools   <span class="com">PENSIEVE_* actions for the agent</span>
+│   ├── @detour/plugin-vault-tools      <span class="com">VAULT_* / LOGIN_* actions</span>
+│   └── <span class="hl2">llama-server</span>              <span class="com">llama.cpp embedding endpoint, lazy-spawned</span>
+└── <span class="hl">React UI</span>                 <span class="com">Vite-built; views:// in prod, localhost:5180 in dev</span>
+    ├── Chat popup
+    ├── Pensieve         <span class="com">Inbox · Channel feed · Memories · Relationships · Graph</span>
+    ├── Activity         <span class="com">Trajectories · Logs · Tasks · Plugins · Runtime</span>
+    ├── Channels         <span class="com">Discord · Telegram · iMessage</span>
+    └── Settings         <span class="com">Configuration · Vault · Local AI</span>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <div>
+    <a href="https://github.com/Dexploarer/detour" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/Dexploarer/detour/releases" target="_blank" rel="noopener">Releases</a>
+    <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">elizaOS</a>
+    <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>
+  </div>
+  <div style="margin-top: 16px; opacity: 0.6;">
+    Detour is a developer playground.
+    Stable experience: <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>.
+    Framework: <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">elizaOS</a>.
+  </div>
+  <div style="margin-top: 8px;" class="footer-version">v0.3.0 · MIT</div>
+</footer>
+
+<script>
+// ── Copy button ────────────────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById("copy-btn");
+  const txt = document.getElementById("install-cmd-text");
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(txt.textContent.trim());
+      const old = btn.textContent;
+      btn.textContent = "copied";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = old;
+        btn.classList.remove("copied");
+      }, 1500);
+    } catch (e) {
+      // older Safari may need execCommand fallback
+      const range = document.createRange();
+      range.selectNodeContents(txt);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+})();
+
+// ── Particle network background ────────────────────────────────────────
+// Knowledge-graph aesthetic: soft nodes drift, gravity towards each other,
+// edges drawn whenever two nodes are within a proximity radius. The whole
+// thing is a single accent-tinted layer at low alpha so the page text stays
+// dominant. Designed to feel like an agent's relationship graph slowly
+// rearranging itself.
+(function() {
+  const canvas = document.getElementById("bg-canvas");
+  const ctx = canvas.getContext("2d");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  let w, h, nodes;
+  const NODE_COUNT = 64;
+  const LINK_DIST = 160;
+  const ACCENT = [255, 107, 53];   // matches --accent
+  const ACCENT2 = [34, 211, 238];   // matches --accent-2
+
+  function resize() {
+    w = canvas.clientWidth = window.innerWidth;
+    h = canvas.clientHeight = window.innerHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+  }
+
+  function makeNodes() {
+    nodes = [];
+    for (let i = 0; i < NODE_COUNT; i++) {
+      nodes.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: (Math.random() - 0.5) * 0.25,
+        r: 1.2 + Math.random() * 1.8,
+        // each node sits slightly between accent and accent2 — gives the
+        // graph a duotone shimmer instead of a flat color.
+        mix: Math.random(),
+      });
+    }
+  }
+
+  let mouse = { x: -9999, y: -9999 };
+  window.addEventListener("mousemove", (e) => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+  });
+  window.addEventListener("mouseleave", () => {
+    mouse.x = -9999;
+    mouse.y = -9999;
+  });
+
+  function lerpColor(a, b, t) {
+    return [
+      Math.round(a[0] + (b[0] - a[0]) * t),
+      Math.round(a[1] + (b[1] - a[1]) * t),
+      Math.round(a[2] + (b[2] - a[2]) * t),
+    ];
+  }
+
+  function tick() {
+    ctx.clearRect(0, 0, w, h);
+
+    // Subtle radial gradient from cursor — adds a "you are here" warmth
+    // without being a literal cursor follower (which would feel toy-like).
+    if (mouse.x > -1000) {
+      const grad = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, 320);
+      grad.addColorStop(0, "rgba(255, 107, 53, 0.06)");
+      grad.addColorStop(1, "rgba(255, 107, 53, 0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // Update + draw nodes
+    for (const n of nodes) {
+      n.x += n.vx;
+      n.y += n.vy;
+      // wrap-around so the graph never feels boxed-in
+      if (n.x < -10) n.x = w + 10;
+      if (n.x > w + 10) n.x = -10;
+      if (n.y < -10) n.y = h + 10;
+      if (n.y > h + 10) n.y = -10;
+
+      const c = lerpColor(ACCENT, ACCENT2, n.mix);
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, 0.55)`;
+      ctx.fill();
+    }
+
+    // Edges
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < LINK_DIST * LINK_DIST) {
+          const d = Math.sqrt(d2);
+          const t = 1 - d / LINK_DIST;
+          const c = lerpColor(ACCENT, ACCENT2, (a.mix + b.mix) / 2);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.strokeStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${0.18 * t})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+      // Cursor influence — pull nearby nodes a tiny bit
+      if (mouse.x > -1000) {
+        const a = nodes[i];
+        const dx = mouse.x - a.x, dy = mouse.y - a.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 220 * 220 && d2 > 1) {
+          const d = Math.sqrt(d2);
+          const t = 1 - d / 220;
+          a.vx += (dx / d) * t * 0.02;
+          a.vy += (dy / d) * t * 0.02;
+        }
+      }
+      // Friction so the cursor pull doesn't accumulate forever
+      nodes[i].vx *= 0.985;
+      nodes[i].vy *= 0.985;
+      // Floor on velocity so nodes don't fully stop
+      const sp2 = nodes[i].vx * nodes[i].vx + nodes[i].vy * nodes[i].vy;
+      if (sp2 < 0.001) {
+        nodes[i].vx += (Math.random() - 0.5) * 0.05;
+        nodes[i].vy += (Math.random() - 0.5) * 0.05;
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  resize();
+  makeNodes();
+  tick();
+
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resize();
+      makeNodes();
+    }, 150);
+  });
+
+  // Honor reduced-motion preference
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    nodes.forEach((n) => { n.vx *= 0.1; n.vy *= 0.1; });
+  }
+})();
+</script>
+
+</body>
+</html>
