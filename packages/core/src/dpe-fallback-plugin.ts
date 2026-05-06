@@ -4,9 +4,11 @@ import {
 	type Plugin,
 	type State,
 } from "@elizaos/core";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const WRAPPED = Symbol.for("detour.dpeFallback.wrapped");
 const PLANNER_FIELDS = new Set(["thought", "actions", "providers", "text", "simple"]);
+const plannerContext = new AsyncLocalStorage<{ source: string; addressed: boolean }>();
 
 type DynamicPromptArgs = Parameters<IAgentRuntime["dynamicPromptExecFromState"]>[0];
 type DynamicPromptResult = Awaited<ReturnType<IAgentRuntime["dynamicPromptExecFromState"]>>;
@@ -21,6 +23,18 @@ function isResponsePlanner(args: DynamicPromptArgs): boolean {
 		if (!fields.has(field)) return false;
 	}
 	return true;
+}
+
+export function runWithPlannerFallbackContext<T>(
+	context: { source: string; addressed: boolean },
+	run: () => T,
+): T {
+	return plannerContext.run(context, run);
+}
+
+function shouldUsePlainReply(args: DynamicPromptArgs): boolean {
+	const context = plannerContext.getStore();
+	return isResponsePlanner(args) && context?.source === "discord" && context.addressed;
 }
 
 function conversationText(state: State | undefined): string {
@@ -95,6 +109,10 @@ export function installDpeFallbackPatch(runtime: IAgentRuntime): void {
 	wrapped.dynamicPromptExecFromState = async (
 		args: DynamicPromptArgs,
 	): Promise<DynamicPromptResult> => {
+		if (shouldUsePlainReply(args)) {
+			const fallback = await fallbackPlannerReply(runtime, args, "discord-addressed");
+			if (fallback) return fallback;
+		}
 		try {
 			const result = await original(args);
 			if (result || !isResponsePlanner(args)) return result;

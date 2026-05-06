@@ -7,6 +7,7 @@ import type {
 	MessageProcessingResult,
 	Plugin,
 } from "@elizaos/core";
+import { runWithPlannerFallbackContext } from "./dpe-fallback-plugin";
 
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
@@ -66,8 +67,15 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 		callback?: HandlerCallback,
 		options?: MessageProcessingOptions,
 	): Promise<MessageProcessingResult> => {
-		markMention(callRuntime, message);
-		return handleMessage(callRuntime, message, callback, options);
+		const marked = markMention(callRuntime, message);
+		const mentionContext = message.content.mentionContext;
+		const addressed = marked ||
+			mentionContext?.isMention === true ||
+			mentionContext?.isReply === true;
+		return runWithPlannerFallbackContext(
+			{ source: "discord", addressed },
+			() => handleMessage(callRuntime, message, callback, options),
+		);
 	};
 	service[WRAPPED] = true;
 }
