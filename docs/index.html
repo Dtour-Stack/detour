@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Detour — a playground for elizaOS agent experiments</title>
-<meta name="description" content="A macOS menu-bar app that wraps an elizaOS AgentRuntime. A developer playground for random intrusive thoughts about agents — bundled local embeddings, unified channel feed, agent-driven inbox. Expect it to break often." />
+<meta name="description" content="A macOS menu-bar app wrapping an elizaOS AgentRuntime. A developer's experimental sandbox where I cash in random intrusive thoughts about agents. For the polished experience use Milady. For the framework use elizaOS. Expect Detour to break often — that's the whole point." />
 <meta property="og:title" content="Detour — a playground for elizaOS agent experiments" />
-<meta property="og:description" content="A macOS menu-bar app wrapping an elizaOS AgentRuntime. Developer sandbox: bundled llama.cpp embeddings, unified channel gateway, agent-driven inbox. Expect breakage." />
+<meta property="og:description" content="The way I choose to run an eliza stack on my own machine. Bundled local llama.cpp embeddings, unified channel gateway, agent-driven inbox. For supported eliza use Milady. Expect breakage." />
 <meta property="og:type" content="website" />
 <meta property="og:image" content="assets/favicon-512.png" />
 <link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
@@ -159,6 +159,16 @@ h1 .accent {
   margin-bottom: 48px;
 }
 .lede strong { color: var(--fg); font-weight: 600; }
+.lede em { color: var(--fg-muted); font-style: italic; opacity: 0.85; }
+.lede a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+  transition: color 0.15s;
+}
+.lede a:hover { color: var(--accent); }
 
 /* ── Install command box ───────────────────────────────────────────── */
 .install {
@@ -605,10 +615,14 @@ footer a:hover { color: var(--fg); }
 
   <p class="lede">
     A macOS menu-bar app that wraps an <strong>elizaOS</strong> AgentRuntime.
-    Chat with the agent, watch it think, browse what it remembers, hook it
-    up to Discord / Telegram / iMessage, and run a bundled local embedding
-    server — all from the tray. <strong>Expect it to break often.</strong>
-    That's the whole point.
+    The way <strong>I</strong> choose to run an eliza stack on my own
+    machine — a tray-app sandbox where I cash in on random intrusive thoughts
+    about agents. <em>"What if the inbox prompted the agent through the real
+    reply pipeline?" "What if I bundled llama.cpp for free local embeddings?"
+    "What if the tray icon told me whether the agent was alive?"</em>
+    <strong>Expect it to break often.</strong> That's the whole point of
+    having a sandbox separate from <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">eliza</a> and
+    <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>.
   </p>
 
   <div id="install" class="install">
@@ -809,12 +823,18 @@ footer a:hover { color: var(--fg); }
     <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">elizaOS</a>
     <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>
   </div>
-  <div style="margin-top: 16px; opacity: 0.6;">
-    Detour is a developer playground.
-    Stable experience: <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>.
-    Framework: <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">elizaOS</a>.
+  <div style="margin-top: 16px; opacity: 0.7;">
+    Want a complete, supported eliza experience? Use
+    <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>.
+    Want to study or build on the framework? Use
+    <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">elizaOS</a>.
+    Detour is the place to watch me poke at it.
   </div>
-  <div style="margin-top: 8px;" class="footer-version">v0.3.0 · MIT</div>
+  <div style="margin-top: 12px; opacity: 0.55; font-size: 12px;">
+    🐿 This site was built by <strong>Detour itself</strong> — the agent inside the app.
+    The mascot is canon (matches the <code>agent.detour-squirrel.*</code> vault entries).
+  </div>
+  <div style="margin-top: 12px;" class="footer-version">v0.3.0 · MIT · made on a tray icon</div>
 </footer>
 
 <script>
