@@ -49,6 +49,33 @@ export interface XPostResult {
 	error?: string;
 }
 
+type XCreateTweetResult = {
+	rest_id?: string;
+	id_str?: string;
+	id?: string | number;
+	legacy?: {
+		id_str?: string;
+	};
+	tweet?: {
+		rest_id?: string;
+		id_str?: string;
+		legacy?: {
+			id_str?: string;
+		};
+	};
+};
+
+type XCreateTweetResponse = {
+	errors?: Array<{ code?: number; message?: string }>;
+	data?: {
+		create_tweet?: {
+			tweet_results?: {
+				result?: XCreateTweetResult;
+			};
+		};
+	};
+};
+
 export interface XViewer {
 	userId: string;
 	screenName: string;
@@ -90,6 +117,16 @@ export interface XNotification {
 	tweetId?: string;
 	fromUserScreenName?: string;
 	kind: "mention" | "reply" | "like" | "retweet" | "follow" | "other";
+}
+
+function createTweetResultId(result: XCreateTweetResult | undefined): string | undefined {
+	return result?.rest_id
+		?? result?.id_str
+		?? (result?.id !== undefined ? String(result.id) : undefined)
+		?? result?.legacy?.id_str
+		?? result?.tweet?.rest_id
+		?? result?.tweet?.id_str
+		?? result?.tweet?.legacy?.id_str;
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────
@@ -320,16 +357,13 @@ export class XClient {
 				const text = await response.text();
 				return { success: false, error: `HTTP ${response.status}: ${text.slice(0, 200)}` };
 			}
-			const data = (await response.json()) as {
-				errors?: Array<{ code?: number; message?: string }>;
-				data?: { create_tweet?: { tweet_results?: { result?: { rest_id?: string } } } };
-			};
+			const data = (await response.json()) as XCreateTweetResponse;
 			if (data.errors && data.errors.length > 0) {
 				const fallback = await this.maybeFallbackOnErrors(data.errors, variables);
 				if (fallback) return fallback;
 				return { success: false, error: this.formatErrors(data.errors) };
 			}
-			const tweetId = data.data?.create_tweet?.tweet_results?.result?.rest_id;
+			const tweetId = createTweetResultId(data.data?.create_tweet?.tweet_results?.result);
 			if (tweetId) {
 				return { success: true, tweetId, url: `https://x.com/i/web/status/${tweetId}` };
 			}

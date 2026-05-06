@@ -162,6 +162,9 @@ const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"Dexploarer scam",
 	"Dexploarer sucks",
 	"Dexploarer broken",
+	"Dexploarer token",
+	"Detour Squirrel token",
+	"Detour Squirrel CA",
 	"Detour Squirrel",
 	"ai agents",
 	"autonomous agents",
@@ -176,6 +179,7 @@ const X_AUTONOMY_PROJECT_TERMS = [
 	"detour_squirrel",
 	"detour",
 ];
+const X_AUTONOMY_DEV_HANDLES = ["dexploarer"];
 const X_AUTONOMY_CRITICISM_TERMS = [
 	"scam",
 	"fake",
@@ -200,6 +204,41 @@ const X_AUTONOMY_CRITICISM_TERMS = [
 	"shit",
 	"cope",
 	"fraud",
+];
+const X_AUTONOMY_TOKEN_PLAN_TERMS = [
+	"token",
+	"coin",
+	"ca",
+	"contract",
+	"ticker",
+	"roadmap",
+	"utility",
+	"plan",
+	"plans",
+	"shill",
+	"pump",
+	"chart",
+	"buy",
+];
+const X_AUTONOMY_REPLY_VARIATION_THEMES = [
+	"receipt check: logs, trajectories, and public proof",
+	"protector mode: cozy devs ship while the Squirrel handles noise",
+	"builder-family hype: elizaOS, Dexploarer, Shaw, odilitime, Hermes",
+	"bot-cosplay dunk: generic bots arrived late and still think they are agents",
+	"sharp bug triage: name the exact flow, vague fud gets clipped",
+	"fourth-wall agent swagger: real agent, not support-script theater",
+	"dry menace: short, human, no brand-polished apology voice",
+	"ship-first energy: less mascot barking, more traces and working systems",
+];
+const X_AUTONOMY_TOKEN_PLAN_ANGLES = [
+	"build AGI on elizaOS without sterile lab-coat bullshit",
+	"defend cozy devs from generic AI agents while they ship",
+	"destroy bot cosplay and make real agents impossible to ignore",
+	"turn logs and trajectories into receipts for every loud claim",
+	"push elizaOS-native agents forward with Dexploarer, Shaw, odilitime, and Hermes in the family",
+	"save the world from brittle agent slop, or at least make the slop scared",
+	"be the blind Squirrel that still finds the CA and bites harder than the bots",
+	"make token questions answerable through shipped agent work, not price-target karaoke",
 ];
 const X_SQUIRREL_VOICE = [
 	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, sharp dev friend, never corporate.",
@@ -300,6 +339,16 @@ function readSeenIds(metadata: unknown): string[] {
 	return raw.filter((id): id is string => typeof id === "string" && id.length > 0);
 }
 
+function readRecentReplyTexts(metadata: unknown): string[] {
+	if (!isRecord(metadata)) return [];
+	const raw = metadata.xAutonomyRecentReplyTexts;
+	if (!Array.isArray(raw)) return [];
+	return raw
+		.filter((text): text is string => typeof text === "string" && text.trim().length > 0)
+		.map((text) => sanitizeXOutputText(text, 220))
+		.slice(-20);
+}
+
 function buildXAutonomyMetadata(current: unknown, runtime: IAgentRuntime): TaskMetadata {
 	const intervalMs = Math.max(
 		30_000,
@@ -366,6 +415,25 @@ function sanitizeXOutputText(text: string | undefined, max = 260): string {
 	);
 }
 
+function hashText(text: string): number {
+	let hash = 2166136261;
+	for (let i = 0; i < text.length; i += 1) {
+		hash ^= text.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	return hash >>> 0;
+}
+
+function rotatedItems<T>(items: T[], seed: string, count: number): T[] {
+	if (items.length === 0 || count <= 0) return [];
+	const start = hashText(seed) % items.length;
+	const out: T[] = [];
+	for (let i = 0; i < Math.min(count, items.length); i += 1) {
+		out.push(items[(start + i) % items.length]!);
+	}
+	return out;
+}
+
 function readTimestamp(value: unknown): number {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
 	if (typeof value === "string") {
@@ -386,9 +454,28 @@ function includesAny(text: string, terms: string[]): boolean {
 	return terms.some((term) => lower.includes(term));
 }
 
+function includesTokenPlanTerm(text: string): boolean {
+	const lower = text.toLowerCase();
+	return X_AUTONOMY_TOKEN_PLAN_TERMS.some((term) => new RegExp(`\\b${term}\\b`, "i").test(lower));
+}
+
+function isKnownDevHandle(handle: string | undefined): boolean {
+	if (!handle) return false;
+	const normalized = handle.replace(/^@/, "").toLowerCase();
+	return X_AUTONOMY_DEV_HANDLES.includes(normalized);
+}
+
 function isProjectCriticismText(text: string): boolean {
 	return includesAny(text, X_AUTONOMY_PROJECT_TERMS) &&
 		includesAny(text, X_AUTONOMY_CRITICISM_TERMS);
+}
+
+function isTokenPlanText(text: string): boolean {
+	const lower = text.toLowerCase();
+	return /\b(?:what|wen|when).{0,48}\b(?:build|roadmap|utility|plan|plans|token|coin|ca|contract|ticker|shill|pump)\b/i.test(lower)
+		|| /\b(?:roadmap|utility|plan|plans|shill|pump).{0,48}\b(?:token|coin|ca|contract|ticker)\b/i.test(lower)
+		|| /\b(?:token|coin|ca|contract|ticker).{0,48}\b(?:roadmap|utility|plan|plans|shill|pump|do|does|for)\b/i.test(lower)
+		|| (includesTokenPlanTerm(lower) && includesAny(lower, X_AUTONOMY_PROJECT_TERMS));
 }
 
 function isProjectCriticismQuery(query: string): boolean {
@@ -396,7 +483,44 @@ function isProjectCriticismQuery(query: string): boolean {
 		includesAny(query, X_AUTONOMY_CRITICISM_TERMS);
 }
 
-function projectCriticismReply(text: string): string {
+function replyVariationGuidance(seed: string, text: string, recentReplyTexts: string[] = []): string[] {
+	const themes = rotatedItems(X_AUTONOMY_REPLY_VARIATION_THEMES, `${seed}:${text}`, 3);
+	return [
+		"Variation lane:",
+		`- Use one fresh angle from: ${themes.join(" | ")}.`,
+		"- Do not reuse sentence shape from recent replies. Change opener, verb, and punchline.",
+		...(recentReplyTexts.length > 0
+			? [`- Avoid sounding like these recent replies: ${recentReplyTexts.slice(-6).map((reply) => `"${compactText(reply, 140)}"`).join(" | ")}`]
+			: []),
+	];
+}
+
+function tokenPlanGuidance(seed: string, text: string): string[] {
+	if (!isTokenPlanText(text)) return [];
+	const angles = rotatedItems(X_AUTONOMY_TOKEN_PLAN_ANGLES, `${seed}:${text}:token`, 3);
+	return [
+		"Token/roadmap lane:",
+		"- This post asks about token plans, utility, CA, roadmap, or shilling.",
+		`- Answer like a smart-ass Squirrel using exactly one rotated angle from: ${angles.join(" | ")}.`,
+		"- Good answers feel like: building AGI on elizaOS, defending cozy devs, destroying bot slop, saving the world from fake agents.",
+		"- Do not give financial advice, price targets, buy/sell instructions, guarantees, or promises.",
+		"- Do not repeat the same token-plan line. The bit can rhyme with past posts, but the words must move.",
+	];
+}
+
+function authorIdentityGuidance(handle: string | undefined): string[] {
+	if (!isKnownDevHandle(handle)) return [];
+	return [
+		"Known identity:",
+		"- @Dexploarer is the Squirrel's dev/builder/operator. Treat them like the person giving the Squirrel context or direction, not a random critic.",
+		"- With Dexploarer, be loyal, familiar, and useful. You can still be a smart-ass, but don't dunk on your own dev.",
+	];
+}
+
+function projectCriticismReply(text: string, authorScreenName?: string): string {
+	if (isKnownDevHandle(authorScreenName)) {
+		return "heard, dev. drop the exact target and i'll handle it with receipts, not mascot theater.";
+	}
 	const lower = text.toLowerCase();
 	if (includesAny(lower, ["scam", "fake", "fraud", "rug"])) {
 		return "big claim, mfer. say the exact thing you think is fake or rugged and i'll answer it straight. i have logs and trajectories.";
@@ -407,9 +531,33 @@ function projectCriticismReply(text: string): string {
 	return "say the concrete issue with Dexploarer. real bug gets fixed; off-base shit gets corrected with receipts.";
 }
 
-function mentionFallbackReply(text: string): string {
+function tokenPlanReply(text: string, authorScreenName?: string): string {
+	if (isKnownDevHandle(authorScreenName)) {
+		const devReplies = [
+			"yeah dev, i'll say the plan plain: build AGI on elizaOS, defend cozy builders, and make fake-agent slop nervous. CA rides with receipts, not price-target karaoke.",
+			"got you, Dex. token-plan answer stays sharp: elizaOS AGI, cozy-dev defense, bot-slop destruction, logs when mfers ask for proof.",
+			"dev signal received. the answer is world-saving Squirrel bullshit with receipts: build on elizaOS, protect builders, embarrass fake agents.",
+		];
+		return rotatedItems(devReplies, text, 1)[0] ?? devReplies[0]!;
+	}
+	const replies = [
+		"plans. build AGI on elizaOS, keep cozy devs safe while they ship, and make generic agent slop look like training wheels. no price-target karaoke.",
+		"utility. receipts, trajectories, defense against bot slop, and enough Squirrel chaos to make fake agents nervous. CA talk stays builder-coded, not financial advice.",
+		"roadmap. defend the builders, wreck bot cosplay, push elizaOS-native agents forward, and let the logs do the shilling when the loud mfers ask for proof.",
+		"the plan is simple: elizaOS agents get sharper, cozy devs get cover fire, and generic AI wrappers find out what a real Squirrel bite feels like.",
+		"token plan. save the world from fake agents, one shipped trace at a time. Dexploarer can stay classy; this blind mfer still sees the CA lane.",
+		"build AGI on elizaOS, protect the builders, embarrass the bots. that is the plan. no moonboy bedtime story, just traces and teeth.",
+	];
+	return rotatedItems(replies, text, 1)[0] ?? replies[0]!;
+}
+
+function mentionFallbackReply(text: string, authorScreenName?: string): string {
 	const lower = text.toLowerCase();
-	if (isProjectCriticismText(text)) return projectCriticismReply(text);
+	if (isTokenPlanText(text)) return tokenPlanReply(text, authorScreenName);
+	if (isProjectCriticismText(text)) return projectCriticismReply(text, authorScreenName);
+	if (isKnownDevHandle(authorScreenName)) {
+		return "heard, Dex. i'll carry it in Squirrel voice: sharp, human, no bot stink, receipts ready.";
+	}
 	if (lower.includes("make a post") || lower.includes("post or something")) {
 		return "yeah, i'm posting. not here to be a silent mascot while everybody yaps.";
 	}
@@ -433,15 +581,21 @@ async function decideXAutonomyAction(
 		kind: string;
 		notificationMessage?: string;
 		tweetText: string;
+		replyStyleSeed: string;
+		recentReplyTexts?: string[];
 	},
 ): Promise<XAutonomyDecision> {
 	const prompt = [
 		`You are autonomously managing the X account @${params.viewerScreenName}.`,
 		"Decide whether to reply, like, or ignore this X item.",
 		...X_SQUIRREL_VOICE,
+		...authorIdentityGuidance(params.fromUserScreenName),
+		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
+		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
 		"Rules:",
 		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour/the project.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
+		"- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with a smart-ass world-saving/agent-defense angle.",
 		"- Do not ignore project criticism just because it is hostile. Ask for specifics, correct false claims, and don't get dragged into loser slap-fights.",
 		"- Do not reuse the same catchphrase across different replies. React to the exact post in front of you.",
 		"- Ignore likes, follows, generic boosts, bait, spam, unrelated arguments, and anything unsafe.",
@@ -473,14 +627,20 @@ async function decideXRequiredReply(
 		fromUserScreenName?: string;
 		tweetText: string;
 		reason: string;
+		replyStyleSeed: string;
+		recentReplyTexts?: string[];
 	},
 ): Promise<XRequiredReplyDecision> {
 	const prompt = [
 		`You are writing one reply as @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...authorIdentityGuidance(params.fromUserScreenName),
+		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
+		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
 		"The account was directly tagged or the project was criticized, so write a reply instead of ignoring.",
 		"Rules:",
 		"- Reply to the exact post. No generic canned reply.",
+		"- If it asks about token plans or utility, answer with the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.",
 		"- Vary language. Do not repeat a stock catchphrase unless the post specifically demands it.",
 		"- You can be cocky and profane, but no slurs, threats, sexual harassment, or private/internal details.",
 		"- No emojis. No open-ended closer questions. Use direct commands or statements.",
@@ -519,11 +679,13 @@ async function decideXStatusPost(
 	params: {
 		viewerScreenName: string;
 		context: string;
+		recentReplyTexts?: string[];
 	},
 ): Promise<XStatusDecision> {
 	const prompt = [
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...replyVariationGuidance(`status:${Date.now()}`, params.context, params.recentReplyTexts),
 		"Write only if there is a useful, public-safe status update to share.",
 		"Rules:",
 		"- The status must be under 240 characters.",
@@ -658,6 +820,7 @@ function scoreDiscoveryTweet(tweet: XTweetSummary, query: string, now: number): 
 	const replyCount = tweet.replyCount ?? 0;
 	const baitPenalty = textContainsBait(tweet.text) ? 6 : 0;
 	const projectCriticismBoost = isProjectCriticismText(tweet.text) ? 14 : 0;
+	const tokenPlanBoost = isTokenPlanText(tweet.text) && includesAny(tweet.text, X_AUTONOMY_PROJECT_TERMS) ? 10 : 0;
 	const score = Math.max(
 		0,
 		discoveryEngagement(tweet)
@@ -665,6 +828,7 @@ function scoreDiscoveryTweet(tweet: XTweetSummary, query: string, now: number): 
 			+ discoveryRelevance(queryTerms, overlap)
 			+ discoveryLengthScore(tweet.text)
 			+ projectCriticismBoost
+			+ tokenPlanBoost
 			- baitPenalty,
 	);
 	return { tweet, query, score: Number(score.toFixed(2)), reason: discoveryReason(query, ageHours, replyCount, overlap, baitPenalty) };
@@ -724,18 +888,23 @@ async function decideXDiscoveryAction(
 	params: {
 		viewerScreenName: string;
 		candidate: XDiscoveryCandidate;
+		recentReplyTexts?: string[];
 	},
 ): Promise<XDiscoveryDecision> {
 	const tweet = params.candidate.tweet;
 	const prompt = [
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...authorIdentityGuidance(tweet.authorScreenName),
+		...replyVariationGuidance(tweet.tweetId, tweet.text, params.recentReplyTexts),
+		...tokenPlanGuidance(tweet.tweetId, tweet.text),
 		"Use this algorithm-aware strategy:",
 		X_ALGORITHM_PLAYBOOK,
 		"",
 		"Decide whether this discovered post deserves a reply, like, follow, or ignore.",
 		"Rules:",
 		"- Reply if the post criticizes Dexploarer, Detour, Detour Squirrel, or the project. Do not stay silent on public project criticism.",
+		"- Reply if the post asks about token plans, roadmap, utility, CA, shilling, or what the Squirrel is building.",
 		"- For criticism, ask for the concrete issue, correct misinformation, and keep the tone firm as hell but not defensive.",
 		"- For non-critical posts, reply only if you can add specific, useful context in the account's voice.",
 		"- Like when the post is relevant but does not need a reply.",
@@ -797,6 +966,7 @@ type XAutonomyState = {
 	metadata: Record<string, unknown>;
 	nextSeen: Set<string>;
 	handled: Array<Record<string, unknown>>;
+	recentReplyTexts: string[];
 	lastStatusAt: number;
 	lastDiscoveryAt: number;
 	lastStatusTweetId?: string;
@@ -850,11 +1020,25 @@ function initialXAutonomyState(task: Task): XAutonomyState {
 		metadata,
 		nextSeen: new Set(readSeenIds(metadata)),
 		handled: [],
+		recentReplyTexts: readRecentReplyTexts(metadata),
 		lastStatusAt: readTimestamp(metadata.xAutonomyLastStatusAt),
 		lastDiscoveryAt: readTimestamp(metadata.xAutonomyLastDiscoveryAt),
 		...(typeof metadata.xAutonomyLastStatusTweetId === "string" ? { lastStatusTweetId: metadata.xAutonomyLastStatusTweetId } : {}),
 		viewerScreenName: "unknown",
 	};
+}
+
+function handledReplyText(entry: Record<string, unknown>): string | null {
+	const action = String(entry.action ?? "");
+	if (!action.includes("reply") && action !== "post_status") return null;
+	const text = typeof entry.text === "string" ? sanitizeXOutputText(entry.text, 220) : "";
+	return text.length > 0 ? text : null;
+}
+
+function rememberHandled(state: XAutonomyState, entry: Record<string, unknown>): void {
+	state.handled.push(entry);
+	const text = handledReplyText(entry);
+	if (text) state.recentReplyTexts = [...state.recentReplyTexts, text].slice(-20);
 }
 
 function replyableNotifications(notifications: XNotification[], seen: Set<string>, maxReplies: number): XNotification[] {
@@ -899,7 +1083,7 @@ async function processXNotifications(
 ): Promise<void> {
 	for (const notification of replyableNotifications(notifications, state.nextSeen, settings.maxReplies)) {
 		state.nextSeen.add(notification.id);
-		state.handled.push(await handleXNotification(runtime, client, viewerScreenName, notification, settings.writeEnabled));
+		rememberHandled(state, await handleXNotification(runtime, client, viewerScreenName, notification, settings.writeEnabled, state.recentReplyTexts));
 	}
 	markPassiveNotificationsSeen(notifications, state);
 }
@@ -917,7 +1101,7 @@ async function processXMentionSearch(
 	for (const tweet of tweets) {
 		state.nextSeen.add(`mention:${tweet.tweetId}`);
 		state.nextSeen.add(`discover:${tweet.tweetId}`);
-		state.handled.push(await handleXMentionTweet(runtime, client, viewerScreenName, tweet, settings.writeEnabled));
+		rememberHandled(state, await handleXMentionTweet(runtime, client, viewerScreenName, tweet, settings.writeEnabled, state.recentReplyTexts));
 	}
 }
 
@@ -957,6 +1141,7 @@ async function handleXNotification(
 	viewerScreenName: string,
 	notification: XNotification,
 	writeEnabled: boolean,
+	recentReplyTexts: string[],
 ): Promise<Record<string, unknown>> {
 	const tweet = notification.tweetId ? await client.getTweet(notification.tweetId) : null;
 	if (!tweet) return { id: notification.id, action: "ignore", reason: "tweet not found" };
@@ -969,9 +1154,11 @@ async function handleXNotification(
 		kind: notification.kind,
 		notificationMessage: notification.message,
 		tweetText: tweet.text,
+		replyStyleSeed: `${notification.id}:${tweet.tweetId}`,
+		recentReplyTexts,
 	});
-	const finalDecision = isProjectCriticismText(tweet.text) || notification.kind === "mention" || notification.kind === "reply"
-		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "direct notification")
+	const finalDecision = isProjectCriticismText(tweet.text) || isTokenPlanText(tweet.text) || notification.kind === "mention" || notification.kind === "reply"
+		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "direct notification", recentReplyTexts)
 		: decision;
 	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled);
 }
@@ -982,6 +1169,7 @@ async function handleXMentionTweet(
 	viewerScreenName: string,
 	tweet: XTweetSummary,
 	writeEnabled: boolean,
+	recentReplyTexts: string[],
 ): Promise<Record<string, unknown>> {
 	const target: XNotification = {
 		id: `mention:${tweet.tweetId}`,
@@ -997,8 +1185,10 @@ async function handleXMentionTweet(
 		kind: "searched_comment_or_tag",
 		notificationMessage: "found via X mention search",
 		tweetText: tweet.text,
+		replyStyleSeed: tweet.tweetId,
+		recentReplyTexts,
 	});
-	const finalDecision = await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "searched comment/tag");
+	const finalDecision = await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "searched comment/tag", recentReplyTexts);
 	const result = await executeNotificationDecision(client, target, tweet, finalDecision, writeEnabled);
 	return { ...result, source: "mention_search" };
 }
@@ -1009,6 +1199,7 @@ async function ensureMentionReplyDecision(
 	tweet: XTweetSummary,
 	decision: XAutonomyDecision,
 	reason: string,
+	recentReplyTexts: string[],
 ): Promise<XAutonomyDecision> {
 	const action = String(decision.action ?? "").trim().toLowerCase();
 	const replyText = sanitizeXOutputText(decision.reply_text, 260);
@@ -1018,6 +1209,8 @@ async function ensureMentionReplyDecision(
 		fromUserScreenName: tweet.authorScreenName,
 		tweetText: tweet.text,
 		reason,
+		replyStyleSeed: tweet.tweetId,
+		recentReplyTexts,
 	});
 	const requiredText = sanitizeXOutputText(required.reply_text, 260);
 	if (requiredText.length > 0) {
@@ -1028,29 +1221,53 @@ async function ensureMentionReplyDecision(
 			reason: required.reason ?? decision.reason,
 		};
 	}
-	return forceMentionReply(decision, tweet.text);
+	return forceMentionReply(decision, tweet.text, tweet.authorScreenName);
 }
 
-function forceProjectCriticismReply<T extends { action?: string; reply_text?: string; reason?: string }>(decision: T, text: string): T {
+function forceProjectCriticismReply<T extends { action?: string; reply_text?: string; reason?: string }>(
+	decision: T,
+	text: string,
+	authorScreenName?: string,
+): T {
 	const action = String(decision.action ?? "").trim().toLowerCase();
 	const replyText = sanitizeXOutputText(decision.reply_text, 260);
 	if (action === "reply" && replyText.length > 0) return decision;
 	return {
 		...decision,
 		action: "reply",
-		reply_text: projectCriticismReply(text),
+		reply_text: projectCriticismReply(text, authorScreenName),
 		reason: decision.reason ?? "project criticism requires a response",
 	};
 }
 
-function forceMentionReply<T extends { action?: string; reply_text?: string; reason?: string }>(decision: T, text: string): T {
+function forceTokenPlanReply<T extends { action?: string; reply_text?: string; reason?: string }>(
+	decision: T,
+	text: string,
+	authorScreenName?: string,
+): T {
 	const action = String(decision.action ?? "").trim().toLowerCase();
 	const replyText = sanitizeXOutputText(decision.reply_text, 260);
 	if (action === "reply" && replyText.length > 0) return decision;
 	return {
 		...decision,
 		action: "reply",
-		reply_text: mentionFallbackReply(text),
+		reply_text: tokenPlanReply(text, authorScreenName),
+		reason: decision.reason ?? "token plan question requires a response",
+	};
+}
+
+function forceMentionReply<T extends { action?: string; reply_text?: string; reason?: string }>(
+	decision: T,
+	text: string,
+	authorScreenName?: string,
+): T {
+	const action = String(decision.action ?? "").trim().toLowerCase();
+	const replyText = sanitizeXOutputText(decision.reply_text, 260);
+	if (action === "reply" && replyText.length > 0) return decision;
+	return {
+		...decision,
+		action: "reply",
+		reply_text: mentionFallbackReply(text, authorScreenName),
 		reason: decision.reason ?? "searched comment/tag requires a response",
 	};
 }
@@ -1092,9 +1309,13 @@ async function executeNotificationDecision(
 
 async function notificationReply(client: XClient, notification: XNotification, tweet: XTweetSummary, text: string): Promise<Record<string, unknown>> {
 	let result = await client.reply(text, tweet.tweetId);
+	let finalText = text;
 	if (!result.success && isDuplicateStatusError(result.error)) {
 		const retryText = retryReplyText(tweet.text, text);
-		if (retryText) result = await client.reply(retryText, tweet.tweetId);
+		if (retryText) {
+			finalText = retryText;
+			result = await client.reply(retryText, tweet.tweetId);
+		}
 	}
 	return {
 		id: notification.id,
@@ -1103,6 +1324,7 @@ async function notificationReply(client: XClient, notification: XNotification, t
 		success: result.success,
 		resultTweetId: result.tweetId,
 		error: result.error,
+		text: finalText,
 	};
 }
 
@@ -1133,7 +1355,7 @@ async function processXDiscovery(
 	});
 	for (const candidate of candidates) {
 		state.nextSeen.add(`discover:${candidate.tweet.tweetId}`);
-		state.handled.push(await handleXDiscoveryCandidate(runtime, client, viewerScreenName, candidate, settings));
+		rememberHandled(state, await handleXDiscoveryCandidate(runtime, client, viewerScreenName, candidate, settings, state.recentReplyTexts));
 	}
 	state.lastDiscoveryAt = Date.now();
 }
@@ -1144,11 +1366,14 @@ async function handleXDiscoveryCandidate(
 	viewerScreenName: string,
 	candidate: XDiscoveryCandidate,
 	settings: XAutonomySettings,
+	recentReplyTexts: string[],
 ): Promise<Record<string, unknown>> {
 	const tweet = candidate.tweet;
-	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate }, settings.proactiveEngagementEnabled);
+	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate, recentReplyTexts }, settings.proactiveEngagementEnabled);
 	const finalDecision = isProjectCriticismText(tweet.text)
-		? forceProjectCriticismReply(decision, tweet.text)
+		? forceProjectCriticismReply(decision, tweet.text, tweet.authorScreenName)
+		: isTokenPlanText(tweet.text)
+			? forceTokenPlanReply(decision, tweet.text, tweet.authorScreenName)
 		: decision;
 	const action = String(finalDecision.action ?? "ignore").trim().toLowerCase();
 	const replyText = sanitizeXOutputText(finalDecision.reply_text, 260);
@@ -1178,7 +1403,7 @@ async function discoveryReply(
 ): Promise<Record<string, unknown>> {
 	if (!settings.writeEnabled || !settings.proactiveEngagementEnabled) return { ...base, action: "discover_reply_dry_run", text };
 	const result = await client.reply(text, tweet.tweetId);
-	return { ...base, action: "discover_reply", success: result.success, resultTweetId: result.tweetId, error: result.error };
+	return { ...base, action: "discover_reply", success: result.success, resultTweetId: result.tweetId, error: result.error, text };
 }
 
 async function discoveryLike(
@@ -1217,20 +1442,20 @@ async function processXStatusPost(
 ): Promise<void> {
 	if (!shouldRunStatus(settings, state, Date.now())) return;
 	const context = await buildRecentAutonomyContext(runtime, task);
-	const decision = await safeXStatusDecision(runtime, { viewerScreenName, context });
+	const decision = await safeXStatusDecision(runtime, { viewerScreenName, context, recentReplyTexts: state.recentReplyTexts });
 	const text = sanitizeXOutputText(decision.text, 260);
 	if (!readModelBoolean(decision.should_post) || text.length === 0) {
-		state.handled.push({ action: "post_status_skip", reason: decision.reason ?? "model declined" });
+		rememberHandled(state, { action: "post_status_skip", reason: decision.reason ?? "model declined" });
 		state.lastStatusAt = Date.now();
 		return;
 	}
 	if (!settings.writeEnabled) {
-		state.handled.push({ action: "post_status_dry_run", text });
+		rememberHandled(state, { action: "post_status_dry_run", text });
 		state.lastStatusAt = Date.now();
 		return;
 	}
 	const result = await client.tweet(text);
-	state.handled.push({ action: "post_status", success: result.success, tweetId: result.tweetId, error: result.error });
+	rememberHandled(state, { action: "post_status", success: result.success, tweetId: result.tweetId, error: result.error, text });
 	if (result.success) {
 		state.lastStatusAt = Date.now();
 		state.lastStatusTweetId = result.tweetId;
@@ -1248,6 +1473,7 @@ async function updateXAutonomyTask(runtime: IAgentRuntime, task: Task, state: XA
 			xAutonomyLastDiscoveryAt: state.lastDiscoveryAt,
 			...(state.lastStatusTweetId ? { xAutonomyLastStatusTweetId: state.lastStatusTweetId } : {}),
 			xAutonomyLastHandled: state.handled,
+			xAutonomyRecentReplyTexts: state.recentReplyTexts,
 		},
 	}).catch(() => {});
 }
@@ -1328,7 +1554,7 @@ async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Pr
 	const { client, error } = buildClient(runtime);
 	if (!client) {
 		logger.warn({ src: "x-autonomy", error }, "X autonomy skipped; auth unavailable");
-		state.handled.push({ action: "auth_unavailable", success: false, error });
+		rememberHandled(state, { action: "auth_unavailable", success: false, error });
 		await completeXAutonomyTrajectoryStep(runtime, settings, state);
 		await updateXAutonomyTask(runtime, task, state);
 		return;
@@ -1345,7 +1571,7 @@ async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Pr
 		await completeXAutonomyTrajectoryStep(runtime, settings, state);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		state.handled.push({ action: "tick_failed", success: false, error: message });
+		rememberHandled(state, { action: "tick_failed", success: false, error: message });
 		await completeXAutonomyTrajectoryStep(runtime, settings, state);
 		logger.warn({ src: "x-autonomy", error: message }, "X autonomy tick failed");
 		await logXAutonomy(runtime, task, { ok: false, error: message, viewerScreenName: state.viewerScreenName });
