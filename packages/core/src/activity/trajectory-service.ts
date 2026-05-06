@@ -239,6 +239,40 @@ function flattenAccumulator(): FlattenAccumulator {
 	};
 }
 
+const LLM_STRING_FIELDS = [
+	"systemPrompt",
+	"userPrompt",
+	"response",
+	"reasoning",
+	"purpose",
+	"stepType",
+	"actionType",
+] as const;
+
+const LLM_NUMBER_FIELDS = ["temperature", "maxTokens"] as const;
+
+function llmStringFields(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+	const fields: Partial<ActivityLlmCall> = {};
+	for (const key of LLM_STRING_FIELDS) {
+		const value = asString(call[key]);
+		if (value !== undefined) fields[key] = value;
+	}
+	return fields;
+}
+
+function llmNumberFields(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+	const fields: Partial<ActivityLlmCall> = {};
+	for (const key of LLM_NUMBER_FIELDS) {
+		const value = asNumber(call[key]);
+		if (value !== undefined) fields[key] = value;
+	}
+	return fields;
+}
+
+function llmTags(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+	return Array.isArray(call.tags) ? { tags: call.tags.map(String) } : {};
+}
+
 function normalizeLlmCall(
 	call: Record<string, unknown>,
 	stepNumber: number,
@@ -256,19 +290,12 @@ function normalizeLlmCall(
 			stepNumber,
 			timestamp: asNumber(call.timestamp) ?? 0,
 			model: asString(call.model) ?? "?",
-			...(asString(call.systemPrompt) !== undefined && { systemPrompt: asString(call.systemPrompt)! }),
-			...(asString(call.userPrompt) !== undefined && { userPrompt: asString(call.userPrompt)! }),
-			...(asString(call.response) !== undefined && { response: asString(call.response)! }),
-			...(asString(call.reasoning) !== undefined && { reasoning: asString(call.reasoning)! }),
-			...(asNumber(call.temperature) !== undefined && { temperature: asNumber(call.temperature)! }),
-			...(asNumber(call.maxTokens) !== undefined && { maxTokens: asNumber(call.maxTokens)! }),
+			...llmStringFields(call),
+			...llmNumberFields(call),
 			promptTokens,
 			completionTokens,
 			...(latencyMs !== undefined && { latencyMs }),
-			...(asString(call.purpose) !== undefined && { purpose: asString(call.purpose)! }),
-			...(asString(call.stepType) !== undefined && { stepType: asString(call.stepType)! }),
-			...(asString(call.actionType) !== undefined && { actionType: asString(call.actionType)! }),
-			...(Array.isArray(call.tags) && { tags: (call.tags as unknown[]).map(String) }),
+			...llmTags(call),
 		},
 	};
 }

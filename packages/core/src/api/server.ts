@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import type { Memory, UUID } from "@elizaos/core";
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,13 +11,13 @@ import type { BackendOps, InstallableBackendId } from "../backend-ops";
 import type { ConfigService } from "../config-service";
 import type { ActivityService } from "../activity";
 import type { ChannelsService } from "../channels";
-import type { ChannelGatewayService } from "../channels/gateway";
+import type { ChannelGatewayService, GatewayChannel, GatewayDirection, ListOptions as GatewayListOptions } from "../channels/gateway";
 import type { CronService } from "../cron-service";
 import type { OwnerBindService, OwnerConnector } from "../owner-bind";
 import { newTraceId, traceScope } from "../trace";
 import type { InboxService, InboxKind, InboxStatus } from "../inbox";
 import type { LlamaServerService } from "../llama/server-service";
-import type { PensieveService } from "../pensieve";
+import type { GraphFilter, PensieveService } from "../pensieve";
 import { pensieveAudit } from "../pensieve";
 import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
 import { fetchOpenRouterModels } from "../openrouter-models";
@@ -117,6 +118,77 @@ function optionalBoolean(bag: Record<string, unknown>, key: string): boolean | u
 	return typeof bag[key] === "boolean" ? bag[key] : undefined;
 }
 
+function optionalTypeError(bag: Record<string, unknown>, key: string, expected: "boolean" | "number"): string | null {
+	return bag[key] !== undefined && typeof bag[key] !== expected ? `${key} must be ${expected}` : null;
+}
+
+function parseChroniclerConfig(raw: unknown): { ok: true; body: Partial<ChroniclerConfig> } | { ok: false; error: string } {
+	const body = recordValue(raw);
+	if (!body) return { ok: false, error: "invalid chronicler config" };
+	const typeError =
+		optionalTypeError(body, "enabled", "boolean")
+		?? optionalTypeError(body, "includeWindowTitles", "boolean")
+		?? optionalTypeError(body, "intervalMs", "number")
+		?? optionalTypeError(body, "maxWindowsPerScreen", "number");
+	if (typeError) return { ok: false, error: typeError };
+	return {
+		ok: true,
+		body: {
+			...(optionalBoolean(body, "enabled") !== undefined ? { enabled: optionalBoolean(body, "enabled") } : {}),
+			...(optionalNumber(body, "intervalMs") !== undefined ? { intervalMs: optionalNumber(body, "intervalMs") } : {}),
+			...(optionalBoolean(body, "includeWindowTitles") !== undefined ? { includeWindowTitles: optionalBoolean(body, "includeWindowTitles") } : {}),
+			...(optionalNumber(body, "maxWindowsPerScreen") !== undefined ? { maxWindowsPerScreen: optionalNumber(body, "maxWindowsPerScreen") } : {}),
+		},
+	};
+}
+
+function searchString(url: URL, key: string): string | undefined {
+	return url.searchParams.get(key) ?? undefined;
+}
+
+function searchNumber(url: URL, key: string): number | undefined {
+	const value = url.searchParams.get(key);
+	return value ? Number(value) : undefined;
+}
+
+function searchCsv(url: URL, key: string): string[] {
+	return (url.searchParams.get(key) ?? "").split(",").filter(Boolean);
+}
+
+function gatewayListOptions(url: URL): GatewayListOptions {
+	const opts: GatewayListOptions = {};
+	const channel = searchString(url, "channel");
+	const direction = searchString(url, "direction");
+	if (channel) opts.channel = channel as GatewayChannel;
+	if (direction) opts.direction = direction as GatewayDirection;
+	const roomId = searchString(url, "roomId");
+	const entityId = searchString(url, "entityId");
+	const q = searchString(url, "q");
+	const since = searchNumber(url, "since");
+	const limit = searchNumber(url, "limit");
+	if (roomId) opts.roomId = roomId;
+	if (entityId) opts.entityId = entityId;
+	if (q) opts.q = q;
+	if (since !== undefined) opts.since = since;
+	if (limit !== undefined) opts.limit = limit;
+	return opts;
+}
+
+function pensieveGraphFilter(url: URL): GraphFilter {
+	const filter: GraphFilter = {};
+	const dateFrom = searchNumber(url, "dateFrom");
+	const dateTo = searchNumber(url, "dateTo");
+	const entityIds = searchCsv(url, "entityIds");
+	const types = searchCsv(url, "types");
+	const tags = searchCsv(url, "tags");
+	if (dateFrom !== undefined) filter.dateFrom = dateFrom;
+	if (dateTo !== undefined) filter.dateTo = dateTo;
+	if (entityIds.length > 0) filter.entityIds = entityIds;
+	if (types.length > 0) filter.types = types;
+	if (tags.length > 0) filter.tags = tags;
+	return filter;
+}
+
 function parseBrowserOpenCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
 	const url = optionalString(bag, "url")?.trim() ?? "";
 	if (!url || url.length > 2048) return null;
@@ -187,6 +259,62 @@ type BrowserControlGlobal = {
 	enqueue(command: BrowserCommandInput): BrowserCommand;
 	enqueueAndWait(command: BrowserCommandInput, timeoutMs?: number): Promise<BrowserCommandResult>;
 };
+
+type DebugEmbeddingBody = { text?: string; storeAs?: string };
+type DebugEmbeddingRuntime = {
+	useModel?: (type: string, params: { text: string }) => Promise<unknown>;
+	getModel?: (type: string) => unknown;
+	getService?: (type: string) => unknown;
+	adapter?: { embeddingDimension?: string };
+	createMemory?: (memory: Memory, table: string) => Promise<string>;
+	updateMemory?: (memory: { id: string; embedding: number[] }) => Promise<boolean>;
+	agentId?: UUID;
+};
+type DebugEmbeddingWriteResult = { ok: boolean; memoryId?: string; error?: string };
+type DebugEmbeddingModelResult = { vector: number[]; modelErr: string | null; durationMs: number };
+
+function embeddingVector(value: unknown): number[] {
+	return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number") : [];
+}
+
+async function runDebugEmbeddingModel(runtime: DebugEmbeddingRuntime, text: string): Promise<DebugEmbeddingModelResult> {
+	let raw: unknown = null;
+	let modelErr: string | null = null;
+	const t0 = Date.now();
+	try {
+		if (runtime.useModel) raw = await runtime.useModel("TEXT_EMBEDDING", { text });
+	} catch (err) {
+		modelErr = err instanceof Error ? err.message : String(err);
+	}
+	return {
+		vector: embeddingVector(raw),
+		modelErr,
+		durationMs: Date.now() - t0,
+	};
+}
+
+async function writeDebugEmbedding(
+	runtime: DebugEmbeddingRuntime,
+	body: DebugEmbeddingBody,
+	text: string,
+	embedding: number[],
+): Promise<DebugEmbeddingWriteResult | null> {
+	if (!body.storeAs || !runtime.createMemory || !runtime.updateMemory) return null;
+	if (!runtime.agentId) return null;
+	try {
+		const memId = await runtime.createMemory({
+			entityId: runtime.agentId,
+			roomId: runtime.agentId,
+			agentId: runtime.agentId,
+			content: { text, source: "debug" },
+			createdAt: Date.now(),
+		}, body.storeAs);
+		await runtime.updateMemory({ id: memId, embedding });
+		return { ok: true, memoryId: String(memId) };
+	} catch (err) {
+		return { ok: false, error: err instanceof Error ? err.message : String(err) };
+	}
+}
 
 export type WindowCommand =
 	| { kind: "hide" }
@@ -313,6 +441,219 @@ export class ApiServer {
 		private readonly cron: CronService,
 		private readonly ownerBind: OwnerBindService,
 	) {}
+
+	private async updateChroniclerConfig(ctx: ApiRequestContext): Promise<Response> {
+		const parsed = parseChroniclerConfig(await ctx.req.json());
+		if (!parsed.ok) return ctx.error(parsed.error, 400);
+		const current = this.pensieve.chronicler.getConfig();
+		const next = await this.pensieve.chronicler.configure({
+			enabled: parsed.body.enabled ?? current.enabled,
+			intervalMs: parsed.body.intervalMs ?? current.intervalMs,
+			includeWindowTitles: parsed.body.includeWindowTitles ?? current.includeWindowTitles,
+			maxWindowsPerScreen: parsed.body.maxWindowsPerScreen ?? current.maxWindowsPerScreen,
+		});
+		pensieveAudit({
+			action: "chronicler.configure",
+			success: true,
+			target: next.enabled ? "enabled" : "disabled",
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return ctx.json(next);
+	}
+
+	private async updateMemory(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+		const id = decodeURIComponent(rawId) as never;
+		const body = (await ctx.req.json()) as { contentText?: string; tags?: string[]; path?: string };
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.memories.update(id, body);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "memory.update",
+			target: rawId,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "update failed", 400);
+	}
+
+	private async deleteMemory(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+		const id = decodeURIComponent(rawId) as never;
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.memories.remove(id);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "memory.delete",
+			target: rawId,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "delete failed", 400);
+	}
+
+	private async createRelationship(ctx: ApiRequestContext): Promise<Response> {
+		const body = (await ctx.req.json()) as Parameters<typeof this.pensieve.relationships.create>[0];
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.relationships.create(body);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "relationship.create",
+			target: `${String(body.sourceEntityId)}↔${String(body.targetEntityId)}`,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "create failed", 400);
+	}
+
+	private async updateRelationship(ctx: ApiRequestContext, rawSource: string, rawTarget: string): Promise<Response> {
+		const source = decodeURIComponent(rawSource) as never;
+		const target = decodeURIComponent(rawTarget) as never;
+		const body = (await ctx.req.json()) as { tags?: string[]; metadata?: Record<string, unknown> };
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.relationships.update(source, target, body);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "relationship.update",
+			target: `${rawSource}↔${rawTarget}`,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "update failed", 400);
+	}
+
+	private async deleteRelationship(ctx: ApiRequestContext, rawSource: string, rawTarget: string): Promise<Response> {
+		const source = decodeURIComponent(rawSource) as never;
+		const target = decodeURIComponent(rawTarget) as never;
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.relationships.remove(source, target);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "relationship.delete",
+			target: `${rawSource}↔${rawTarget}`,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "delete failed", 400);
+	}
+
+	private async updateTemplate(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+		const id = decodeURIComponent(rawId);
+		const body = (await ctx.req.json()) as { body?: string; tags?: string[]; path?: string };
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.templates.updateTemplate(id, body);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "template.update",
+			target: id,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "update failed", 400);
+	}
+
+	private async deleteTemplate(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+		const id = decodeURIComponent(rawId);
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.pensieve.templates.deleteTemplate(id);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "template.delete",
+			target: id,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-pensieve",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "delete failed", 400);
+	}
+
+	private async debugEmbedding(ctx: ApiRequestContext): Promise<Response> {
+		const body = (await ctx.req.json().catch(() => ({}))) as DebugEmbeddingBody;
+		const text = body.text ?? "hello world";
+		const live = this.runtime.peek();
+		if (!live) return ctx.error("runtime not built", 503);
+		const runtime = live as DebugEmbeddingRuntime;
+		const model = await runDebugEmbeddingModel(runtime, text);
+		const embSvc = runtime.getService?.("embedding-generation") as {
+			isDisabled?: boolean;
+			batchQueue?: { size?: number; isStarted?: boolean } | null;
+		} | null | undefined;
+		const writeResult = await writeDebugEmbedding(runtime, body, text, model.vector);
+		return ctx.json({
+			hasModel: runtime.getModel?.("TEXT_EMBEDDING") !== undefined,
+			adapterEmbeddingDimension: runtime.adapter?.embeddingDimension ?? null,
+			embeddingServiceRegistered: embSvc !== null && embSvc !== undefined,
+			embeddingServiceDisabled: embSvc?.isDisabled ?? null,
+			queueStarted: embSvc?.batchQueue?.isStarted ?? null,
+			queueSize: embSvc?.batchQueue?.size ?? null,
+			durationMs: model.durationMs,
+			dim: model.vector.length,
+			nonZero: model.vector.filter((n) => Math.abs(n) > 1e-9).length,
+			first5: model.vector.slice(0, 5),
+			modelErr: model.modelErr,
+			writeResult,
+		});
+	}
+
+	private async deleteActivityTask(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+		const id = decodeURIComponent(rawId);
+		let success = false;
+		let errMsg: string | undefined;
+		try {
+			success = await this.activity.tasks.remove(id);
+		} catch (err) {
+			errMsg = err instanceof Error ? err.message : String(err);
+		}
+		pensieveAudit({
+			action: "task.delete",
+			target: id,
+			success,
+			...(errMsg ? { error: errMsg } : {}),
+			caller: "ui-activity",
+			ts: Date.now(),
+		});
+		return success ? ctx.ok() : ctx.error(errMsg ?? "delete failed", 400);
+	}
 
 	async start(preferredPort = 2138): Promise<{ port: number }> {
 		this.installBrowserControlGlobal();
@@ -449,7 +790,7 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path, ok } = ctx;
 			const setKey = path.match(/^\/api\/providers\/([^/]+)\/key$/);
 			if (req.method === "PUT" && setKey) {
 				const id = setKey[1] as ProviderId;
@@ -463,6 +804,11 @@ export class ApiServer {
 				});
 				return ok();
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path, ok } = ctx;
+			const setKey = path.match(/^\/api\/providers\/([^/]+)\/key$/);
 			if (req.method === "DELETE" && setKey) {
 				const id = setKey[1] as ProviderId;
 				await this.vault.removeProviderKey(id);
@@ -475,6 +821,10 @@ export class ApiServer {
 				});
 				return ok();
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path, ok } = ctx;
 			if (req.method === "PUT" && path === "/api/providers/active") {
 				const body = (await req.json()) as SetActiveProviderBody;
 				await this.vault.setActiveProvider(body.id);
@@ -485,15 +835,27 @@ export class ApiServer {
 				});
 				return ok();
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/backends") {
 				const manager = await this.vault.manager();
 				return json(await manager.detectBackends());
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/backends/enabled") {
 				const manager = await this.vault.manager();
 				const prefs = await manager.getPreferences();
 				return json({ enabled: prefs.enabled });
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path, ok, error } = ctx;
 			if (req.method === "PUT" && path === "/api/backends/enabled") {
 				const body = (await req.json()) as SetEnabledBackendsBody;
 				const enabled = parseBackendIds(body.enabled);
@@ -1060,40 +1422,9 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path } = ctx;
 			if (req.method === "PUT" && path === "/api/pensieve/chronicler/config") {
-				const raw = (await req.json()) as Partial<ChroniclerConfig> | null;
-				if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-					return error("invalid chronicler config", 400);
-				}
-				const body = raw;
-				if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
-					return error("enabled must be boolean", 400);
-				}
-				if (body.includeWindowTitles !== undefined && typeof body.includeWindowTitles !== "boolean") {
-					return error("includeWindowTitles must be boolean", 400);
-				}
-				if (body.intervalMs !== undefined && typeof body.intervalMs !== "number") {
-					return error("intervalMs must be number", 400);
-				}
-				if (body.maxWindowsPerScreen !== undefined && typeof body.maxWindowsPerScreen !== "number") {
-					return error("maxWindowsPerScreen must be number", 400);
-				}
-				const current = this.pensieve.chronicler.getConfig();
-				const next = await this.pensieve.chronicler.configure({
-					enabled: body.enabled ?? current.enabled,
-					intervalMs: body.intervalMs ?? current.intervalMs,
-					includeWindowTitles: body.includeWindowTitles ?? current.includeWindowTitles,
-					maxWindowsPerScreen: body.maxWindowsPerScreen ?? current.maxWindowsPerScreen,
-				});
-				pensieveAudit({
-					action: "chronicler.configure",
-					success: true,
-					target: next.enabled ? "enabled" : "disabled",
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return json(next);
+				return this.updateChroniclerConfig(ctx);
 			}
 			return null;
 		},
@@ -1210,7 +1541,7 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path, json, error } = ctx;
 			const memGet = path.match(/^\/api\/pensieve\/memories\/([^/]+)$/);
 			if (req.method === "GET" && memGet) {
 				const id = decodeURIComponent(memGet[1] ?? "") as never;
@@ -1219,45 +1550,26 @@ export class ApiServer {
 				const backlinks = await this.pensieve.graph.backlinksForMemory(memGet[1] ?? "");
 				return json({ ...detail, backlinks });
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path } = ctx;
+			const memGet = path.match(/^\/api\/pensieve\/memories\/([^/]+)$/);
 			if (req.method === "PATCH" && memGet) {
-				const id = decodeURIComponent(memGet[1] ?? "") as never;
-				const body = (await req.json()) as { contentText?: string; tags?: string[]; path?: string };
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.memories.update(id, body);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "memory.update",
-					target: memGet[1],
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "update failed", 400);
+				return this.updateMemory(ctx, memGet[1] ?? "");
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path } = ctx;
+			const memGet = path.match(/^\/api\/pensieve\/memories\/([^/]+)$/);
 			if (req.method === "DELETE" && memGet) {
-				const id = decodeURIComponent(memGet[1] ?? "") as never;
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.memories.remove(id);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "memory.delete",
-					target: memGet[1],
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "delete failed", 400);
+				return this.deleteMemory(ctx, memGet[1] ?? "");
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, url, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/pensieve/relationships/persons") {
 				const limit = Number(url.searchParams.get("limit") ?? 100);
 				return json(await this.pensieve.relationships.listPersons(limit));
@@ -1265,7 +1577,7 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path, json, error } = ctx;
 			const personGet = path.match(/^\/api\/pensieve\/relationships\/([^/]+)$/);
 			if (req.method === "GET" && personGet) {
 				const id = decodeURIComponent(personGet[1] ?? "") as never;
@@ -1273,76 +1585,38 @@ export class ApiServer {
 				if (!detail) return error("not found", 404);
 				return json(detail);
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, url, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/pensieve/relationships") {
 				const ids = (url.searchParams.get("entityIds") ?? "").split(",").filter(Boolean) as never[];
 				const tags = (url.searchParams.get("tags") ?? "").split(",").filter(Boolean);
 				const limit = Number(url.searchParams.get("limit") ?? 200);
 				return json(await this.pensieve.relationships.listRelationships(ids, tags, limit));
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path } = ctx;
 			if (req.method === "POST" && path === "/api/pensieve/relationships") {
-				const body = (await req.json()) as Parameters<typeof this.pensieve.relationships.create>[0];
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.relationships.create(body);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "relationship.create",
-					target: `${body?.sourceEntityId}↔${body?.targetEntityId}`,
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "create failed", 400);
+				return this.createRelationship(ctx);
 			}
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path } = ctx;
 			const relPair = path.match(/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/);
 			if (req.method === "PATCH" && relPair) {
-				const source = decodeURIComponent(relPair[1] ?? "") as never;
-				const target = decodeURIComponent(relPair[2] ?? "") as never;
-				const body = (await req.json()) as { tags?: string[]; metadata?: Record<string, unknown> };
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.relationships.update(source, target, body);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "relationship.update",
-					target: `${relPair[1]}↔${relPair[2]}`,
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "update failed", 400);
+				return this.updateRelationship(ctx, relPair[1] ?? "", relPair[2] ?? "");
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path } = ctx;
+			const relPair = path.match(/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/);
 			if (req.method === "DELETE" && relPair) {
-				const source = decodeURIComponent(relPair[1] ?? "") as never;
-				const target = decodeURIComponent(relPair[2] ?? "") as never;
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.relationships.remove(source, target);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "relationship.delete",
-					target: `${relPair[1]}↔${relPair[2]}`,
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "delete failed", 400);
+				return this.deleteRelationship(ctx, relPair[1] ?? "", relPair[2] ?? "");
 			}
 			return null;
 		},
@@ -1381,51 +1655,28 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path, json, error } = ctx;
 			const tplDetail = path.match(/^\/api\/pensieve\/templates\/([^/]+)$/);
 			if (req.method === "GET" && tplDetail) {
 				const id = decodeURIComponent(tplDetail[1] ?? "");
 				const detail = await this.pensieve.templates.getTemplate(id);
 				return detail ? json(detail) : error("not found", 404);
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path } = ctx;
+			const tplDetail = path.match(/^\/api\/pensieve\/templates\/([^/]+)$/);
 			if (req.method === "PATCH" && tplDetail) {
-				const id = decodeURIComponent(tplDetail[1] ?? "");
-				const body = (await req.json()) as { body?: string; tags?: string[]; path?: string };
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.templates.updateTemplate(id, body);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "template.update",
-					target: id,
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "update failed", 400);
+				return this.updateTemplate(ctx, tplDetail[1] ?? "");
 			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path } = ctx;
+			const tplDetail = path.match(/^\/api\/pensieve\/templates\/([^/]+)$/);
 			if (req.method === "DELETE" && tplDetail) {
-				const id = decodeURIComponent(tplDetail[1] ?? "");
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.pensieve.templates.deleteTemplate(id);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "template.delete",
-					target: id,
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-pensieve",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "delete failed", 400);
+				return this.deleteTemplate(ctx, tplDetail[1] ?? "");
 			}
 			return null;
 		},
@@ -1587,25 +1838,10 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, url, path, json } = ctx;
 			// --- Channel gateway (unified inbound/outbound feed) ---
 			if (req.method === "GET" && path === "/api/gateway/feed") {
-				const channel = url.searchParams.get("channel") ?? undefined;
-				const direction = url.searchParams.get("direction") ?? undefined;
-				const roomId = url.searchParams.get("roomId") ?? undefined;
-				const entityId = url.searchParams.get("entityId") ?? undefined;
-				const q = url.searchParams.get("q") ?? undefined;
-				const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : undefined;
-				const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
-				return json(this.gateway.list({
-					...(channel ? { channel: channel as never } : {}),
-					...(direction ? { direction: direction as never } : {}),
-					...(roomId ? { roomId } : {}),
-					...(entityId ? { entityId } : {}),
-					...(q ? { q } : {}),
-					...(since ? { since } : {}),
-					...(limit ? { limit } : {}),
-				}));
+				return json(this.gateway.list(gatewayListOptions(url)));
 			}
 			return null;
 		},
@@ -1697,75 +1933,10 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path } = ctx;
 			// --- Debug: probe embedding pipeline end-to-end ---
 			if (req.method === "POST" && path === "/api/debug/embedding") {
-				const body = (await req.json().catch(() => ({}))) as { text?: string; storeAs?: string };
-				const text = body.text ?? "hello world";
-				const live = this.runtime.peek();
-				if (!live) return error("runtime not built", 503);
-				const r = live as unknown as {
-					useModel?: (type: string, params: unknown) => Promise<unknown>;
-					getModel?: (type: string) => unknown;
-					services?: Map<string, unknown>;
-					getService?: (t: string) => unknown;
-					adapter?: { embeddingDimension?: string };
-					createMemory?: (m: unknown, table: string) => Promise<string>;
-					queueEmbeddingGeneration?: (m: unknown, prio?: string) => Promise<void>;
-					updateMemory?: (m: unknown) => Promise<boolean>;
-					agentId?: string;
-				};
-				const hasModel = typeof r.getModel === "function" && r.getModel("TEXT_EMBEDDING") !== undefined;
-				const embSvc = r.getService?.("embedding-generation") as {
-					isDisabled?: boolean;
-					batchQueue?: { size?: number; isStarted?: boolean } | null;
-				} | null | undefined;
-				const adapter = r.adapter as { embeddingDimension?: string } | undefined;
-				let vec: unknown = null;
-				let modelErr: string | null = null;
-				const t0 = Date.now();
-				try {
-					if (typeof r.useModel === "function") {
-						vec = await r.useModel("TEXT_EMBEDDING", { text });
-					}
-				} catch (err) {
-					modelErr = err instanceof Error ? err.message : String(err);
-				}
-				const ms = Date.now() - t0;
-				const arr = Array.isArray(vec) ? (vec as number[]) : [];
-				const nonZero = arr.filter((n) => Math.abs(n) > 1e-9).length;
-				// If asked, write a memory + manually call updateMemory with embedding
-				// to bypass the queue and test the storage path directly.
-				let writeResult: { ok: boolean; memoryId?: string; error?: string } | null = null;
-				if (body.storeAs && typeof r.createMemory === "function" && typeof r.updateMemory === "function") {
-					try {
-						const memId = await r.createMemory({
-							entityId: r.agentId,
-							roomId: r.agentId,
-							agentId: r.agentId,
-							content: { text, source: "debug" },
-							createdAt: Date.now(),
-						}, body.storeAs);
-						await r.updateMemory({ id: memId, embedding: arr });
-						writeResult = { ok: true, memoryId: String(memId) };
-					} catch (err) {
-						writeResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
-					}
-				}
-				return json({
-					hasModel,
-					adapterEmbeddingDimension: adapter?.embeddingDimension ?? null,
-					embeddingServiceRegistered: embSvc !== null && embSvc !== undefined,
-					embeddingServiceDisabled: embSvc?.isDisabled ?? null,
-					queueStarted: embSvc?.batchQueue?.isStarted ?? null,
-					queueSize: embSvc?.batchQueue?.size ?? null,
-					durationMs: ms,
-					dim: arr.length,
-					nonZero,
-					first5: arr.slice(0, 5),
-					modelErr,
-					writeResult,
-				});
+				return this.debugEmbedding(ctx);
 			}
 			return null;
 		},
@@ -2036,41 +2207,17 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path } = ctx;
 			const taskDelete = path.match(/^\/api\/activity\/tasks\/([^/]+)$/);
 			if (req.method === "DELETE" && taskDelete) {
-				const id = decodeURIComponent(taskDelete[1] ?? "");
-				let success = false;
-				let errMsg: string | undefined;
-				try {
-					success = await this.activity.tasks.remove(id);
-				} catch (err) {
-					errMsg = err instanceof Error ? err.message : String(err);
-				}
-				pensieveAudit({
-					action: "task.delete",
-					target: id,
-					success,
-					...(errMsg ? { error: errMsg } : {}),
-					caller: "ui-activity",
-					ts: Date.now(),
-				});
-				return success ? ok() : error(errMsg ?? "delete failed", 400);
+				return this.deleteActivityTask(ctx, taskDelete[1] ?? "");
 			}
-
+			return null;
+		},
+		async (ctx) => {
+			const { req, url, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/pensieve/graph") {
-				const filter: Record<string, unknown> = {};
-				const dateFrom = url.searchParams.get("dateFrom");
-				const dateTo = url.searchParams.get("dateTo");
-				if (dateFrom) filter.dateFrom = Number(dateFrom);
-				if (dateTo) filter.dateTo = Number(dateTo);
-				const entityIds = (url.searchParams.get("entityIds") ?? "").split(",").filter(Boolean);
-				const types = (url.searchParams.get("types") ?? "").split(",").filter(Boolean);
-				const tags = (url.searchParams.get("tags") ?? "").split(",").filter(Boolean);
-				if (entityIds.length) filter.entityIds = entityIds;
-				if (types.length) filter.types = types;
-				if (tags.length) filter.tags = tags;
-				return json(await this.pensieve.graph.snapshot(filter as Parameters<typeof this.pensieve.graph.snapshot>[0]));
+				return json(await this.pensieve.graph.snapshot(pensieveGraphFilter(url)));
 			}
 			return null;
 		},
