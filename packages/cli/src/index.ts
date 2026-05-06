@@ -58,7 +58,7 @@ Accounts (subscription auth + direct API):
   Subscription providers: anthropic-subscription, openai-codex
   Direct providers: anthropic-api, openai-api, deepseek-api, zai-api, moonshot-api
 
-Provider ids: anthropic, openai
+Provider ids: anthropic, openai, openrouter
 Requires the detour tray app to be running.`;
 
 async function main(argv: string[]): Promise<void> {

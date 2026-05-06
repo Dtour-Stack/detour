@@ -53,6 +53,12 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
+				label: "Browser",
+				submenu: [
+					{ label: "Open Browser", action: "browser:open", accelerator: "CommandOrControl+Shift+B" },
+				],
+			},
+			{
 				label: "Channels",
 				submenu: [
 					{ label: "Open Channels", action: "channels:open", accelerator: "CommandOrControl+Shift+C" },
@@ -84,6 +90,9 @@ export const menusFeature: Feature = {
 					break;
 				case "activity:open":
 					deps.events.emit("ui:open-activity", {});
+					break;
+				case "browser:open":
+					deps.events.emit("ui:open-browser", {});
 					break;
 				case "channels:open":
 					deps.events.emit("ui:open-channels", {});

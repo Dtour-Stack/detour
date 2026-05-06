@@ -42,6 +42,7 @@ const PROVIDERS: ReadonlyArray<{
 }> = [
 	{ id: "anthropic", label: "Anthropic (Claude)", envKey: "ANTHROPIC_API_KEY" },
 	{ id: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
+	{ id: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY" },
 ];
 
 const ACTIVE_PROVIDER_KEY = "trayapp.activeProvider";
@@ -118,11 +119,8 @@ export class VaultService {
 	}
 
 	async setActiveProvider(id: ProviderId): Promise<void> {
-		const manager = await this.manager();
-		const v = manager.vault;
-		if (!(await manager.has(this.providerById(id).envKey))) {
-			throw new Error(`No key stored for provider: ${id}`);
-		}
+		const v = await this.vault();
+		this.providerById(id);
 		await v.set(ACTIVE_PROVIDER_KEY, id);
 	}
 

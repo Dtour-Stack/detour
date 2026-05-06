@@ -1,0 +1,54 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: Detour
+      - 'generic "Active LLM provider: openai" [ref=e7]': via Codex
+      - generic "Local embedding server is running" [ref=e8]: ● local
+    - generic [ref=e9]:
+      - button "Appearance" [ref=e11] [cursor=pointer]:
+        - img [ref=e12]
+      - button "Configuration" [active] [ref=e18] [cursor=pointer]:
+        - img [ref=e19]
+      - button "Hide window" [ref=e22] [cursor=pointer]:
+        - img [ref=e23]
+  - main [ref=e26]:
+    - textbox "Message Detour…" [ref=e30]
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]: Configuration
+        - button "Close configuration" [ref=e34] [cursor=pointer]:
+          - img [ref=e35]
+      - generic [ref=e39]:
+        - complementary [ref=e40]:
+          - generic [ref=e41]:
+            - button "Configuration" [ref=e42] [cursor=pointer]
+            - generic [ref=e43]:
+              - button "Appearance" [ref=e44] [cursor=pointer]
+              - button "Providers" [ref=e45] [cursor=pointer]
+              - button "Models & Routing" [ref=e46] [cursor=pointer]
+              - button "Local AI" [ref=e47] [cursor=pointer]
+              - button "Agent Character" [ref=e48] [cursor=pointer]
+              - button "Agent Permissions" [ref=e49] [cursor=pointer]
+              - button "OS Permissions" [ref=e50] [cursor=pointer]
+              - button "Window" [ref=e51] [cursor=pointer]
+          - button "Vault Nav" [ref=e53] [cursor=pointer]
+        - main [ref=e54]:
+          - generic [ref=e55]:
+            - heading "Appearance" [level=3] [ref=e56]
+            - paragraph [ref=e57]: Theme + accent color. Persists across sessions.
+            - generic [ref=e58]:
+              - generic [ref=e59]: Theme
+              - generic [ref=e60]:
+                - button "system" [ref=e61] [cursor=pointer]
+                - button "light" [ref=e62] [cursor=pointer]
+                - button "dark" [ref=e63] [cursor=pointer]
+              - generic [ref=e64]: Accent color
+              - generic [ref=e65]:
+                - button "Blue" [ref=e66] [cursor=pointer]
+                - button "Purple" [ref=e67] [cursor=pointer]
+                - button "Pink" [ref=e68] [cursor=pointer]
+                - button "Orange" [ref=e69] [cursor=pointer]
+                - button "Green" [ref=e70] [cursor=pointer]
+                - button "Teal" [ref=e71] [cursor=pointer]
+                - button "Indigo" [ref=e72] [cursor=pointer]
+                - button "Yellow" [ref=e73] [cursor=pointer]

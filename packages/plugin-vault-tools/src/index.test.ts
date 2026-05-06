@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+	browserFillLoginAction,
+	browserInspectAction,
+	browserOpenAction,
+	browserScriptAction,
 	loginListAction,
 	loginRevealAction,
 	loginSaveAction,
@@ -31,10 +35,14 @@ afterEach(() => {
 const fakeRuntime = { character: { name: "TestAgent" } } as never;
 
 describe("vaultToolsPlugin shape", () => {
-	test("exports all 7 actions", () => {
+	test("exports all actions", () => {
 		expect(vaultToolsPlugin.actions).toBeDefined();
 		const names = vaultToolsPlugin.actions!.map((a) => a.name).sort();
 		expect(names).toEqual([
+			"BROWSER_FILL_LOGIN",
+			"BROWSER_INSPECT",
+			"BROWSER_OPEN",
+			"BROWSER_SCRIPT",
 			"LOGIN_LIST",
 			"LOGIN_REVEAL",
 			"LOGIN_SAVE",
@@ -46,7 +54,19 @@ describe("vaultToolsPlugin shape", () => {
 	});
 
 	test("each action has parameters declared (so the LLM knows what to fill)", () => {
-		for (const a of [vaultReadAction, vaultWriteAction, vaultDeleteAction, vaultListAction, loginListAction, loginRevealAction, loginSaveAction]) {
+		for (const a of [
+			vaultReadAction,
+			vaultWriteAction,
+			vaultDeleteAction,
+			vaultListAction,
+			loginListAction,
+			loginRevealAction,
+			loginSaveAction,
+			browserOpenAction,
+			browserInspectAction,
+			browserScriptAction,
+			browserFillLoginAction,
+		]) {
 			const params = (a as unknown as { parameters?: unknown[] }).parameters;
 			expect(Array.isArray(params)).toBe(true);
 		}

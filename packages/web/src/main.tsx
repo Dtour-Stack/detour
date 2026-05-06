@@ -4,18 +4,21 @@ import { App } from "./App";
 import { PensieveView } from "./features/pensieve/PensieveView";
 import { ActivityView } from "./features/activity/ActivityView";
 import { ChannelsView } from "./features/channels/ChannelsView";
+import { BrowserView } from "./features/browser/BrowserView";
 import "./index.css";
 
 // Hash-routing: the same Vite bundle serves four windows.
 //   #pensieve → memory + relationship browser (own window)
 //   #activity → trajectories + logs + runtime introspection (own window)
 //   #channels → connected messaging surfaces (Discord/Telegram/iMessage)
+//   #browser  → isolated multi-tab agent browser
 //   default   → chat popup (App)
 const hash = typeof window !== "undefined" ? window.location.hash : "";
 const root =
 	hash === "#pensieve" ? <PensieveView /> :
 	hash === "#activity" ? <ActivityView /> :
 	hash === "#channels" ? <ChannelsView /> :
+	hash === "#browser" ? <BrowserView /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);

@@ -1,0 +1,106 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: Pensieve
+    - generic [ref=e6]:
+      - generic [ref=e7] [cursor=pointer]: Live
+      - generic [ref=e8]:
+        - button "Inbox" [ref=e9] [cursor=pointer]
+        - button "Channel feed" [ref=e10] [cursor=pointer]
+        - button "Chronicler" [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]: Knowledge
+      - generic [ref=e14]:
+        - button "Notes" [ref=e15] [cursor=pointer]
+        - button "Knowledge" [ref=e16] [cursor=pointer]
+        - button "Memories" [ref=e17] [cursor=pointer]
+        - button "Templates" [ref=e18] [cursor=pointer]
+        - button "Relationships" [active] [ref=e19] [cursor=pointer]
+        - button "Graph" [ref=e20] [cursor=pointer]
+        - button "Embedding map" [ref=e21] [cursor=pointer]
+    - generic [ref=e23]: ● connected
+  - main [ref=e24]:
+    - generic [ref=e391]:
+      - generic [ref=e392]:
+        - generic [ref=e394]: 9 person(s) / entities
+        - generic [ref=e395]:
+          - button "User 2 rel dm_interaction relationships community updated memory_request" [ref=e396] [cursor=pointer]:
+            - generic [ref=e397]:
+              - strong [ref=e398]: User
+              - generic [ref=e399]: 2 rel
+            - generic [ref=e400]:
+              - generic [ref=e401]: dm_interaction
+              - generic [ref=e402]: relationships
+              - generic [ref=e403]: community
+              - generic [ref=e404]: updated
+              - generic [ref=e405]: memory_request
+          - button "Inbox 2 rel dm_interaction x_mentions manual_trigger task_request cron_fire" [ref=e406] [cursor=pointer]:
+            - generic [ref=e407]:
+              - strong [ref=e408]: Inbox
+              - generic [ref=e409]: 2 rel
+            - generic [ref=e410]:
+              - generic [ref=e411]: dm_interaction
+              - generic [ref=e412]: x_mentions
+              - generic [ref=e413]: manual_trigger
+              - generic [ref=e414]: task_request
+              - generic [ref=e415]: cron_fire
+          - button "James 紅海 1 rel channel-contact observed-sender discord discord-user" [ref=e416] [cursor=pointer]:
+            - generic [ref=e417]:
+              - strong [ref=e418]: James 紅海
+              - generic [ref=e419]: 1 rel
+            - generic [ref=e420]:
+              - generic [ref=e421]: channel-contact
+              - generic [ref=e422]: observed-sender
+              - generic [ref=e423]: discord
+              - generic [ref=e424]: discord-user
+          - button "iono 1 rel channel-contact observed-sender discord discord-user" [ref=e425] [cursor=pointer]:
+            - generic [ref=e426]:
+              - strong [ref=e427]: iono
+              - generic [ref=e428]: 1 rel
+            - generic [ref=e429]:
+              - generic [ref=e430]: channel-contact
+              - generic [ref=e431]: observed-sender
+              - generic [ref=e432]: discord
+              - generic [ref=e433]: discord-user
+          - button "shaw 1 rel imessage contact user-acquaintance" [ref=e434] [cursor=pointer]:
+            - generic [ref=e435]:
+              - strong [ref=e436]: shaw
+              - generic [ref=e437]: 1 rel
+            - generic [ref=e438]:
+              - generic [ref=e439]: imessage
+              - generic [ref=e440]: contact
+              - generic [ref=e441]: user-acquaintance
+          - button "Shaq 1 rel imessage contact user-acquaintance" [ref=e442] [cursor=pointer]:
+            - generic [ref=e443]:
+              - strong [ref=e444]: Shaq
+              - generic [ref=e445]: 1 rel
+            - generic [ref=e446]:
+              - generic [ref=e447]: imessage
+              - generic [ref=e448]: contact
+              - generic [ref=e449]: user-acquaintance
+          - button "Poke 🌴 1 rel imessage contact user-acquaintance" [ref=e450] [cursor=pointer]:
+            - generic [ref=e451]:
+              - strong [ref=e452]: Poke 🌴
+              - generic [ref=e453]: 1 rel
+            - generic [ref=e454]:
+              - generic [ref=e455]: imessage
+              - generic [ref=e456]: contact
+              - generic [ref=e457]: user-acquaintance
+          - button "2AM 1 rel channel-contact observed-sender discord discord-user" [ref=e458] [cursor=pointer]:
+            - generic [ref=e459]:
+              - strong [ref=e460]: 2AM
+              - generic [ref=e461]: 1 rel
+            - generic [ref=e462]:
+              - generic [ref=e463]: channel-contact
+              - generic [ref=e464]: observed-sender
+              - generic [ref=e465]: discord
+              - generic [ref=e466]: discord-user
+          - button "dEXploarer 1 rel channel-contact observed-sender discord discord-user" [ref=e467] [cursor=pointer]:
+            - generic [ref=e468]:
+              - strong [ref=e469]: dEXploarer
+              - generic [ref=e470]: 1 rel
+            - generic [ref=e471]:
+              - generic [ref=e472]: channel-contact
+              - generic [ref=e473]: observed-sender
+              - generic [ref=e474]: discord
+              - generic [ref=e475]: discord-user
+      - generic [ref=e477]: Select a person to view their memories + relationships.

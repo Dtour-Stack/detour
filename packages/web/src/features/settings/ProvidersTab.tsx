@@ -42,7 +42,11 @@ const VENDORS: VendorSpec[] = [
 		oauthProvider: "openai-codex",
 		oauthLabel: "Connect via ChatGPT (Codex) OAuth",
 		oauthNote:
-			"Codex tokens currently can't drive the chat plugin (no compatible adapter). Paste an OpenAI API key below to use chat.",
+			"If you've signed in with the Codex CLI, Detour auto-detects your token at ~/.codex/auth.json and uses it for chat — no API key needed. Paste an OpenAI key only if you'd rather pay-per-token.",
+	},
+	{
+		id: "openrouter",
+		label: "OpenRouter",
 	},
 ];
 
@@ -64,6 +68,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [activeFlow, setActiveFlow] = useState<ActiveFlow | null>(null);
 	const [code, setCode] = useState("");
+	const [error, setError] = useState<string | null>(null);
 
 	async function refresh() {
 		const [ps, as] = await Promise.all([
@@ -101,20 +106,35 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	async function saveKey(id: ProviderId) {
 		const k = (drafts[id] ?? "").trim();
 		if (!k) return;
-		await client.setProviderKey(id, k);
-		setDrafts((d) => ({ ...d, [id]: "" }));
-		await refresh();
+		try {
+			setError(null);
+			await client.setProviderKey(id, k);
+			setDrafts((d) => ({ ...d, [id]: "" }));
+			await refresh();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	async function removeKey(id: ProviderId) {
 		if (!confirm(`Remove ${id} API key?`)) return;
-		await client.removeProviderKey(id);
-		await refresh();
+		try {
+			setError(null);
+			await client.removeProviderKey(id);
+			await refresh();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	async function activate(id: ProviderId) {
-		await client.setActiveProvider(id);
-		await refresh();
+		try {
+			setError(null);
+			await client.setActiveProvider(id);
+			await refresh();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	async function startOAuth(provider: "anthropic-subscription" | "openai-codex", label: string) {
@@ -153,6 +173,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 			<p className="hint">
 				Connect once via OAuth or paste an API key. The active provider handles chat.
 			</p>
+			{error && <div className="banner error">{error}</div>}
 
 			{activeFlow && (
 				<div className="card" style={{ borderColor: "var(--accent)", marginBottom: 16 }}>
@@ -293,7 +314,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 										Save
 									</button>
 								)}
-								{provider?.hasKey && !provider.active && (
+								{(provider?.hasKey || usableOAuth) && !provider?.active && (
 									<button type="button" className="btn secondary small" onClick={() => activate(vendor.id)}>
 										Use this
 									</button>

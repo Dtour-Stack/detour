@@ -14,10 +14,18 @@ import type { InboxItem, WebClient } from "../../../api/client";
 
 const STATUS_LABELS: Record<string, string> = {
 	pending: "Pending",
+	acting: "Agent acting",
 	acknowledged: "Acknowledged",
-	acted: "Agent replied",
+	acted: "Agent acted",
 	dismissed: "Dismissed",
 };
+
+function statusTone(status: string): string {
+	if (status === "acted") return "success";
+	if (status === "acting") return "info";
+	if (status === "dismissed") return "muted";
+	return "default";
+}
 
 function formatTime(ts: number): string {
 	const d = new Date(ts);
@@ -38,6 +46,7 @@ export function InboxPane({ client }: { client: WebClient }) {
 	const [draftTitle, setDraftTitle] = useState("");
 	const [draftBody, setDraftBody] = useState("");
 	const [postBusy, setPostBusy] = useState(false);
+	const [actingId, setActingId] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -87,6 +96,18 @@ export function InboxPane({ client }: { client: WebClient }) {
 		}
 	}, [client, load]);
 
+	const act = useCallback(async (id: string) => {
+		setActingId(id);
+		try {
+			await client.actInboxItem(id);
+			void load();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setActingId(null);
+		}
+	}, [client, load]);
+
 	return (
 		<div className="settings-pane">
 			<header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -100,28 +121,30 @@ export function InboxPane({ client }: { client: WebClient }) {
 				<button
 					type="button"
 					onClick={() => setComposing((v) => !v)}
-					style={{ padding: "6px 12px" }}
+					className="btn secondary small"
 				>
 					{composing ? "Cancel" : "+ New notification"}
 				</button>
 			</header>
 
 			{composing && (
-				<div style={{ border: "1px solid var(--border, #333)", padding: 12, borderRadius: 6, marginBottom: 16 }}>
+				<div className="inbox-compose">
+					<label htmlFor="inbox-title">Title</label>
 					<input
+						id="inbox-title"
 						placeholder="Title"
 						value={draftTitle}
 						onChange={(e) => setDraftTitle(e.target.value)}
-						style={{ width: "100%", marginBottom: 8, padding: 6 }}
 					/>
+					<label htmlFor="inbox-body">Body</label>
 					<textarea
+						id="inbox-body"
 						placeholder="Body (this becomes a real prompt to the agent)"
 						value={draftBody}
 						onChange={(e) => setDraftBody(e.target.value)}
 						rows={3}
-						style={{ width: "100%", marginBottom: 8, padding: 6, fontFamily: "inherit" }}
 					/>
-					<button type="button" onClick={() => void post()} disabled={postBusy || !draftTitle.trim()}>
+					<button className="btn small" type="button" onClick={() => void post()} disabled={postBusy || !draftTitle.trim()}>
 						{postBusy ? "Posting…" : "Post (and prompt agent)"}
 					</button>
 					<div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
@@ -132,10 +155,10 @@ export function InboxPane({ client }: { client: WebClient }) {
 				</div>
 			)}
 
-			{error && <div style={{ color: "tomato", marginBottom: 12 }}>{error}</div>}
+			{error && <div className="banner error">{error}</div>}
 
 			{items.length === 0 ? (
-				<div style={{ opacity: 0.6, padding: 20, textAlign: "center" }}>
+				<div className="empty">
 					No inbox items yet. Channel messages from Discord/Telegram/iMessage auto-promote here,
 					or click "+ New notification" to push one programmatically.
 				</div>
@@ -143,7 +166,7 @@ export function InboxPane({ client }: { client: WebClient }) {
 				<ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
 					{items.map((item) => (
 						<li
-							key={item.id}
+							key={`${item.id}-${item.time}`}
 							style={{
 								border: "1px solid var(--border, #333)",
 								borderRadius: 6,
@@ -159,7 +182,7 @@ export function InboxPane({ client }: { client: WebClient }) {
 							<div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
 								{item.kind} · {item.channel ?? "—"} · {item.source}
 								{" · "}
-								<span style={{ color: item.status === "acted" ? "lightgreen" : "inherit" }}>
+								<span className={`inbox-status ${statusTone(item.status)}`}>
 									{STATUS_LABELS[item.status] ?? item.status}
 								</span>
 								{item.fromHandle ? ` · from ${item.fromHandle}` : ""}
@@ -171,15 +194,26 @@ export function InboxPane({ client }: { client: WebClient }) {
 									<div style={{ marginTop: 2, whiteSpace: "pre-wrap" }}>{item.replyText}</div>
 								</div>
 							)}
-							<div style={{ marginTop: 8, display: "flex", gap: 6 }}>
-								{item.status === "pending" && (
-									<>
-										<button type="button" onClick={() => void updateStatus(item.id, "acknowledged")}>Acknowledge</button>
-										<button type="button" onClick={() => void updateStatus(item.id, "dismissed")}>Dismiss</button>
-									</>
+							<div className="inbox-actions">
+								{item.status !== "dismissed" && item.status !== "acted" && (
+									<button
+										type="button"
+										className="btn small"
+										onClick={() => void act(item.id)}
+										disabled={actingId === item.id || item.status === "acting"}
+									>
+										{actingId === item.id || item.status === "acting" ? "Acting…" : "Act"}
+									</button>
 								)}
-								{item.status !== "pending" && item.status !== "dismissed" && (
-									<button type="button" onClick={() => void updateStatus(item.id, "dismissed")}>Dismiss</button>
+								{item.status === "pending" && (
+									<button className="btn secondary small" type="button" onClick={() => void updateStatus(item.id, "acknowledged")}>
+										Acknowledge
+									</button>
+								)}
+								{item.status !== "dismissed" && (
+									<button className="btn ghost small" type="button" onClick={() => void updateStatus(item.id, "dismissed")}>
+										Dismiss
+									</button>
 								)}
 							</div>
 						</li>

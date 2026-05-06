@@ -110,8 +110,10 @@ function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityTas
 	const tags = Array.isArray(t.tags) ? (t.tags as unknown[]).map(String) : [];
 	const updateInterval = asNumber(meta.updateInterval);
 	const lastExecuted = asNumber(
-		typeof meta.lastExecuted === "string" ? Date.parse(meta.lastExecuted) : meta.lastExecuted,
-	);
+		typeof meta.lastExecuted === "string"
+			? Date.parse(meta.lastExecuted)
+			: meta.lastExecuted,
+	) ?? asNumber(meta.updatedAt) ?? asNumber(t.updatedAt);
 	const nextRunAt =
 		updateInterval && lastExecuted ? lastExecuted + updateInterval : asNumber(t.dueAt);
 	return {
@@ -224,8 +226,7 @@ export class ActivityTasksService {
 		if (!existing) return false;
 		const meta = asObject(existing.metadata);
 		const nextMeta = { ...meta };
-		// Force-eligible: clear lastExecuted so recurring scheduler picks it up,
-		// and dueAt to now for one-shots.
+		delete nextMeta.updatedAt;
 		delete nextMeta.lastExecuted;
 		await r.updateTask?.(id, { metadata: nextMeta, dueAt: Date.now() });
 		const taskService = r.getService?.(TASK_SERVICE_TYPE) as TaskServiceShape | undefined;

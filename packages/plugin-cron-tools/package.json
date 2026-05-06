@@ -1,0 +1,17 @@
+{
+	"name": "@detour/plugin-cron-tools",
+	"private": true,
+	"version": "0.3.0",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"dependencies": {
+		"@elizaos/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.0"
+	}
+}

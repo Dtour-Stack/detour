@@ -31,99 +31,137 @@ function looksLikeTelegramBotToken(value: string): boolean {
 	return /^\d{6,12}$/.test(id ?? "") && (secret?.length ?? 0) >= 30;
 }
 
-/**
- * Probe a channel's actual gateway/connection state via its registered
- * service. Different plugins expose connection state differently:
- *   - discord:  service.client (DiscordJsClient | null) + client.readyAt + client.user
- *   - telegram: service.bot (Telegraf | null) + service.botInfo + bot.botInfo.id
- *   - imessage: service has no gateway (uses local sqlite) — "online" if Full Disk Access granted
- */
-function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: ChannelLiveStatus; detail?: string } {
+function invalidChannelCredential(id: ChannelId, key: string, value: string): ChannelLiveSnapshot | null {
+	if (id === "discord" && key === "DISCORD_API_TOKEN" && !looksLikeDiscordBotToken(value)) {
+		return {
+			liveStatus: "invalid-token",
+			liveDetail: `${key} doesn't look like a Discord bot token (expected ~70 chars with two dots; got ${value.length} chars, ${value.split(".").length - 1} dots).`,
+		};
+	}
+	if (id === "telegram" && key === "TELEGRAM_BOT_TOKEN" && !looksLikeTelegramBotToken(value)) {
+		return {
+			liveStatus: "invalid-token",
+			liveDetail: `${key} doesn't look like a Telegram bot token (expected <id>:<35-char secret>).`,
+		};
+	}
+	return null;
+}
+
+function settingField<K extends "autoReply" | "respondOnlyToMentions">(key: K, value: boolean | undefined): Pick<ChannelStatus, K> | {} {
+	return value === undefined ? {} : { [key]: value } as Pick<ChannelStatus, K>;
+}
+
+type ChannelServiceRecord = Record<string, unknown>;
+type DiscordClientProbe = {
+	readyAt?: Date | null;
+	user?: { tag?: string; username?: string } | null;
+	ws?: { status?: number };
+	guilds?: { cache?: { size?: number } };
+};
+type TelegramBotProbe = { botInfo?: { username?: string; id?: number } };
+
+function serviceKeys(svc: ChannelServiceRecord): string[] {
+	return Object.keys(svc).filter((k) => !k.startsWith("_")).slice(0, 40);
+}
+
+function serviceClassName(svc: ChannelServiceRecord): string {
+	return (svc.constructor as { name?: string } | undefined)?.name ?? "?";
+}
+
+function resolveChannelService(runtime: IAgentRuntime, id: ChannelId): ChannelServiceRecord | undefined {
 	const r = runtime as unknown as {
 		getService?: (t: string) => unknown;
 		getServicesByType?: (t: string) => unknown[];
 	};
-	const svc = (r.getService?.(id) ?? r.getServicesByType?.(id)?.[0]) as Record<string, unknown> | undefined;
+	return (r.getService?.(id) ?? r.getServicesByType?.(id)?.[0]) as ChannelServiceRecord | undefined;
+}
+
+function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: ChannelLiveStatus; detail?: string } {
+	const svc = resolveChannelService(runtime, id);
 	if (!svc) return { status: "loaded", detail: "service not registered yet" };
-
-	if (id === "discord") {
-		const client = svc.client as {
-			readyAt?: Date | null;
-			user?: { tag?: string; username?: string } | null;
-			ws?: { status?: number };
-			guilds?: { cache?: { size?: number } };
-		} | null;
-		if (!client) {
-			// Diagnostic: surface what fields ARE on the service so we can see
-			// whether the service is a stale class reference, the client lives
-			// under a renamed property, or a different sub-service is being
-			// returned. Routed via elizaOS logger so it shows in the activity
-			// feed (our log capture only listens to addLogListener — not raw
-			// console.log).
-			const keys = Object.keys(svc).filter((k) => !k.startsWith("_")).slice(0, 40);
-			const cls = (svc.constructor as { name?: string } | undefined)?.name ?? "?";
-			const loginFailed = (svc as { _loginFailed?: boolean })._loginFailed === true;
-			const hasReadyPromise = (svc as { clientReadyPromise?: unknown }).clientReadyPromise !== undefined;
-			logger.info(
-				{
-					src: "channels:probe",
-					constructor: cls,
-					loginFailed,
-					hasReadyPromise,
-					keys,
-				},
-				"discord svc.client is null — service did not finish login",
-			);
-			return {
-				status: loginFailed ? "error" : "connecting",
-				detail: loginFailed
-					? "Discord login failed — check DISCORD_API_TOKEN (regenerate in Developer Portal)"
-					: "Discord client not yet created",
-			};
-		}
-		if (client.readyAt) {
-			const tag = client.user?.tag ?? client.user?.username ?? "bot";
-			const guildCount = client.guilds?.cache?.size ?? 0;
-			if (guildCount === 0) {
-				return {
-					status: "error",
-					detail: `${tag} is online but in 0 servers — invite the bot via https://discord.com/developers/applications/<APP_ID>/oauth2/url-generator (scope: bot, perms: View Channels + Read Message History + Send Messages).`,
-				};
-			}
-			return {
-				status: "online",
-				detail: `${tag} is online in ${guildCount} server${guildCount === 1 ? "" : "s"}`,
-			};
-		}
-		return { status: "connecting", detail: `Logging in (ws.status=${client.ws?.status ?? "?"})` };
+	switch (id) {
+		case "discord":
+			return probeDiscordLive(svc);
+		case "telegram":
+			return probeTelegramLive(svc);
+		case "imessage":
+			return probeImessageLive(svc);
 	}
-
-	if (id === "telegram") {
-		const bot = svc.bot as { botInfo?: { username?: string; id?: number } } | null;
-		if (!bot) {
-			const keys = Object.keys(svc).filter((k) => !k.startsWith("_")).slice(0, 40);
-			const cls = (svc.constructor as { name?: string } | undefined)?.name ?? "?";
-			logger.info(
-				{ src: "channels:probe", constructor: cls, keys },
-				"telegram svc.bot is null — Telegraf not yet constructed",
-			);
-			return { status: "connecting", detail: "Telegraf bot not yet created" };
-		}
-		if (bot.botInfo?.id) {
-			return { status: "online", detail: `@${bot.botInfo.username} is online` };
-		}
-		return { status: "connecting", detail: "Telegraf handshake in progress" };
-	}
-
-	if (id === "imessage") {
-		// imessage uses local SQLite — "online" once the service has read chat.db.
-		// service.chatDbReady or similar; fall back to "loaded".
-		const ready = svc.chatDbReady ?? svc.ready ?? svc.started;
-		if (ready === true) return { status: "online", detail: "chat.db readable" };
-		return { status: "loaded", detail: "Send-only mode (Full Disk Access required for receive)" };
-	}
-
 	return { status: "loaded" };
+}
+
+function probeDiscordLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+	const client = svc.client as DiscordClientProbe | null;
+	if (!client) return probeMissingDiscordClient(svc);
+	if (client.readyAt) return probeReadyDiscordClient(client);
+	return { status: "connecting", detail: `Logging in (ws.status=${client.ws?.status ?? "?"})` };
+}
+
+function probeMissingDiscordClient(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail: string } {
+	const loginFailed = (svc as { _loginFailed?: boolean })._loginFailed === true;
+	logger.info(
+		{
+			src: "channels:probe",
+			constructor: serviceClassName(svc),
+			loginFailed,
+			hasReadyPromise: (svc as { clientReadyPromise?: unknown }).clientReadyPromise !== undefined,
+			keys: serviceKeys(svc),
+		},
+		"discord svc.client is null — service did not finish login",
+	);
+	return {
+		status: loginFailed ? "error" : "connecting",
+		detail: loginFailed
+			? "Discord login failed — check DISCORD_API_TOKEN (regenerate in Developer Portal)"
+			: "Discord client not yet created",
+	};
+}
+
+function probeReadyDiscordClient(client: DiscordClientProbe): { status: ChannelLiveStatus; detail: string } {
+	const tag = client.user?.tag ?? client.user?.username ?? "bot";
+	const guildCount = client.guilds?.cache?.size ?? 0;
+	if (guildCount === 0) {
+		return {
+			status: "error",
+			detail: `${tag} is online but in 0 servers — invite the bot via https://discord.com/developers/applications/<APP_ID>/oauth2/url-generator (scope: bot, perms: View Channels + Read Message History + Send Messages).`,
+		};
+	}
+	return {
+		status: "online",
+		detail: `${tag} is online in ${guildCount} server${guildCount === 1 ? "" : "s"}`,
+	};
+}
+
+function probeTelegramLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+	const bot = svc.bot as TelegramBotProbe | null;
+	if (!bot) return probeMissingTelegramBot(svc);
+	if (bot.botInfo?.id) return { status: "online", detail: `@${bot.botInfo.username} is online` };
+	return { status: "connecting", detail: "Telegraf handshake in progress" };
+}
+
+function probeMissingTelegramBot(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail: string } {
+	logger.info(
+		{ src: "channels:probe", constructor: serviceClassName(svc), keys: serviceKeys(svc) },
+		"telegram svc.bot is null — Telegraf not yet constructed",
+	);
+	return { status: "connecting", detail: "Telegraf bot not yet created" };
+}
+
+function probeImessageLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+	const getStatus = (svc as { getStatus?: () => unknown }).getStatus;
+	if (typeof getStatus !== "function") return { status: "loaded", detail: "iMessage service loaded; status unavailable" };
+	const status = getStatus.call(svc);
+	if (!status || typeof status !== "object") return { status: "loaded", detail: "iMessage service loaded; status unavailable" };
+	const record = status as Record<string, unknown>;
+	if (record.chatDbAvailable === true) return { status: "online", detail: "chat.db readable; inbound polling ready" };
+	if (record.connected === true) return imessageSendOnlyStatus(record);
+	const reason = typeof record.reason === "string" ? record.reason : "service not connected";
+	return { status: "connecting", detail: reason };
+}
+
+function imessageSendOnlyStatus(record: Record<string, unknown>): { status: ChannelLiveStatus; detail: string } {
+	const reason = typeof record.reason === "string" ? record.reason : "Full Disk Access required for receive";
+	return { status: "loaded", detail: `Send-only mode (${reason})` };
 }
 
 // Channel plugins are loaded via `await import("...")` with hardcoded
@@ -207,7 +245,7 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		label: "Discord",
 		description: "Connect a Discord bot. Required: DISCORD_API_TOKEN. Optional: DISCORD_APPLICATION_ID.",
 		requiredVaultKeys: ["DISCORD_API_TOKEN"],
-		optionalVaultKeys: ["DISCORD_APPLICATION_ID"],
+		optionalVaultKeys: ["DISCORD_APPLICATION_ID", "DISCORD_AUTO_REPLY", "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS"],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-discord",
 		loadPlugin: loadDiscord,
@@ -217,7 +255,7 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		label: "Telegram",
 		description: "Connect a Telegram bot. Required: TELEGRAM_BOT_TOKEN.",
 		requiredVaultKeys: ["TELEGRAM_BOT_TOKEN"],
-		optionalVaultKeys: [],
+		optionalVaultKeys: ["TELEGRAM_AUTO_REPLY"],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-telegram",
 		loadPlugin: loadTelegram,
@@ -259,11 +297,15 @@ export interface ChannelStatus {
 	pluginLoaded: boolean;
 	liveStatus: ChannelLiveStatus;
 	liveDetail?: string;
+	autoReply?: boolean;
+	respondOnlyToMentions?: boolean;
 }
 
 export interface ChannelsSnapshot {
 	channels: ChannelStatus[];
 }
+
+type ChannelLiveSnapshot = { liveStatus: ChannelLiveStatus; liveDetail?: string };
 
 export class ChannelsService {
 	constructor(private readonly vault: VaultService) {}
@@ -282,62 +324,92 @@ export class ChannelsService {
 		return { ok: missing.length === 0, missing };
 	}
 
-	async snapshot(loadedPlugins: string[] = [], runtime: IAgentRuntime | null = null): Promise<ChannelsSnapshot> {
-		const out: ChannelStatus[] = [];
-		const loadedSet = new Set(loadedPlugins.map((s) => s.toLowerCase()));
-		for (const def of CHANNEL_DEFINITIONS) {
-			const platformAvailable = def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
-			const { ok, missing } = await this.hasAllKeys(def.requiredVaultKeys);
-			const pluginLoaded =
-				loadedSet.has(def.id) ||
-				loadedSet.has(def.pluginPackage.toLowerCase()) ||
-				loadedSet.has(def.pluginPackage.replace(/^@elizaos\//, "").toLowerCase());
-
-			// Token format pre-check — surfaces obviously wrong credentials
-			// before the plugin silently fails to log in.
-			let liveStatus: ChannelLiveStatus = "off";
-			let liveDetail: string | undefined;
-			if (ok && def.requiredVaultKeys.length > 0) {
-				const v = await this.vault.vault();
-				for (const key of def.requiredVaultKeys) {
-					const value = await v.get(key).catch(() => "");
-					if (def.id === "discord" && key === "DISCORD_API_TOKEN" && !looksLikeDiscordBotToken(value)) {
-						liveStatus = "invalid-token";
-						liveDetail = `${key} doesn't look like a Discord bot token (expected ~70 chars with two dots; got ${value.length} chars, ${value.split(".").length - 1} dots).`;
-					}
-					if (def.id === "telegram" && key === "TELEGRAM_BOT_TOKEN" && !looksLikeTelegramBotToken(value)) {
-						liveStatus = "invalid-token";
-						liveDetail = `${key} doesn't look like a Telegram bot token (expected <id>:<35-char secret>).`;
-					}
-				}
-			}
-
-			// Real connection probe via the runtime service.
-			if (liveStatus !== "invalid-token" && pluginLoaded && runtime) {
-				const probed = probeChannelLive(runtime, def.id);
-				liveStatus = probed.status;
-				if (probed.detail) liveDetail = probed.detail;
-			} else if (liveStatus !== "invalid-token" && pluginLoaded) {
-				liveStatus = "loaded";
-			}
-
-			out.push({
-				id: def.id,
-				label: def.label,
-				description: def.description,
-				platform: def.platform,
-				requiredVaultKeys: def.requiredVaultKeys,
-				optionalVaultKeys: def.optionalVaultKeys,
-				pluginPackage: def.pluginPackage,
-				configured: ok && platformAvailable,
-				missingKeys: missing,
-				platformAvailable,
-				pluginLoaded,
-				liveStatus,
-				...(liveDetail ? { liveDetail } : {}),
-			});
+	private boolSetting(runtime: IAgentRuntime | null, key: string): boolean | undefined {
+		const value = runtime?.getSetting(key);
+		if (value === true || value === false) return value;
+		if (typeof value === "string") {
+			const normalized = value.trim().toLowerCase();
+			if (["true", "1", "yes", "on"].includes(normalized)) return true;
+			if (["false", "0", "no", "off"].includes(normalized)) return false;
 		}
-		return { channels: out };
+		return undefined;
+	}
+
+	async snapshot(loadedPlugins: string[] = [], runtime: IAgentRuntime | null = null): Promise<ChannelsSnapshot> {
+		const loadedSet = new Set(loadedPlugins.map((s) => s.toLowerCase()));
+		const channels = await Promise.all(CHANNEL_DEFINITIONS.map((def) => this.channelStatus(def, loadedSet, runtime)));
+		return { channels };
+	}
+
+	private async channelStatus(def: ChannelDefinition, loadedSet: Set<string>, runtime: IAgentRuntime | null): Promise<ChannelStatus> {
+		const platformAvailable = this.platformAvailable(def);
+		const { ok, missing } = await this.hasAllKeys(def.requiredVaultKeys);
+		const pluginLoaded = this.pluginLoaded(def, loadedSet);
+		const live = await this.channelLive(def, ok, pluginLoaded, runtime);
+		return {
+			id: def.id,
+			label: def.label,
+			description: def.description,
+			platform: def.platform,
+			requiredVaultKeys: def.requiredVaultKeys,
+			optionalVaultKeys: def.optionalVaultKeys,
+			pluginPackage: def.pluginPackage,
+			configured: ok && platformAvailable,
+			missingKeys: missing,
+			platformAvailable,
+			pluginLoaded,
+			liveStatus: live.liveStatus,
+			...(live.liveDetail ? { liveDetail: live.liveDetail } : {}),
+			...this.channelRuntimeSettings(def, runtime),
+		};
+	}
+
+	private platformAvailable(def: ChannelDefinition): boolean {
+		return def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
+	}
+
+	private pluginLoaded(def: ChannelDefinition, loadedSet: Set<string>): boolean {
+		return loadedSet.has(def.id)
+			|| loadedSet.has(def.pluginPackage.toLowerCase())
+			|| loadedSet.has(def.pluginPackage.replace(/^@elizaos\//, "").toLowerCase());
+	}
+
+	private async channelLive(
+		def: ChannelDefinition,
+		keysOk: boolean,
+		pluginLoaded: boolean,
+		runtime: IAgentRuntime | null,
+	): Promise<ChannelLiveSnapshot> {
+		const invalid = keysOk ? await this.invalidCredentialStatus(def) : null;
+		if (invalid) return invalid;
+		if (pluginLoaded && runtime) {
+			const probed = probeChannelLive(runtime, def.id);
+			return { liveStatus: probed.status, ...(probed.detail ? { liveDetail: probed.detail } : {}) };
+		}
+		return pluginLoaded
+			? { liveStatus: "loaded", liveDetail: "plugin loaded but runtime unavailable" }
+			: { liveStatus: "off" };
+	}
+
+	private async invalidCredentialStatus(def: ChannelDefinition): Promise<ChannelLiveSnapshot | null> {
+		const v = await this.vault.vault();
+		for (const key of def.requiredVaultKeys) {
+			const value = await v.get(key).catch(() => "");
+			const invalid = invalidChannelCredential(def.id, key, value);
+			if (invalid) return invalid;
+		}
+		return null;
+	}
+
+	private channelRuntimeSettings(def: ChannelDefinition, runtime: IAgentRuntime | null): Partial<ChannelStatus> {
+		if (def.id === "discord") {
+			return {
+				...settingField("autoReply", this.boolSetting(runtime, "DISCORD_AUTO_REPLY")),
+				...settingField("respondOnlyToMentions", this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS")),
+			};
+		}
+		if (def.id === "telegram") return settingField("autoReply", this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY"));
+		return {};
 	}
 
 	/** Read every required + optional vault credential for a channel.

@@ -8,7 +8,11 @@ import { BackendOps } from "./backend-ops";
 import { ChannelsService } from "./channels";
 import { ChannelGatewayService } from "./channels/gateway";
 import { ConfigService } from "./config-service";
+import { ContinuousImprovementService } from "./continuous-improvement-service";
+import { CronService } from "./cron-service";
 import { InboxService } from "./inbox";
+import { OwnerBindService } from "./owner-bind";
+import { newTraceId, traceScope } from "./trace";
 import { LlamaServerService } from "./llama/server-service";
 import { PensieveService } from "./pensieve";
 import { RuntimeService } from "./runtime";
@@ -120,12 +124,14 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const config = new ConfigService(vault);
 	await config.bootstrap(); // load persisted config + push to plugins
 	const channels = new ChannelsService(vault);
-	const runtime = new RuntimeService(vault, auth, channels);
+	const runtime = new RuntimeService(vault, auth, channels, undefined, config);
 	const backendOps = new BackendOps(vault);
-	const pensieve = new PensieveService(runtime);
+	const pensieve = new PensieveService(runtime, config);
 	pensieve.start();
 	const activity = new ActivityService(runtime);
 	activity.start();
+	const improvement = new ContinuousImprovementService(runtime, pensieve.memories, activity.logs);
+	improvement.start();
 	const gateway = new ChannelGatewayService();
 	runtime.setGateway(gateway);
 	runtime.onAfterBuild((state) => {
@@ -133,6 +139,35 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	});
 	const inbox = new InboxService(runtime, gateway);
 	inbox.bindToGateway();
+	// Cron / scheduled prompts. JSON-persisted, mirrored as eliza Tasks so they
+	// show in Activity > Tasks. Dispatcher routes a fired job through the inbox
+	// pipeline so the agent processes it via the same messageService.handleMessage
+	// path as user messages.
+	// Owner-bind: backs eliza's /eliza_pair (Telegram) + /eliza-pair (Discord)
+	// flows. Without this, the slash commands silently no-op.
+	const ownerBind = new OwnerBindService(vault);
+	runtime.setOwnerBind(ownerBind);
+
+	const cron = new CronService();
+	cron.setDispatcher(async (job) => {
+		// Each cron fire opens its own trace scope so every log line + the
+		// downstream inbox/messageService chain is correlatable to this run.
+		const traceId = newTraceId();
+		await traceScope(traceId, () =>
+			inbox.post({
+				kind: "task",
+				title: `[cron] ${job.name}`,
+				body: job.prompt,
+				source: `cron:${job.id}`,
+				prompt: true,
+			}),
+		);
+	});
+	cron.start();
+	runtime.onAfterBuild(async (state) => {
+		try { await cron.attachRuntime(state.runtime); }
+		catch (err) { console.warn("[cron] attachRuntime failed:", err instanceof Error ? err.message : err); }
+	});
 	// Local llama-server for embeddings (and later, optional chat fallback).
 	// Lazy-spawned on first ensureRunning() call, with model auto-download.
 	// We DO eagerly start it in the background so the first embedding call
@@ -194,7 +229,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
 		}
 	});
-	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity, channels, gateway, inbox, llama);
+	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity, channels, gateway, inbox, llama, cron, ownerBind);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
@@ -217,8 +252,10 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		auth,
 		api,
 		stop: () => {
+			improvement.stop();
 			activity.stop();
 			pensieve.stop();
+			cron.stop();
 			api.stop();
 			llama.stop();
 		},
@@ -230,11 +267,13 @@ export { VaultService } from "./vault";
 export { RuntimeService } from "./runtime";
 export { AuthService } from "./auth";
 export { ApiServer } from "./api/server";
+export { ContinuousImprovementService, CONTINUOUS_IMPROVEMENT_TASK_NAME } from "./continuous-improvement-service";
 export { PensieveService } from "./pensieve";
 export { ActivityService } from "./activity";
 export { PensieveMemoryService } from "./pensieve/memory-service";
 export { PensieveRelationshipService } from "./pensieve/relationship-service";
 export { PensieveTemplatesService } from "./pensieve/templates-service";
+export { PensieveChroniclerService } from "./pensieve/chronicler-service";
 export type {
 	PensieveTemplateSummary,
 	PensieveTemplateDetail,

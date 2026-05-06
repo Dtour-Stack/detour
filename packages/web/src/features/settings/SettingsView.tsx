@@ -6,6 +6,7 @@ import { SavedLoginsTab } from "./SavedLoginsTab";
 import { BackendsTab } from "./BackendsTab";
 import { AppearanceTab } from "./AppearanceTab";
 import { AgentPermissionsTab } from "./AgentPermissionsTab";
+import { AgentCharacterTab } from "./AgentCharacterTab";
 import { ModelsTab } from "./ModelsTab";
 import { WindowTab } from "./WindowTab";
 import { OsPermissionsTab } from "./OsPermissionsTab";
@@ -13,7 +14,7 @@ import { LocalAITab } from "./LocalAITab";
 
 type Section = "configuration" | "vault";
 
-type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "agent" | "os" | "window";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "character" | "agent" | "os" | "window";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 
 const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
@@ -21,6 +22,7 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "providers", label: "Providers" },
 	{ id: "models", label: "Models & Routing" },
 	{ id: "local-ai", label: "Local AI" },
+	{ id: "character", label: "Agent Character" },
 	{ id: "agent", label: "Agent Permissions" },
 	{ id: "os", label: "OS Permissions" },
 	{ id: "window", label: "Window" },
@@ -32,6 +34,80 @@ const VAULT_TABS: { id: VaultTab; label: string }[] = [
 	{ id: "backends", label: "Backends" },
 ];
 
+function ConfigContent({ client, tab }: { client: WebClient; tab: ConfigTab }) {
+	switch (tab) {
+		case "appearance":
+			return <AppearanceTab client={client} />;
+		case "providers":
+			return <ProvidersTab client={client} />;
+		case "models":
+			return <ModelsTab client={client} />;
+		case "local-ai":
+			return <LocalAITab client={client} />;
+		case "character":
+			return <AgentCharacterTab client={client} />;
+		case "agent":
+			return <AgentPermissionsTab client={client} />;
+		case "os":
+			return <OsPermissionsTab client={client} />;
+		case "window":
+			return <WindowTab client={client} />;
+		default:
+			return <div className="empty">Unknown configuration tab.</div>;
+	}
+}
+
+function VaultContent({ client, tab }: { client: WebClient; tab: VaultTab }) {
+	switch (tab) {
+		case "inventory":
+			return <InventoryTab client={client} />;
+		case "saved-logins":
+			return <SavedLoginsTab client={client} />;
+		case "backends":
+			return <BackendsTab client={client} />;
+		default:
+			return <div className="empty">Unknown vault tab.</div>;
+	}
+}
+
+function SidebarSection<T extends string>({
+	active,
+	current,
+	label,
+	onSelect,
+	onTab,
+	tabs,
+}: {
+	active: boolean;
+	current: T;
+	label: string;
+	onSelect: () => void;
+	onTab: (tab: T) => void;
+	tabs: { id: T; label: string }[];
+}) {
+	return (
+		<div className="sidebar-section">
+			<button type="button" className={active ? "section-btn active" : "section-btn"} onClick={onSelect}>
+				{label}
+			</button>
+			{active && (
+				<div className="sub-nav">
+					{tabs.map((t) => (
+						<button
+							key={t.id}
+							type="button"
+							className={current === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
+							onClick={() => onTab(t.id)}
+						>
+							{t.label}
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function SettingsView({ client }: { client: WebClient }) {
 	const [section, setSection] = useState<Section>("configuration");
 	const [configTab, setConfigTab] = useState<ConfigTab>("appearance");
@@ -40,74 +116,26 @@ export function SettingsView({ client }: { client: WebClient }) {
 	return (
 		<div className="settings-shell">
 			<aside className="settings-sidebar">
-				<div className="sidebar-section">
-					<button
-						type="button"
-						className={section === "configuration" ? "section-btn active" : "section-btn"}
-						onClick={() => setSection("configuration")}
-					>
-						Configuration
-					</button>
-					{section === "configuration" && (
-						<div className="sub-nav">
-							{CONFIG_TABS.map((t) => (
-								<button
-									key={t.id}
-									type="button"
-									className={configTab === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
-									onClick={() => setConfigTab(t.id)}
-								>
-									{t.label}
-								</button>
-							))}
-						</div>
-					)}
-				</div>
-
-				<div className="sidebar-section">
-					<button
-						type="button"
-						className={section === "vault" ? "section-btn active" : "section-btn"}
-						onClick={() => setSection("vault")}
-					>
-						Vault Nav
-					</button>
-					{section === "vault" && (
-						<div className="sub-nav">
-							{VAULT_TABS.map((t) => (
-								<button
-									key={t.id}
-									type="button"
-									className={vaultTab === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
-									onClick={() => setVaultTab(t.id)}
-								>
-									{t.label}
-								</button>
-							))}
-						</div>
-					)}
-				</div>
+				<SidebarSection
+					active={section === "configuration"}
+					current={configTab}
+					label="Configuration"
+					onSelect={() => setSection("configuration")}
+					onTab={setConfigTab}
+					tabs={CONFIG_TABS}
+				/>
+				<SidebarSection
+					active={section === "vault"}
+					current={vaultTab}
+					label="Vault Nav"
+					onSelect={() => setSection("vault")}
+					onTab={setVaultTab}
+					tabs={VAULT_TABS}
+				/>
 			</aside>
 
 			<main className="settings-main">
-				{section === "configuration" && (
-					<>
-						{configTab === "appearance" && <AppearanceTab client={client} />}
-						{configTab === "providers" && <ProvidersTab client={client} />}
-						{configTab === "models" && <ModelsTab client={client} />}
-						{configTab === "local-ai" && <LocalAITab client={client} />}
-						{configTab === "agent" && <AgentPermissionsTab client={client} />}
-						{configTab === "os" && <OsPermissionsTab client={client} />}
-						{configTab === "window" && <WindowTab client={client} />}
-					</>
-				)}
-				{section === "vault" && (
-					<>
-						{vaultTab === "inventory" && <InventoryTab client={client} />}
-						{vaultTab === "saved-logins" && <SavedLoginsTab client={client} />}
-						{vaultTab === "backends" && <BackendsTab client={client} />}
-					</>
-				)}
+				{section === "configuration" ? <ConfigContent client={client} tab={configTab} /> : <VaultContent client={client} tab={vaultTab} />}
 			</main>
 		</div>
 	);

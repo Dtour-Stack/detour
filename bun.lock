@@ -2596,7 +2596,10 @@
       "version": "0.3.0",
       "dependencies": {
         "@detour/plugin-codex-chatgpt": "workspace:*",
+        "@detour/plugin-codex-pets": "workspace:*",
+        "@detour/plugin-cron-tools": "workspace:*",
         "@detour/plugin-embedding-openai": "workspace:*",
+        "@detour/plugin-openrouter": "workspace:*",
         "@detour/plugin-pensieve-tools": "workspace:*",
         "@detour/plugin-vault-tools": "workspace:*",
         "@detour/plugin-x-tweets": "workspace:*",
@@ -2630,9 +2633,42 @@
         "typescript": "^5.7.0",
       },
     },
+    "packages/plugin-codex-pets": {
+      "name": "@detour/plugin-codex-pets",
+      "version": "0.3.0",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-cron-tools": {
+      "name": "@detour/plugin-cron-tools",
+      "version": "0.3.0",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
     "packages/plugin-embedding-openai": {
       "name": "@detour/plugin-embedding-openai",
       "version": "0.1.0",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-openrouter": {
+      "name": "@detour/plugin-openrouter",
+      "version": "0.3.0",
       "dependencies": {
         "@elizaos/core": "workspace:*",
       },
@@ -3121,7 +3157,13 @@
 
     "@detour/plugin-codex-chatgpt": ["@detour/plugin-codex-chatgpt@workspace:packages/plugin-codex-chatgpt"],
 
+    "@detour/plugin-codex-pets": ["@detour/plugin-codex-pets@workspace:packages/plugin-codex-pets"],
+
+    "@detour/plugin-cron-tools": ["@detour/plugin-cron-tools@workspace:packages/plugin-cron-tools"],
+
     "@detour/plugin-embedding-openai": ["@detour/plugin-embedding-openai@workspace:packages/plugin-embedding-openai"],
+
+    "@detour/plugin-openrouter": ["@detour/plugin-openrouter@workspace:packages/plugin-openrouter"],
 
     "@detour/plugin-pensieve-tools": ["@detour/plugin-pensieve-tools@workspace:packages/plugin-pensieve-tools"],
 

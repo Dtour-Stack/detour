@@ -1,4 +1,4 @@
-export type ProviderId = "anthropic" | "openai";
+export type ProviderId = "anthropic" | "openai" | "openrouter";
 
 export type ProviderInfo = {
 	id: ProviderId;
@@ -25,6 +25,51 @@ export type Health = { ok: true; version: string };
 export type SetProviderKeyBody = { key: string };
 export type SetActiveProviderBody = { id: ProviderId };
 export type SetEnabledBackendsBody = { enabled: string[] };
+
+export type ModelProviderRoute =
+	| "anthropic-subscription"
+	| "openai-codex"
+	| "anthropic-api"
+	| "openai-api"
+	| "openrouter-api";
+
+export type OpenRouterModelCapability =
+	| "text"
+	| "free"
+	| "embedding"
+	| "vision"
+	| "image";
+
+export type OpenRouterModelInfo = {
+	id: string;
+	name: string;
+	description?: string;
+	contextLength?: number;
+	inputModalities: string[];
+	outputModalities: string[];
+	supportedParameters: string[];
+	pricing: {
+		prompt?: string;
+		completion?: string;
+		request?: string;
+		image?: string;
+		webSearch?: string;
+		internalReasoning?: string;
+		inputCacheRead?: string;
+		inputCacheWrite?: string;
+	};
+	isFree: boolean;
+	capabilities: OpenRouterModelCapability[];
+};
+
+export type OpenRouterModelBuckets = Record<OpenRouterModelCapability, OpenRouterModelInfo[]>;
+
+export type OpenRouterModelsResponse = {
+	fetchedAt: number;
+	models: OpenRouterModelInfo[];
+	buckets: OpenRouterModelBuckets;
+	error?: string;
+};
 
 // --- generic vault keys ---
 export type VaultKeyDescriptor = {
@@ -59,18 +104,75 @@ export type RevealedLogin = {
 	domain?: string;
 };
 
+export type BrowserCommandSource = "agent" | "ui" | "api";
+
+export type BrowserCommandInput =
+	| {
+				kind: "open";
+				url: string;
+				newTab?: boolean;
+				tabId?: string;
+				source?: BrowserCommandSource;
+		  }
+		| {
+				kind: "inspect";
+				tabId?: string;
+				source?: BrowserCommandSource;
+				timeoutMs?: number;
+		  }
+		| {
+				kind: "script";
+				script: string;
+				tabId?: string;
+				source?: BrowserCommandSource;
+				timeoutMs?: number;
+		  }
+		| {
+				kind: "fill-login";
+				source: "in-house" | "1password" | "bitwarden";
+				identifier: string;
+				targetUrl?: string;
+				tabId?: string;
+				newTab?: boolean;
+				timeoutMs?: number;
+		  };
+
+export type BrowserCommand = BrowserCommandInput & {
+	id: string;
+	time: number;
+};
+
+export type BrowserCommandResult = {
+	ok: boolean;
+	result?: unknown;
+	error?: string;
+	text?: string;
+	time: number;
+};
+
 export type WsClientMessage =
 	| { kind: "chat:send"; convId: string; text: string }
+	| {
+			kind: "log:webview";
+			level: "trace" | "debug" | "info" | "warn" | "error";
+			msg: string;
+			source?: string;
+			traceId?: string;
+			extras?: Record<string, unknown>;
+	  }
 	| { kind: "ping" };
 
 export type WsServerMessage =
-	| { kind: "chat:delta"; convId: string; delta: string }
-	| { kind: "chat:complete"; convId: string }
-	| { kind: "chat:error"; convId: string; message: string }
+	| { kind: "chat:delta"; convId: string; delta: string; traceId?: string }
+	| { kind: "chat:complete"; convId: string; traceId?: string }
+	| { kind: "chat:error"; convId: string; message: string; traceId?: string }
 	| { kind: "provider:changed"; activeProvider: ProviderId | null }
 	| { kind: "auth:flow-update"; sessionId: string; state: AuthFlowState }
 	| { kind: "backend:changed"; backendId: string }
 	| { kind: "ui:open-settings" }
+	| { kind: "ui:open-browser" }
+	| { kind: "browser:command"; command: BrowserCommand }
+	| { kind: "ui:preferences-changed"; preferences: UiPreferences }
 	| { kind: "pong" };
 
 export type ThemeChoice = "system" | "light" | "dark";
@@ -87,11 +189,44 @@ export type AgentConfig = {
 	deniedPrefixes: string[];
 };
 
+export type AgentCharacterStyle = {
+	all: string[];
+	chat: string[];
+	post: string[];
+};
+
+export type AgentCharacterMessageExample = {
+	name: string;
+	content: {
+		text: string;
+		actions?: string[];
+		providers?: string[];
+	};
+};
+
+export type AgentCharacterConfig = {
+	name: string;
+	username: string;
+	system: string;
+	bio: string[];
+	lore: string[];
+	adjectives: string[];
+	topics: string[];
+	style: AgentCharacterStyle;
+	postExamples: string[];
+	messageExamples: AgentCharacterMessageExample[][];
+};
+
 export type ModelConfig = {
 	codexLarge: string;
 	codexSmall: string;
 	codexImage: string;
-	providerPriority: ("anthropic-subscription" | "openai-codex" | "anthropic-api" | "openai-api")[];
+	openRouterTextLarge: string;
+	openRouterTextSmall: string;
+	openRouterEmbedding: string;
+	openRouterImage: string;
+	openRouterVision: string;
+	providerPriority: ModelProviderRoute[];
 };
 
 export type WindowConfig = {
@@ -435,6 +570,8 @@ export type ChannelStatus = {
 	pluginLoaded: boolean;
 	liveStatus: ChannelLiveStatus;
 	liveDetail?: string;
+	autoReply?: boolean;
+	respondOnlyToMentions?: boolean;
 };
 
 export type ChannelsSnapshot = {
@@ -499,7 +636,71 @@ export type ActivityAutonomySnapshot = {
 	running: boolean;
 	thinking: boolean;
 	intervalMs: number;
+	runner: "prompt-batcher" | "task" | "missing" | "none";
 	autonomousRoomId?: string;
+	tasks: ActivityAutonomyTask[];
+	x: ActivityXAutonomySnapshot;
+	improvement: ActivityImprovementSnapshot;
+};
+
+export type ActivityAutonomyTask = {
+	id: string;
+	name: string;
+	description?: string;
+	tags: string[];
+	updateInterval?: number;
+	nextRunAt?: number;
+	lastExecuted?: number;
+	lastError?: string;
+	failureCount: number;
+	paused: boolean;
+	hasWorker: boolean;
+};
+
+export type ActivityXAutonomyHandled = {
+	action: string;
+	success?: boolean;
+	tweetId?: string;
+	resultTweetId?: string;
+	error?: string;
+	reason?: string;
+	text?: string;
+	authorScreenName?: string;
+	query?: string;
+	score?: number;
+};
+
+export type ActivityXAutonomySnapshot = {
+	available: boolean;
+	enabled: boolean;
+	writeEnabled: boolean;
+	statusPostingEnabled: boolean;
+	discoveryEnabled: boolean;
+	proactiveEngagementEnabled: boolean;
+	followEnabled: boolean;
+	intervalMs: number;
+	statusIntervalMs: number;
+	discoveryIntervalMs: number;
+	maxDiscoveryPerTick: number;
+	discoveryQueries: string[];
+	lastRunAt?: number;
+	lastStatusAt?: number;
+	lastDiscoveryAt?: number;
+	lastStatusTweetId?: string;
+	lastHandledCount: number;
+	lastHandled: ActivityXAutonomyHandled[];
+};
+
+export type ActivityImprovementSnapshot = {
+	available: boolean;
+	enabled: boolean;
+	intervalMs: number;
+	lastRunAt?: number;
+	lastResult?: string;
+	lastCategory?: string;
+	lastProposal?: string;
+	lastError?: string;
+	lastMemoryIds: string[];
 };
 
 export type ActivityTasksSnapshot = {

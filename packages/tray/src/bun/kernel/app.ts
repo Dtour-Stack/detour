@@ -25,6 +25,8 @@ export function createKernel(opts: {
 	opts.api.on((msg) => {
 		if (msg.kind === "provider:changed") {
 			events.emit("provider:changed", { activeProvider: msg.activeProvider });
+		} else if (msg.kind === "ui:open-browser" || msg.kind === "browser:command") {
+			events.emit("ui:open-browser", {});
 		}
 	});
 

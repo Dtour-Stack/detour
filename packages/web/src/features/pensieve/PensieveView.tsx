@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { WebClient } from "../../api/client";
+import { useDetourTheme } from "../../useDetourTheme";
 import { MemoriesPane } from "./memories/MemoriesPane";
 import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";
@@ -7,10 +8,12 @@ import { TemplatesPane } from "./templates/TemplatesPane";
 import { EmbeddingMapPane } from "./embeddings/EmbeddingMapPane";
 import { InboxPane } from "./inbox/InboxPane";
 import { GatewayPane } from "./gateway/GatewayPane";
+import { ChroniclerPane } from "./chronicler/ChroniclerPane";
 
 type Section =
 	| "inbox"
 	| "gateway"
+	| "chronicler"
 	| "notes"
 	| "knowledge"
 	| "memories"
@@ -22,6 +25,7 @@ type Section =
 const LIVE_SECTIONS: { id: Section; label: string }[] = [
 	{ id: "inbox", label: "Inbox" },
 	{ id: "gateway", label: "Channel feed" },
+	{ id: "chronicler", label: "Chronicler" },
 ];
 
 const KNOWLEDGE_SECTIONS: { id: Section; label: string }[] = [
@@ -43,6 +47,7 @@ const KNOWLEDGE_SECTIONS: { id: Section; label: string }[] = [
  */
 export function PensieveView() {
 	const client = useMemo(() => new WebClient(), []);
+	useDetourTheme(client);
 	const [connected, setConnected] = useState(false);
 	const [section, setSection] = useState<Section>(() => {
 		try {
@@ -102,6 +107,7 @@ export function PensieveView() {
 			<main className="settings-main settings-main-flush">
 				{section === "inbox" && <InboxPane client={client} />}
 				{section === "gateway" && <GatewayPane client={client} />}
+				{section === "chronicler" && <ChroniclerPane client={client} />}
 				{section === "notes" && <MemoriesPane client={client} scope="notes" />}
 				{section === "knowledge" && <MemoriesPane client={client} scope="knowledge" />}
 				{section === "memories" && <MemoriesPane client={client} />}

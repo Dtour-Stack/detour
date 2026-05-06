@@ -18,6 +18,7 @@ import type {
 import type { WebClient } from "../../api/client";
 
 type StageId = "input" | "should_respond" | "plan" | "actions" | "evaluators";
+type Trajectory = NonNullable<ActivityTrajectoryDetail["trajectory"]>;
 
 const STAGES: { id: StageId; label: string }[] = [
 	{ id: "input", label: "Input" },
@@ -148,84 +149,137 @@ export function TrajectoryDetail({
 
 	return (
 		<div className="trajectory-detail">
-			<div className="trajectory-detail-header">
-				<button type="button" className="link" onClick={onClose}>← back</button>
-				<div className="trajectory-detail-title">
-					<span className={`badge ${statusTone(t.status)}`}>{t.status ?? "?"}</span>
-					{t.source && <span className="badge muted">{t.source}</span>}
-					<span className="hint">{t.startTime ? new Date(t.startTime).toLocaleString() : ""}</span>
-				</div>
-				<div style={{ flex: 1 }} />
-				<button type="button" className="btn small" onClick={exportThis}>
-					Export JSON
-				</button>
-			</div>
-
-			<div className="trajectory-summary-grid">
-				<SummaryCard label="Duration" value={fmtMs(t.durationMs)} />
-				<SummaryCard label="LLM time" value={fmtMs(detail.totals.totalLatencyMs || undefined)} />
-				<SummaryCard label="Steps" value={String(detail.totals.stepCount)} />
-				<SummaryCard label="LLM calls" value={String(detail.totals.llmCallCount)} />
-				<SummaryCard label="Provider accesses" value={String(detail.totals.providerAccessCount)} />
-				<SummaryCard label="Actions" value={String(detail.totals.actionCount)} />
-				<SummaryCard
-					label="Tokens (in / out)"
-					value={`${fmtTokens(detail.totals.totalPromptTokens)} / ${fmtTokens(detail.totals.totalCompletionTokens)}`}
-				/>
-				{detail.identity?.totalReward !== undefined && (
-					<SummaryCard label="Total reward" value={detail.identity.totalReward.toFixed(3)} />
-				)}
-			</div>
-
+			<TrajectoryHeader trajectory={t} onClose={onClose} onExport={exportThis} />
+			<TrajectorySummary detail={detail} trajectory={t} />
 			{detail.identity && <IdentityBlock identity={detail.identity} />}
+			<TrajectoryPipeline
+				status={t.status}
+				stageCounts={stageCounts}
+				activeStage={activeStage}
+				onStageChange={setActiveStage}
+			/>
+			<TrajectoryMetricSections detail={detail} />
+			<RagTraceSection providerAccesses={detail.providerAccesses} />
+			<ProviderAccessSection providerAccesses={detail.providerAccesses} />
+			<ActionSection actions={detail.actions} />
+			<LlmCallsSection calls={filteredCalls} total={detail.llmCalls.length} />
+		</div>
+	);
+}
 
-			<div className="trajectory-pipeline">
-				{STAGES.map((stage, i) => {
-					const count = stageCounts[stage.id];
-					const isActive = activeStage === stage.id;
-					const enabled = stage.id === "input" || count > 0;
-					return (
-						<div key={stage.id} className="trajectory-pipeline-stage-wrap">
-							<button
-								type="button"
-								className={[
-									"trajectory-pipeline-stage",
-									enabled ? "" : "disabled",
-									isActive ? "active" : "",
-									t.status === "error" && enabled && stage.id !== "input" ? "errored" : "",
-								].filter(Boolean).join(" ")}
-								onClick={() => {
-									if (!enabled || stage.id === "input") return setActiveStage(null);
-									setActiveStage(isActive ? null : stage.id);
-								}}
-								disabled={!enabled}
-							>
-								<div className="trajectory-pipeline-stage-label">{stage.label}</div>
-								<div className="trajectory-pipeline-stage-count">{count}</div>
-							</button>
-							{i < STAGES.length - 1 && <div className="trajectory-pipeline-arrow">→</div>}
-						</div>
-					);
-				})}
-				{activeStage && activeStage !== "input" && (
-					<button type="button" className="link" style={{ marginLeft: 8 }} onClick={() => setActiveStage(null)}>
-						clear filter
-					</button>
-				)}
+function TrajectoryHeader({
+	trajectory,
+	onClose,
+	onExport,
+}: {
+	trajectory: Trajectory;
+	onClose: () => void;
+	onExport: () => void;
+}) {
+	return (
+		<div className="trajectory-detail-header">
+			<button type="button" className="link" onClick={onClose}>← back</button>
+			<div className="trajectory-detail-title">
+				<span className={`badge ${statusTone(trajectory.status)}`}>{trajectory.status ?? "?"}</span>
+				{trajectory.source && <span className="badge muted">{trajectory.source}</span>}
+				<span className="hint">{trajectory.startTime ? new Date(trajectory.startTime).toLocaleString() : ""}</span>
 			</div>
+			<div style={{ flex: 1 }} />
+			<button type="button" className="btn small" onClick={onExport}>
+				Export JSON
+			</button>
+		</div>
+	);
+}
 
+function TrajectorySummary({
+	detail,
+	trajectory,
+}: {
+	detail: ActivityTrajectoryDetail;
+	trajectory: Trajectory;
+}) {
+	return (
+		<div className="trajectory-summary-grid">
+			<SummaryCard label="Duration" value={fmtMs(trajectory.durationMs)} />
+			<SummaryCard label="LLM time" value={fmtMs(detail.totals.totalLatencyMs || undefined)} />
+			<SummaryCard label="Steps" value={String(detail.totals.stepCount)} />
+			<SummaryCard label="LLM calls" value={String(detail.totals.llmCallCount)} />
+			<SummaryCard label="Provider accesses" value={String(detail.totals.providerAccessCount)} />
+			<SummaryCard label="Actions" value={String(detail.totals.actionCount)} />
+			<SummaryCard
+				label="Tokens (in / out)"
+				value={`${fmtTokens(detail.totals.totalPromptTokens)} / ${fmtTokens(detail.totals.totalCompletionTokens)}`}
+			/>
+			{detail.identity?.totalReward !== undefined && (
+				<SummaryCard label="Total reward" value={detail.identity.totalReward.toFixed(3)} />
+			)}
+		</div>
+	);
+}
+
+function TrajectoryPipeline({
+	status,
+	stageCounts,
+	activeStage,
+	onStageChange,
+}: {
+	status?: string;
+	stageCounts: Record<StageId, number>;
+	activeStage: StageId | null;
+	onStageChange: (stage: StageId | null) => void;
+}) {
+	return (
+		<div className="trajectory-pipeline">
+			{STAGES.map((stage, i) => {
+				const count = stageCounts[stage.id];
+				const isActive = activeStage === stage.id;
+				const enabled = stage.id === "input" || count > 0;
+				return (
+					<div key={stage.id} className="trajectory-pipeline-stage-wrap">
+						<button
+							type="button"
+							className={[
+								"trajectory-pipeline-stage",
+								enabled ? "" : "disabled",
+								isActive ? "active" : "",
+								status === "error" && enabled && stage.id !== "input" ? "errored" : "",
+							].filter(Boolean).join(" ")}
+							onClick={() => {
+								if (!enabled || stage.id === "input") return onStageChange(null);
+								onStageChange(isActive ? null : stage.id);
+							}}
+							disabled={!enabled}
+						>
+							<div className="trajectory-pipeline-stage-label">{stage.label}</div>
+							<div className="trajectory-pipeline-stage-count">{count}</div>
+						</button>
+						{i < STAGES.length - 1 && <div className="trajectory-pipeline-arrow">→</div>}
+					</div>
+				);
+			})}
+			{activeStage && activeStage !== "input" && (
+				<button type="button" className="link" style={{ marginLeft: 8 }} onClick={() => onStageChange(null)}>
+					clear filter
+				</button>
+			)}
+		</div>
+	);
+}
+
+function TrajectoryMetricSections({ detail }: { detail: ActivityTrajectoryDetail }) {
+	return (
+		<>
 			{detail.metrics && Object.keys(detail.metrics).length > 0 && (
 				<DisclosureSection label="Metrics" defaultOpen={true}>
 					<KeyValueTable data={detail.metrics} />
 				</DisclosureSection>
 			)}
-
 			{detail.rewardComponents && Object.keys(detail.rewardComponents).length > 0 && (
 				<DisclosureSection label="Reward components" defaultOpen={false}>
 					<KeyValueTable data={detail.rewardComponents} />
 				</DisclosureSection>
 			)}
-
 			{detail.steps.length > 0 && (
 				<DisclosureSection label={`Steps (${detail.steps.length})`} defaultOpen={false}>
 					<div className="trajectory-step-list">
@@ -235,90 +289,99 @@ export function TrajectoryDetail({
 					</div>
 				</DisclosureSection>
 			)}
-
-			<RagTraceSection providerAccesses={detail.providerAccesses} />
-
 			{detail.metadata && Object.keys(detail.metadata).length > 0 && (
 				<DisclosureSection label="Metadata" defaultOpen={false}>
 					<pre className="trajectory-pre">{fmtJson(detail.metadata)}</pre>
 				</DisclosureSection>
 			)}
+		</>
+	);
+}
 
-			{detail.providerAccesses.length > 0 && (
-				<DisclosureSection label={`Provider accesses (${detail.providerAccesses.length})`} defaultOpen={false}>
-					<div className="trajectory-provider-list">
-						{detail.providerAccesses.map((acc, i) => (
-							<div key={`${acc.providerId}-${i}`} className="trajectory-provider-card">
-								<div className="trajectory-provider-header">
-									<span className="trajectory-provider-name">{acc.providerName || "unknown"}</span>
-									{acc.purpose && <span className="hint">· {acc.purpose}</span>}
-									<span className="hint">step {acc.stepNumber}</span>
-								</div>
-								{acc.query !== undefined && (
-									<details className="trajectory-provider-section">
-										<summary>query</summary>
-										<pre className="trajectory-pre">{fmtJson(acc.query)}</pre>
-									</details>
-								)}
-								<details className="trajectory-provider-section" open>
-									<summary>data</summary>
-									<pre className="trajectory-pre">{fmtJson(acc.data)}</pre>
-								</details>
-							</div>
-						))}
+function ProviderAccessSection({
+	providerAccesses,
+}: {
+	providerAccesses: ActivityTrajectoryDetail["providerAccesses"];
+}) {
+	if (providerAccesses.length === 0) return null;
+	return (
+		<DisclosureSection label={`Provider accesses (${providerAccesses.length})`} defaultOpen={false}>
+			<div className="trajectory-provider-list">
+				{providerAccesses.map((acc, i) => (
+					<div key={`${acc.providerId}-${i}`} className="trajectory-provider-card">
+						<div className="trajectory-provider-header">
+							<span className="trajectory-provider-name">{acc.providerName || "unknown"}</span>
+							{acc.purpose && <span className="hint">· {acc.purpose}</span>}
+							<span className="hint">step {acc.stepNumber}</span>
+						</div>
+						{acc.query !== undefined && (
+							<details className="trajectory-provider-section">
+								<summary>query</summary>
+								<pre className="trajectory-pre">{fmtJson(acc.query)}</pre>
+							</details>
+						)}
+						<details className="trajectory-provider-section" open>
+							<summary>data</summary>
+							<pre className="trajectory-pre">{fmtJson(acc.data)}</pre>
+						</details>
 					</div>
-				</DisclosureSection>
-			)}
-
-			{detail.actions.length > 0 && (
-				<DisclosureSection label={`Actions (${detail.actions.length})`} defaultOpen={false}>
-					<div className="trajectory-action-list">
-						{detail.actions.map((a, i) => (
-							<div key={`${a.attemptId}-${i}`} className="trajectory-action-card">
-								<div className="trajectory-action-header">
-									<span className={`badge ${a.success === false ? "err" : a.success === true ? "ok" : "muted"}`}>
-										{a.success === false ? "failed" : a.success === true ? "ok" : "—"}
-									</span>
-									<span className="trajectory-action-name">{a.actionName ?? a.actionType ?? "action"}</span>
-									<span className="hint">step {a.stepNumber}</span>
-								</div>
-								{a.reasoning && (
-									<div className="trajectory-action-reasoning">{a.reasoning}</div>
-								)}
-								{a.error && <div className="banner error" style={{ margin: "6px 0" }}>{a.error}</div>}
-								{a.parameters !== undefined && (
-									<details className="trajectory-provider-section">
-										<summary>parameters</summary>
-										<pre className="trajectory-pre">{fmtJson(a.parameters)}</pre>
-									</details>
-								)}
-								{a.result !== undefined && (
-									<details className="trajectory-provider-section">
-										<summary>result</summary>
-										<pre className="trajectory-pre">{fmtJson(a.result)}</pre>
-									</details>
-								)}
-							</div>
-						))}
-					</div>
-				</DisclosureSection>
-			)}
-
-			<div className="trajectory-section-label">
-				LLM calls {filteredCalls.length !== detail.llmCalls.length && (
-					<span className="hint">({filteredCalls.length} of {detail.llmCalls.length})</span>
-				)}
+				))}
 			</div>
-			{filteredCalls.length === 0 ? (
+		</DisclosureSection>
+	);
+}
+
+function ActionSection({ actions }: { actions: ActivityTrajectoryDetail["actions"] }) {
+	if (actions.length === 0) return null;
+	return (
+		<DisclosureSection label={`Actions (${actions.length})`} defaultOpen={false}>
+			<div className="trajectory-action-list">
+				{actions.map((a, i) => (
+					<div key={`${a.attemptId}-${i}`} className="trajectory-action-card">
+						<div className="trajectory-action-header">
+							<span className={`badge ${a.success === false ? "err" : a.success === true ? "ok" : "muted"}`}>
+								{a.success === false ? "failed" : a.success === true ? "ok" : "—"}
+							</span>
+							<span className="trajectory-action-name">{a.actionName ?? a.actionType ?? "action"}</span>
+							<span className="hint">step {a.stepNumber}</span>
+						</div>
+						{a.reasoning && <div className="trajectory-action-reasoning">{a.reasoning}</div>}
+						{a.error && <div className="banner error" style={{ margin: "6px 0" }}>{a.error}</div>}
+						{a.parameters !== undefined && (
+							<details className="trajectory-provider-section">
+								<summary>parameters</summary>
+								<pre className="trajectory-pre">{fmtJson(a.parameters)}</pre>
+							</details>
+						)}
+						{a.result !== undefined && (
+							<details className="trajectory-provider-section">
+								<summary>result</summary>
+								<pre className="trajectory-pre">{fmtJson(a.result)}</pre>
+							</details>
+						)}
+					</div>
+				))}
+			</div>
+		</DisclosureSection>
+	);
+}
+
+function LlmCallsSection({ calls, total }: { calls: ActivityLlmCall[]; total: number }) {
+	return (
+		<>
+			<div className="trajectory-section-label">
+				LLM calls {calls.length !== total && <span className="hint">({calls.length} of {total})</span>}
+			</div>
+			{calls.length === 0 ? (
 				<div className="empty">No LLM calls recorded.</div>
 			) : (
 				<div className="trajectory-call-list">
-					{filteredCalls.map((call, i) => (
+					{calls.map((call, i) => (
 						<TrajectoryLlmCallCard key={call.callId} index={i + 1} call={call} />
 					))}
 				</div>
 			)}
-		</div>
+		</>
 	);
 }
 
@@ -518,36 +581,56 @@ interface RagFragment {
 
 function extractFragments(data: unknown): RagFragment[] {
 	if (!data) return [];
-	const tryArrays: unknown[] = [];
-	if (Array.isArray(data)) tryArrays.push(data);
-	else if (typeof data === "object") {
-		const obj = data as Record<string, unknown>;
-		for (const k of ["fragments", "retrievedFragments", "results", "values", "knowledge"]) {
-			if (Array.isArray(obj[k])) tryArrays.push(obj[k]);
+	for (const arr of fragmentArrays(data)) {
+		const out = arr.flatMap((fragment) => {
+			const parsed = parseFragment(fragment);
+			return parsed ? [parsed] : [];
+		});
+		if (out.length > 0) {
+			return out;
 		}
-	}
-	for (const arr of tryArrays) {
-		if (!Array.isArray(arr) || arr.length === 0) continue;
-		const out: RagFragment[] = [];
-		for (const f of arr) {
-			if (!f || typeof f !== "object") continue;
-			const o = f as Record<string, unknown>;
-			const preview = (typeof o.contentPreview === "string" && o.contentPreview)
-				|| (typeof o.content === "string" && o.content)
-				|| (typeof o.text === "string" && o.text)
-				|| "";
-			if (!preview) continue;
-			out.push({
-				...(typeof o.fragmentId === "string" && { fragmentId: o.fragmentId }),
-				...(typeof o.documentTitle === "string" && { documentTitle: o.documentTitle }),
-				...(typeof o.similarityScore === "number" && { similarityScore: o.similarityScore }),
-				...(typeof o.score === "number" && { similarityScore: o.score }),
-				contentPreview: String(preview).slice(0, 480),
-			});
-		}
-		if (out.length > 0) return out;
 	}
 	return [];
+}
+
+function fragmentArrays(data: unknown): unknown[][] {
+	const found: unknown[][] = [];
+	const seen = new Set<object>();
+	collectFragmentArrays(data, found, seen, 0);
+	return found;
+}
+
+function collectFragmentArrays(data: unknown, found: unknown[][], seen: Set<object>, depth: number): void {
+	if (!data || typeof data !== "object" || depth > 6 || seen.has(data)) return;
+	seen.add(data);
+	if (Array.isArray(data)) {
+		if (data.length > 0 && data.some((item) => parseFragment(item))) found.push(data);
+		for (const item of data) collectFragmentArrays(item, found, seen, depth + 1);
+		return;
+	}
+	for (const value of Object.values(data)) collectFragmentArrays(value, found, seen, depth + 1);
+}
+
+function parseFragment(fragment: unknown): RagFragment | null {
+	if (!fragment || typeof fragment !== "object") return null;
+	const o = fragment as Record<string, unknown>;
+	const preview = fragmentPreview(o);
+	if (!preview) return null;
+	return {
+		...(typeof o.fragmentId === "string" && { fragmentId: o.fragmentId }),
+		...(typeof o.documentTitle === "string" && { documentTitle: o.documentTitle }),
+		...(typeof o.similarityScore === "number" && { similarityScore: o.similarityScore }),
+		...(typeof o.score === "number" && { similarityScore: o.score }),
+		contentPreview: preview.slice(0, 480),
+	};
+}
+
+function fragmentPreview(fragment: Record<string, unknown>): string {
+	for (const key of ["contentPreview", "content", "text"]) {
+		const value = fragment[key];
+		if (typeof value === "string" && value) return value;
+	}
+	return "";
 }
 
 function StepCard({ step }: { step: ActivityTrajectoryStepSummary }) {

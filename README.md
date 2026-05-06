@@ -51,7 +51,7 @@ The installer downloads from GitHub Releases, removes `com.apple.quarantine`, an
 | **Activity** | `Cmd+Shift+A` | Trajectories, logs, runtime introspection, tasks, plugins, raw DB |
 | **Channels** | `Cmd+Shift+C` | Discord / Telegram / iMessage setup with token validation on save |
 | **Settings > Local AI** | `Cmd+,` then "Local AI" | Bundled llama.cpp embedding server status + test button + cloud-fallback OpenAI key |
-| **X (Twitter) actions** | agent-callable | `X_POST` and `X_REPLY` actions — the agent posts as @detour_squirrel directly via X's web GraphQL (cookie auth, no developer API key). Setup: paste `X_AUTH_TOKEN` + `X_CT0` cookies into the vault. |
+| **X (Twitter) actions** | agent-callable | Full X surface via cookie auth — no developer API key. Write: `X_POST`, `X_REPLY`, `X_LIKE`/`X_UNLIKE`, `X_RETWEET`, `X_BOOKMARK`, `X_DELETE_TWEET`, `X_FOLLOW`. Read: `X_NOTIFICATIONS`, `X_SEARCH`, `X_GET_USER`, `X_GET_TWEET`, `X_USER_TWEETS`, `X_HOME_TIMELINE`. Action descriptions are weighted by [X's open-source ranker](https://github.com/twitter/the-algorithm) so the planner picks the highest-leverage move (replying fast to mentions ≈ 75× weight). Setup: paste `X_AUTH_TOKEN` + `X_CT0` cookies into the vault. |
 
 Behind the surfaces:
 

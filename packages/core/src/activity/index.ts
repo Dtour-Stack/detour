@@ -38,12 +38,30 @@ export class ActivityService {
 		this.db = new ActivityDbService(resolve);
 	}
 
+	private sweepTimer: ReturnType<typeof setInterval> | null = null;
+
 	start(): void {
 		this.logs.start();
+		// Periodic sweeper: close any trajectories that have been "active" for
+		// >5 minutes. Eliza creates a trajectory on every inbound message but
+		// often abandons them when shouldRespond returns IGNORE — without this
+		// they accumulate forever as ghost rows.
+		this.sweepTimer = setInterval(() => {
+			void this.trajectories.sweepStale(5 * 60_000).then((r) => {
+				if (r.closed > 0) {
+					console.log(`[activity] swept ${r.closed} stale trajectories (checked ${r.checked})`);
+				}
+			}).catch(() => { /* best-effort */ });
+		}, 60_000);
+		(this.sweepTimer as unknown as { unref?: () => void }).unref?.();
 	}
 
 	stop(): void {
 		this.logs.stop();
+		if (this.sweepTimer) {
+			clearInterval(this.sweepTimer);
+			this.sweepTimer = null;
+		}
 	}
 
 	runtimeSnapshot(): ActivityRuntimeSnapshot {
@@ -78,5 +96,5 @@ export type {
 	ActivityPluginsSnapshot,
 	ActivityPluginDetail,
 } from "./runtime-introspect";
-export type { ActivityAutonomySnapshot } from "./autonomy-service";
+export type { ActivityAutonomySnapshot, ActivityImprovementSnapshot } from "./autonomy-service";
 export type { DbColumn, DbTable, DbTableDetail, DbQueryResult } from "./db-service";

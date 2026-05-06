@@ -9,6 +9,7 @@
  */
 
 import type { IAgentRuntime } from "@elizaos/core";
+import type { ConfigService } from "../config-service";
 import type { RuntimeService } from "../runtime";
 import { PensieveMemoryService } from "./memory-service";
 import { PensieveRelationshipService } from "./relationship-service";
@@ -16,6 +17,7 @@ import { PensieveGraphService } from "./graph-service";
 import { PensieveTemplatesService } from "./templates-service";
 import { PensieveKnowledgeService } from "./knowledge-service";
 import { PensieveEmbeddingMapService } from "./embedding-map-service";
+import { PensieveChroniclerService } from "./chronicler-service";
 
 export class PensieveService {
 	readonly memories: PensieveMemoryService;
@@ -24,8 +26,12 @@ export class PensieveService {
 	readonly templates: PensieveTemplatesService;
 	readonly knowledge: PensieveKnowledgeService;
 	readonly embeddingMap: PensieveEmbeddingMapService;
+	readonly chronicler: PensieveChroniclerService;
 
-	constructor(private readonly runtimeService: RuntimeService) {
+	constructor(
+		private readonly runtimeService: RuntimeService,
+		configService: ConfigService,
+	) {
 		const resolve = (): IAgentRuntime | null => {
 			// Use the cached runtime — never trigger a build from a Pensieve query.
 			return this.runtimeService.peek();
@@ -36,10 +42,16 @@ export class PensieveService {
 		this.templates = new PensieveTemplatesService(this.memories, resolve);
 		this.knowledge = new PensieveKnowledgeService(resolve);
 		this.embeddingMap = new PensieveEmbeddingMapService(resolve);
+		this.chronicler = new PensieveChroniclerService(this.memories, configService);
 	}
 
-	start(): void {}
-	stop(): void {}
+	start(): void {
+		void this.chronicler.start();
+	}
+
+	stop(): void {
+		this.chronicler.stop();
+	}
 }
 
 export type {
@@ -64,5 +76,6 @@ export type {
 export { extractTemplateVariables, PensieveTemplatesService } from "./templates-service";
 export type { PensieveKnowledgeIngestInput, PensieveKnowledgeIngestResult } from "./knowledge-service";
 export type { EmbeddingPoint, EmbeddingMapResult } from "./embedding-map-service";
+export { PensieveChroniclerService } from "./chronicler-service";
 export type { GraphNode, GraphEdge, GraphSnapshot, GraphFilter, BacklinksResult } from "./graph-service";
 export { pensieveAudit, type PensieveAuditEvent, type PensieveAuditAction } from "./audit";
