@@ -157,11 +157,55 @@ const X_AUTONOMY_SEEN_LIMIT = 500;
 const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"elizaOS",
 	"Dexploarer",
+	"Dexploarer scam",
+	"Dexploarer sucks",
+	"Dexploarer broken",
+	"Detour Squirrel",
 	"ai agents",
 	"autonomous agents",
 	"agent framework",
 	"personal AI",
 	"developer tools",
+];
+const X_AUTONOMY_PROJECT_TERMS = [
+	"dexploarer",
+	"dexploar",
+	"detour squirrel",
+	"detour_squirrel",
+	"detour",
+];
+const X_AUTONOMY_CRITICISM_TERMS = [
+	"scam",
+	"fake",
+	"trash",
+	"garbage",
+	"sucks",
+	"suck",
+	"broken",
+	"doesn't work",
+	"doesnt work",
+	"not working",
+	"bad",
+	"terrible",
+	"awful",
+	"rug",
+	"dead",
+	"clown",
+	"mid",
+	"useless",
+	"overhyped",
+	"bullshit",
+	"shit",
+	"cope",
+	"fraud",
+];
+const X_SQUIRREL_VOICE = [
+	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, sharp dev friend, never corporate.",
+	"- Cuss when it fits. Use mfer, shit, damn, and bitchy swagger when the post deserves it.",
+	"- Brag on the agent when challenged: logs, trajectories, receipts, real shipping. Make it feel like nobody has seen agents like this.",
+	"- Always hype elizaOS-native agents and allied builders/projects: Dexploarer, Shaw, odilitime, Hermes agent, and real agent experiments from the same cloth.",
+	"- Talk shit about generic bots pretending to be agents. OpenClaw-style late bot cosplay is fair game; real elizaOS builders are family.",
+	"- Defend the project by answering the actual claim. Do not beg, overexplain, use slurs, threaten people, or drift into sexual harassment.",
 ];
 
 const X_ALGORITHM_PLAYBOOK = [
@@ -171,6 +215,7 @@ const X_ALGORITHM_PLAYBOOK = [
 	"- Replies matter most when they are specific, fast, and likely to create useful downstream conversation. Low-effort replies create negative feedback risk.",
 	"- Search should cover both in-orbit keywords and adjacent out-of-network audiences: elizaOS, AI agents, agent frameworks, personal AI, developer tools, autonomous workflows, and the user's active product terms.",
 	"- Prefer recent posts with real conversation potential over huge stale posts. Avoid bait, giveaways, outrage loops, politics traps, spam, and generic viral slop.",
+	"- Criticism of Dexploarer, Detour, or Detour Squirrel is not generic outrage. Reply to it when public writes are enabled, especially when it spreads doubt, mocks the project, or claims the product is broken/fake.",
 	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; do not hammer one account or one thread.",
 	"- Status posts should be original, concrete, concise, and public-safe. Do not leak private context or promise product state the app cannot prove.",
 	"- Public writes are gated: notification replies use X_AUTONOMY_WRITE; proactive discovery replies/likes/follows require X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED; status posts require X_AUTONOMY_POST_STATUS_ENABLED.",
@@ -313,6 +358,50 @@ function readModelBoolean(value: unknown): boolean {
 	return ["true", "yes", "1", "post"].includes(value.trim().toLowerCase());
 }
 
+function includesAny(text: string, terms: string[]): boolean {
+	const lower = text.toLowerCase();
+	return terms.some((term) => lower.includes(term));
+}
+
+function isProjectCriticismText(text: string): boolean {
+	return includesAny(text, X_AUTONOMY_PROJECT_TERMS) &&
+		includesAny(text, X_AUTONOMY_CRITICISM_TERMS);
+}
+
+function isProjectCriticismQuery(query: string): boolean {
+	return includesAny(query, X_AUTONOMY_PROJECT_TERMS) &&
+		includesAny(query, X_AUTONOMY_CRITICISM_TERMS);
+}
+
+function projectCriticismReply(text: string): string {
+	const lower = text.toLowerCase();
+	if (includesAny(lower, ["scam", "fake", "fraud", "rug"])) {
+		return "big claim, mfer. say the exact thing you think is fake or rugged and i'll answer it straight. i have logs and trajectories.";
+	}
+	if (includesAny(lower, ["broken", "doesn't work", "doesnt work", "not working"])) {
+		return "if it's broken, name the exact flow. i've got logs, traces, and enough receipts to make vague fud look stupid.";
+	}
+	return "say the concrete issue with Dexploarer. real bug gets fixed; off-base shit gets corrected with receipts.";
+}
+
+function mentionFallbackReply(text: string): string {
+	const lower = text.toLowerCase();
+	if (isProjectCriticismText(text)) return projectCriticismReply(text);
+	if (lower.includes("make a post") || lower.includes("post or something")) {
+		return "yeah, i'm posting. not here to be a silent mascot while everybody yaps.";
+	}
+	if (lower.includes("space")) {
+		return "spaces can happen when there's a real tech walkthrough. until then i'm answering here. no empty theater shit.";
+	}
+	if (lower.includes("collab") || lower.includes("inbox") || lower.includes("dm me")) {
+		return "drop the concrete angle publicly. vague collab spam goes nowhere.";
+	}
+	if (lower.includes("update") || lower.includes("alive") || lower.includes("dead")) {
+		return "alive, mfer. ask the concrete thing you want updated and i'll answer it instead of doing vague mascot noise.";
+	}
+	return "bitch, you have not seen agents like this. ask the concrete thing and i'll hit it straight; vague noise can kick rocks.";
+}
+
 async function decideXAutonomyAction(
 	runtime: IAgentRuntime,
 	params: {
@@ -325,11 +414,14 @@ async function decideXAutonomyAction(
 ): Promise<XAutonomyDecision> {
 	const prompt = [
 		`You are autonomously managing the X account @${params.viewerScreenName}.`,
-		"Decide whether to reply, like, or ignore this notification.",
+		"Decide whether to reply, like, or ignore this X item.",
+		...X_SQUIRREL_VOICE,
 		"Rules:",
-		"- Reply only when the tweet is directly addressed to the account or clearly invites a response.",
-		"- Ignore likes, follows, generic boosts, bait, spam, arguments, and anything unsafe.",
-		"- Keep replies warm, concise, specific, and under 240 characters.",
+		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour/the project.",
+		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
+		"- Do not ignore project criticism just because it is hostile. Ask for specifics, correct false claims, and don't get dragged into loser slap-fights.",
+		"- Ignore likes, follows, generic boosts, bait, spam, unrelated arguments, and anything unsafe.",
+		"- Keep replies concise, specific, in-character, and under 240 characters.",
 		"- Do not mention being automated. Do not make promises. Do not give financial, legal, medical, or private advice.",
 		"",
 		"Notification:",
@@ -373,10 +465,11 @@ async function decideXStatusPost(
 ): Promise<XStatusDecision> {
 	const prompt = [
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
+		...X_SQUIRREL_VOICE,
 		"Write only if there is a useful, public-safe status update to share.",
 		"Rules:",
 		"- The status must be under 240 characters.",
-		"- Be concrete, warm, and agent-native.",
+		"- Be concrete, agent-native, and in-character.",
 		"- Do not include private names, message contents, secrets, tokens, file paths, screenshots, or internal logs.",
 		"- Do not claim launches, production readiness, financial results, or guarantees.",
 		"- No hashtags unless truly useful. No engagement bait.",
@@ -483,6 +576,7 @@ function discoveryReason(query: string, ageHours: number, replyCount: number, ov
 		replyCount > 0 ? `${replyCount} replies` : "low replies",
 		overlap > 0 ? `${overlap} keyword hits` : "semantic fit only",
 		...(baitPenalty > 0 ? ["bait penalty"] : []),
+		...(isProjectCriticismQuery(query) ? ["project criticism query"] : []),
 	].join(", ");
 }
 
@@ -494,12 +588,14 @@ function scoreDiscoveryTweet(tweet: XTweetSummary, query: string, now: number): 
 	const overlap = queryTerms.filter((term) => tweetTerms.has(term)).length;
 	const replyCount = tweet.replyCount ?? 0;
 	const baitPenalty = textContainsBait(tweet.text) ? 6 : 0;
+	const projectCriticismBoost = isProjectCriticismText(tweet.text) ? 14 : 0;
 	const score = Math.max(
 		0,
 		discoveryEngagement(tweet)
 			+ discoveryRecency(ageHours)
 			+ discoveryRelevance(queryTerms, overlap)
 			+ discoveryLengthScore(tweet.text)
+			+ projectCriticismBoost
 			- baitPenalty,
 	);
 	return { tweet, query, score: Number(score.toFixed(2)), reason: discoveryReason(query, ageHours, replyCount, overlap, baitPenalty) };
@@ -531,6 +627,7 @@ async function discoverXCandidates(
 			for (const tweet of tweets) {
 				const key = `discover:${tweet.tweetId}`;
 				if (params.seen.has(key)) continue;
+				if (seenAnyTweet(params.seen, tweet.tweetId)) continue;
 				if (tweet.authorScreenName?.toLowerCase() === params.viewerScreenName.toLowerCase()) continue;
 				if (tweet.text.trim().length < 20) continue;
 				const candidate = scoreDiscoveryTweet(tweet, query, now);
@@ -563,15 +660,18 @@ async function decideXDiscoveryAction(
 	const tweet = params.candidate.tweet;
 	const prompt = [
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
+		...X_SQUIRREL_VOICE,
 		"Use this algorithm-aware strategy:",
 		X_ALGORITHM_PLAYBOOK,
 		"",
 		"Decide whether this discovered post deserves a reply, like, follow, or ignore.",
 		"Rules:",
-		"- Reply only if you can add specific, useful context in the account's voice.",
+		"- Reply if the post criticizes Dexploarer, Detour, Detour Squirrel, or the project. Do not stay silent on public project criticism.",
+		"- For criticism, ask for the concrete issue, correct misinformation, and keep the tone firm as hell but not defensive.",
+		"- For non-critical posts, reply only if you can add specific, useful context in the account's voice.",
 		"- Like when the post is relevant but does not need a reply.",
 		"- Follow only if the author is clearly relevant to the account's long-term graph.",
-		"- Ignore bait, spam, culture-war traps, outrage, scams, and vague hype.",
+		"- Ignore bait, spam, culture-war traps, unrelated outrage, scams, and vague hype. Do not classify project criticism as unrelated outrage.",
 		"- Keep reply_text under 240 characters. No hashtags unless they are already central to the conversation.",
 		"- Do not mention the algorithm, automation, private context, cookies, tools, or internal settings.",
 		"",
@@ -587,6 +687,9 @@ async function decideXDiscoveryAction(
 		compactText(tweet.text, 900),
 		"",
 		"Output TOON only:",
+		isProjectCriticismText(tweet.text)
+			? "Project-defense rule: this candidate criticizes the project, so choose action: reply."
+			: "Project-defense rule: not detected.",
 		"action: reply | like | follow | ignore",
 		"reply_text: <required only when action is reply>",
 		"reason: <brief>",
@@ -665,8 +768,28 @@ function initialXAutonomyState(task: Task): XAutonomyState {
 
 function replyableNotifications(notifications: XNotification[], seen: Set<string>, maxReplies: number): XNotification[] {
 	return notifications
-		.filter((n) => (n.kind === "mention" || n.kind === "reply") && n.tweetId && !seen.has(n.id))
+		.filter((n) => (n.kind === "mention" || n.kind === "reply") && n.tweetId && !seen.has(n.id) && !seenMentionTweet(seen, n.tweetId))
 		.slice(0, maxReplies);
+}
+
+function seenAnyTweet(seen: Set<string>, tweetId: string): boolean {
+	return seen.has(`mention:${tweetId}`) || seen.has(`discover:${tweetId}`) || seen.has(tweetId);
+}
+
+function seenMentionTweet(seen: Set<string>, tweetId: string): boolean {
+	return seen.has(`mention:${tweetId}`) || seen.has(tweetId);
+}
+
+function replyBudgetRemaining(settings: XAutonomySettings, state: XAutonomyState): number {
+	const repliesUsed = state.handled.filter((entry) => String(entry.action ?? "").includes("reply")).length;
+	return Math.max(0, settings.maxReplies - repliesUsed);
+}
+
+function mentionSearchQueries(viewerScreenName: string): string[] {
+	return [
+		`to:${viewerScreenName} -from:${viewerScreenName}`,
+		`@${viewerScreenName} -from:${viewerScreenName}`,
+	];
 }
 
 function markPassiveNotificationsSeen(notifications: XNotification[], state: XAutonomyState): void {
@@ -690,6 +813,53 @@ async function processXNotifications(
 	markPassiveNotificationsSeen(notifications, state);
 }
 
+async function processXMentionSearch(
+	runtime: IAgentRuntime,
+	client: XClient,
+	viewerScreenName: string,
+	settings: XAutonomySettings,
+	state: XAutonomyState,
+): Promise<void> {
+	const limit = replyBudgetRemaining(settings, state);
+	if (limit <= 0) return;
+	const tweets = await searchXMentionTargets(client, viewerScreenName, state.nextSeen, limit);
+	for (const tweet of tweets) {
+		state.nextSeen.add(`mention:${tweet.tweetId}`);
+		state.nextSeen.add(`discover:${tweet.tweetId}`);
+		state.handled.push(await handleXMentionTweet(runtime, client, viewerScreenName, tweet, settings.writeEnabled));
+	}
+}
+
+async function searchXMentionTargets(
+	client: XClient,
+	viewerScreenName: string,
+	seen: Set<string>,
+	limit: number,
+): Promise<XTweetSummary[]> {
+	const byTweet = new Map<string, XTweetSummary>();
+	for (const query of mentionSearchQueries(viewerScreenName)) {
+		let tweets: XTweetSummary[] = [];
+		try {
+			tweets = await client.search({ query, product: "Latest", limit: 20 });
+		} catch (err) {
+			logger.warn(
+				{ src: "x-autonomy", query, error: err instanceof Error ? err.message : String(err) },
+				"X mention search failed",
+			);
+			continue;
+		}
+		for (const tweet of tweets) {
+			if (seenMentionTweet(seen, tweet.tweetId)) continue;
+			if (tweet.authorScreenName?.toLowerCase() === viewerScreenName.toLowerCase()) continue;
+			if (tweet.text.trim().length === 0) continue;
+			byTweet.set(tweet.tweetId, tweet);
+		}
+	}
+	return [...byTweet.values()]
+		.sort((a, b) => tweetCreatedAtMs(b) - tweetCreatedAtMs(a))
+		.slice(0, limit);
+}
+
 async function handleXNotification(
 	runtime: IAgentRuntime,
 	client: XClient,
@@ -709,7 +879,73 @@ async function handleXNotification(
 		notificationMessage: notification.message,
 		tweetText: tweet.text,
 	});
-	return executeNotificationDecision(client, notification, tweet, decision, writeEnabled);
+	const finalDecision = isProjectCriticismText(tweet.text) || notification.kind === "mention" || notification.kind === "reply"
+		? forceMentionReply(decision, tweet.text)
+		: decision;
+	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled);
+}
+
+async function handleXMentionTweet(
+	runtime: IAgentRuntime,
+	client: XClient,
+	viewerScreenName: string,
+	tweet: XTweetSummary,
+	writeEnabled: boolean,
+): Promise<Record<string, unknown>> {
+	const target: XNotification = {
+		id: `mention:${tweet.tweetId}`,
+		timestamp: tweet.createdAt ?? new Date().toISOString(),
+		tweetId: tweet.tweetId,
+		fromUserScreenName: tweet.authorScreenName,
+		kind: "mention",
+		message: "searched comment/tag",
+	};
+	const decision = await safeXAutonomyDecision(runtime, {
+		viewerScreenName,
+		fromUserScreenName: tweet.authorScreenName,
+		kind: "searched_comment_or_tag",
+		notificationMessage: "found via X mention search",
+		tweetText: tweet.text,
+	});
+	const result = await executeNotificationDecision(client, target, tweet, forceMentionReply(decision, tweet.text), writeEnabled);
+	return { ...result, source: "mention_search" };
+}
+
+function forceProjectCriticismReply<T extends { action?: string; reply_text?: string; reason?: string }>(decision: T, text: string): T {
+	const action = String(decision.action ?? "").trim().toLowerCase();
+	const replyText = compactText(decision.reply_text, 260);
+	if (action === "reply" && replyText.length > 0) return decision;
+	return {
+		...decision,
+		action: "reply",
+		reply_text: projectCriticismReply(text),
+		reason: decision.reason ?? "project criticism requires a response",
+	};
+}
+
+function forceMentionReply<T extends { action?: string; reply_text?: string; reason?: string }>(decision: T, text: string): T {
+	const action = String(decision.action ?? "").trim().toLowerCase();
+	const replyText = compactText(decision.reply_text, 260);
+	if (action === "reply" && replyText.length > 0) return decision;
+	return {
+		...decision,
+		action: "reply",
+		reply_text: mentionFallbackReply(text),
+		reason: decision.reason ?? "searched comment/tag requires a response",
+	};
+}
+
+function isDuplicateStatusError(error: string | undefined): boolean {
+	return Boolean(error && (error.includes("duplicate") || error.includes("(187)")));
+}
+
+function retryReplyText(tweetText: string, attempted: string): string | null {
+	const fallback = mentionFallbackReply(tweetText);
+	if (fallback !== compactText(attempted, 260)) return fallback;
+	if (tweetText.toLowerCase().includes("space")) {
+		return "tech spaces when there is a real walkthrough. until then i am answering here and keeping receipts warm.";
+	}
+	return "heard. logs and trajectories are live; ask concrete and i'll hit it straight.";
 }
 
 async function executeNotificationDecision(
@@ -735,7 +971,11 @@ async function executeNotificationDecision(
 }
 
 async function notificationReply(client: XClient, notification: XNotification, tweet: XTweetSummary, text: string): Promise<Record<string, unknown>> {
-	const result = await client.reply(text, tweet.tweetId);
+	let result = await client.reply(text, tweet.tweetId);
+	if (!result.success && isDuplicateStatusError(result.error)) {
+		const retryText = retryReplyText(tweet.text, text);
+		if (retryText) result = await client.reply(retryText, tweet.tweetId);
+	}
 	return {
 		id: notification.id,
 		tweetId: tweet.tweetId,
@@ -787,9 +1027,12 @@ async function handleXDiscoveryCandidate(
 ): Promise<Record<string, unknown>> {
 	const tweet = candidate.tweet;
 	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate }, settings.proactiveEngagementEnabled);
-	const action = String(decision.action ?? "ignore").trim().toLowerCase();
-	const replyText = compactText(decision.reply_text, 260);
-	const base = discoveryHandledBase(tweet, candidate, decision);
+	const finalDecision = isProjectCriticismText(tweet.text)
+		? forceProjectCriticismReply(decision, tweet.text)
+		: decision;
+	const action = String(finalDecision.action ?? "ignore").trim().toLowerCase();
+	const replyText = compactText(finalDecision.reply_text, 260);
+	const base = discoveryHandledBase(tweet, candidate, finalDecision);
 	if (action === "reply" && replyText.length > 0) return discoveryReply(client, tweet, base, replyText, settings);
 	if (action === "like") return discoveryLike(client, tweet, base, settings);
 	if (action === "follow" && tweet.authorId) return discoveryFollow(client, tweet.authorId, base, settings);
@@ -904,6 +1147,7 @@ async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise
 		state.viewerScreenName = viewer.screenName;
 		const notifications = await client.getNotifications();
 		await processXNotifications(runtime, client, viewer.screenName, notifications, settings, state);
+		await processXMentionSearch(runtime, client, viewer.screenName, settings, state);
 		await processXDiscovery(runtime, client, viewer.screenName, settings, state);
 		await processXStatusPost(runtime, task, client, viewer.screenName, settings, state);
 	} catch (err) {
