@@ -127,9 +127,9 @@ export interface ActivityTrajectoryDetail {
 	providerAccesses: ActivityProviderAccess[];
 	actions: ActivityActionAttempt[];
 	steps: ActivityTrajectoryStepSummary[];
-	metadata: Record<string, unknown> | null;
+	metadata: Record<string, unknown>;
 	rewardComponents: Record<string, unknown> | null;
-	metrics: Record<string, unknown> | null;
+	metrics: Record<string, unknown>;
 	/** Full untransformed trajectory record — used by the export button. */
 	raw: Record<string, unknown> | null;
 }
@@ -149,16 +149,20 @@ interface TrajectoriesServiceShape {
 		limit?: number;
 		offset?: number;
 	}>;
-	// Real method on TrajectoriesService is `getTrajectoryDetail`, not
-	// `getTrajectory` — confirmed against eliza/packages/core/src/features/
-	// trajectories/TrajectoriesService.ts:1590.
 	getTrajectoryDetail?: (id: string) => Promise<Record<string, unknown> | null>;
-	startTrajectory?: unknown;
 	endTrajectory?: (
 		id: string,
 		status?: "active" | "completed" | "error" | "timeout",
 		metrics?: Record<string, unknown>,
 	) => Promise<void>;
+}
+
+function isTrajectoriesService(value: unknown): value is TrajectoriesServiceShape {
+	if (!value || typeof value !== "object") return false;
+	const svc = value as TrajectoriesServiceShape;
+	return typeof svc.getTrajectoryDetail === "function"
+		|| typeof svc.listTrajectories === "function"
+		|| typeof svc.endTrajectory === "function";
 }
 
 function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | null {
@@ -167,14 +171,10 @@ function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | nul
 		getServicesByType?: (t: string) => unknown[];
 	};
 	const first = r.getService?.(SERVICE_TYPE);
-	if (first && typeof (first as TrajectoriesServiceShape).startTrajectory !== "undefined") {
-		return first as TrajectoriesServiceShape;
-	}
+	if (isTrajectoriesService(first)) return first;
 	const all = r.getServicesByType?.(SERVICE_TYPE) ?? [];
 	for (const svc of all) {
-		if (svc && typeof (svc as TrajectoriesServiceShape).startTrajectory !== "undefined") {
-			return svc as TrajectoriesServiceShape;
-		}
+		if (isTrajectoriesService(svc)) return svc;
 	}
 	return null;
 }
@@ -195,9 +195,9 @@ const EMPTY_DETAIL: ActivityTrajectoryDetail = {
 	providerAccesses: [],
 	actions: [],
 	steps: [],
-	metadata: null,
+	metadata: {},
 	rewardComponents: null,
-	metrics: null,
+	metrics: {},
 	raw: null,
 };
 
@@ -273,6 +273,12 @@ function llmTags(call: Record<string, unknown>): Partial<ActivityLlmCall> {
 	return Array.isArray(call.tags) ? { tags: call.tags.map(String) } : {};
 }
 
+function fallbackLlmCallId(call: Record<string, unknown>, stepNumber: number, fallbackIndex: number): string {
+	const timestamp = asNumber(call.timestamp) ?? 0;
+	const model = (asString(call.model) ?? "unknown").replace(/[^\w.-]+/g, "_");
+	return `${stepNumber}-${fallbackIndex}-${timestamp}-${model}`;
+}
+
 function normalizeLlmCall(
 	call: Record<string, unknown>,
 	stepNumber: number,
@@ -286,7 +292,7 @@ function normalizeLlmCall(
 		completionTokens,
 		...(latencyMs !== undefined ? { latencyMs } : {}),
 		call: {
-			callId: asString(call.callId) ?? `${stepNumber}-${fallbackIndex}`,
+			callId: asString(call.callId) ?? fallbackLlmCallId(call, stepNumber, fallbackIndex),
 			stepNumber,
 			timestamp: asNumber(call.timestamp) ?? 0,
 			model: asString(call.model) ?? "?",
@@ -464,9 +470,9 @@ function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail 
 		providerAccesses: acc.providerAccesses,
 		actions: acc.actions,
 		steps: acc.steps,
-		metadata: meta && Object.keys(meta).length > 0 ? meta : null,
+		metadata: meta ?? {},
 		rewardComponents: asObject(traj.rewardComponents),
-		metrics: metrics && Object.keys(metrics).length > 0 ? metrics : null,
+		metrics: metrics ?? {},
 		raw: traj,
 	};
 }
@@ -533,10 +539,6 @@ export class ActivityTrajectoryService {
 
 	/** For the bulk-export button — fetches detail for every trajectory in `ids`. */
 	async getMany(ids: string[]): Promise<ActivityTrajectoryDetail[]> {
-		const out: ActivityTrajectoryDetail[] = [];
-		for (const id of ids) {
-			out.push(await this.get(id));
-		}
-		return out;
+		return Promise.all(ids.map((id) => this.get(id)));
 	}
 }

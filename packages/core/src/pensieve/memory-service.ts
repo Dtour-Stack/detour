@@ -13,6 +13,7 @@
 
 import type { IAgentRuntime, Memory, MemoryMetadata, UUID, Content } from "@elizaos/core";
 import { ModelType } from "@elizaos/core";
+import { logger } from "@elizaos/core";
 
 const DEFAULT_TABLE = "memories";
 
@@ -177,8 +178,11 @@ export class PensieveMemoryService {
 				const enriched = await runtime.addEmbeddingToMemory(memory);
 				const id = await runtime.createMemory(enriched, tableName);
 				return { id: String(id) };
-			} catch {
-				// fall back to write without embedding
+			} catch (err) {
+				logger.warn(
+					{ src: "pensieve:memory", err: err instanceof Error ? err.message : err, tableName },
+					"[PensieveMemoryService] embedding enrichment failed; writing memory without embedding",
+				);
 			}
 		}
 		const id = await runtime.createMemory(memory, tableName);

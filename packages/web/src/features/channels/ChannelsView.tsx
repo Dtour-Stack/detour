@@ -321,7 +321,7 @@ async function toggleChannelEnabled({
 			if (!expanded) onToggleExpand();
 		} else if (channel.configured) {
 			if (!confirm(`Disable ${channel.label}? This will clear stored credentials.`)) return;
-			for (const k of channel.requiredVaultKeys) await client.channelClearCredential(k);
+			await Promise.all(channel.requiredVaultKeys.map((key) => client.channelClearCredential(key)));
 			await onChanged();
 		} else if (!expanded) {
 			onToggleExpand();

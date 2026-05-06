@@ -386,7 +386,9 @@ export class ChannelsService {
 			const probed = probeChannelLive(runtime, def.id);
 			return { liveStatus: probed.status, ...(probed.detail ? { liveDetail: probed.detail } : {}) };
 		}
-		return { liveStatus: pluginLoaded ? "loaded" : "off" };
+		return pluginLoaded
+			? { liveStatus: "loaded", liveDetail: "plugin loaded but runtime unavailable" }
+			: { liveStatus: "off" };
 	}
 
 	private async invalidCredentialStatus(def: ChannelDefinition): Promise<ChannelLiveSnapshot | null> {

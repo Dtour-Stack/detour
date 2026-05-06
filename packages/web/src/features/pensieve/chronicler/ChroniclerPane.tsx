@@ -124,7 +124,7 @@ function ChroniclerRecent({ observations }: { observations: ChroniclerObservatio
 }
 
 export function ChroniclerPane({ client }: { client: WebClient }) {
-	const [busy, setBusy] = useState(false);
+	const [busyCount, setBusyCount] = useState(0);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const fetcher = useCallback(async (): Promise<ChroniclerData> => {
 		const [status, recent] = await Promise.all([
@@ -135,9 +135,11 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 	}, [client]);
 	const { data, error, loading, refresh } = usePoller<ChroniclerData>(fetcher, 5000, []);
 	const status = data?.status;
+	const busy = busyCount > 0;
+	const errors = [error, actionError, status?.lastError].filter((value): value is string => !!value);
 
 	const updateConfig = useCallback(async (patch: Partial<ChroniclerConfig>) => {
-		setBusy(true);
+		setBusyCount((count) => count + 1);
 		setActionError(null);
 		try {
 			await client.pensieveSetChroniclerConfig(patch);
@@ -145,12 +147,12 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		} finally {
-			setBusy(false);
+			setBusyCount((count) => Math.max(0, count - 1));
 		}
 	}, [client, refresh]);
 
 	const sampleNow = useCallback(async () => {
-		setBusy(true);
+		setBusyCount((count) => count + 1);
 		setActionError(null);
 		try {
 			await client.pensieveChroniclerSample();
@@ -158,7 +160,7 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		} finally {
-			setBusy(false);
+			setBusyCount((count) => Math.max(0, count - 1));
 		}
 	}, [client, refresh]);
 
@@ -171,9 +173,9 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 				onSample={() => void sampleNow()}
 				status={status}
 			/>
-			{(error || actionError || status?.lastError) && (
+			{errors.length > 0 && (
 				<div className="banner error chronicler-banner">
-					{actionError ?? error ?? status?.lastError}
+					{errors.join(" | ")}
 				</div>
 			)}
 

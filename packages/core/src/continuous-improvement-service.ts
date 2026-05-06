@@ -132,7 +132,16 @@ async function ensureTask(runtime: RuntimeTaskSurface): Promise<UUID | null> {
 		});
 	const [primary, ...duplicates] = existing;
 	for (const duplicate of duplicates) {
-		if (duplicate.id && runtime.deleteTask) await runtime.deleteTask(duplicate.id);
+		if (duplicate.id && runtime.deleteTask) {
+			try {
+				await runtime.deleteTask(duplicate.id);
+			} catch (err) {
+				logger.warn(
+					{ src: "continuous-improvement", taskId: duplicate.id, err: err instanceof Error ? err.message : err },
+					"[ContinuousImprovementService] duplicate task cleanup failed",
+				);
+			}
+		}
 	}
 	const metadata = buildMetadata(primary?.metadata, runtime);
 	if (primary?.id) {
@@ -347,19 +356,28 @@ export class ContinuousImprovementService {
 	): Promise<"written" | "failed" | "duplicate"> {
 		const hash = hashText(`${category}\n${memory}`);
 		if (hashes.includes(hash)) return "duplicate";
-		const created = await this.memories.create({
-			text: memory,
-			path: "/improvement/reflections",
-			type: "description",
-			tags: ["continuous-improvement", category],
-			extraMetadata: {
-				source: "continuous-improvement",
-				category,
-				reason: input.decision.reason,
-				logCount: input.logs.length,
-				memoryCount: input.recentMemories.length,
-			},
-		});
+		let created: Awaited<ReturnType<PensieveMemoryService["create"]>>;
+		try {
+			created = await this.memories.create({
+				text: memory,
+				path: "/improvement/reflections",
+				type: "description",
+				tags: ["continuous-improvement", category],
+				extraMetadata: {
+					source: "continuous-improvement",
+					category,
+					reason: input.decision.reason,
+					logCount: input.logs.length,
+					memoryCount: input.recentMemories.length,
+				},
+			});
+		} catch (err) {
+			logger.warn(
+				{ src: "continuous-improvement", category, err: err instanceof Error ? err.message : err },
+				"[ContinuousImprovementService] primary reflection write failed",
+			);
+			return "failed";
+		}
 		if (!created) return "failed";
 		createdIds.push(created.id);
 		hashes.push(hash);

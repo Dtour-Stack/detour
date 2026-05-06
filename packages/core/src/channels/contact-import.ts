@@ -226,19 +226,19 @@ export async function importImessageContacts(runtime: IAgentRuntime): Promise<Co
 	let relationshipsCreated = 0;
 	let skipped = 0;
 	const relsToCreate: ContactRelationship[] = [];
-
-	for (const c of contacts) {
-		if (!isImportableContact(c)) {
+	const importable = contacts.filter((contact) => {
+		const ok = isImportableContact(contact);
+		if (!ok) skipped += 1;
+		return ok;
+	});
+	const imported = await Promise.allSettled(importable.map((contact) => importContact(r, agentId, contact)));
+	for (const result of imported) {
+		if (result.status === "rejected") {
 			skipped += 1;
 			continue;
 		}
-		try {
-			const imported = await importContact(r, agentId, c);
-			if (imported.created) entitiesCreated += 1;
-			if (imported.relationship) relsToCreate.push(imported.relationship);
-		} catch {
-			skipped += 1;
-		}
+		if (result.value.created) entitiesCreated += 1;
+		if (result.value.relationship) relsToCreate.push(result.value.relationship);
 	}
 
 	try {

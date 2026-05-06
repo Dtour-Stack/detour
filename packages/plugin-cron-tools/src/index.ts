@@ -57,9 +57,19 @@ interface CronServiceShape {
 
 const CRON_SERVICE_GLOBAL = Symbol.for("detour.cron.service");
 
+function isCronServiceShape(value: unknown): value is CronServiceShape {
+	if (!value || typeof value !== "object") return false;
+	const svc = value as Partial<CronServiceShape>;
+	return typeof svc.listJobs === "function"
+		&& typeof svc.getJob === "function"
+		&& typeof svc.createJob === "function"
+		&& typeof svc.updateJob === "function"
+		&& typeof svc.deleteJob === "function";
+}
+
 function getService(): CronServiceShape | null {
-	const g = globalThis as unknown as Record<symbol, unknown>;
-	return (g[CRON_SERVICE_GLOBAL] as CronServiceShape) ?? null;
+	const service = Reflect.get(globalThis, CRON_SERVICE_GLOBAL);
+	return isCronServiceShape(service) ? service : null;
 }
 
 async function emit(callback: HandlerCallback | undefined, text: string, action: string): Promise<void> {
@@ -138,10 +148,10 @@ function fmtJob(job: CronJob): string {
 	return `[${job.id}] "${job.name}" — schedule=${job.schedule} enabled=${job.enabled} runs=${job.runCount} next=${next} last=${last}`;
 }
 
-function ensureService(callback: HandlerCallback | undefined, action: string) {
+async function ensureService(callback: HandlerCallback | undefined, action: string): Promise<CronServiceShape | null> {
 	const svc = getService();
 	if (!svc) {
-		void emit(callback, `${action}: cron service not registered`, action);
+		await emit(callback, `${action}: cron service not registered`, action);
 	}
 	return svc;
 }
@@ -185,7 +195,7 @@ const createHandler: Handler = async (_r: IAgentRuntime, _m, _s, options, callba
 	}
 	if (!schedule) return missing("CRON_CREATE", "schedule", callback);
 	if (!prompt) return missing("CRON_CREATE", "prompt", callback);
-	const svc = ensureService(callback, "CRON_CREATE");
+	const svc = await ensureService(callback, "CRON_CREATE");
 	if (!svc) return { success: false, error: "no cron service" };
 	try {
 		const job = svc.createJob({ schedule, prompt, ...(name ? { name } : {}), enabled, createdBy: "agent" });
@@ -220,7 +230,7 @@ export const cronCreateAction: Action = {
 // ── CRON_LIST ───────────────────────────────────────────────────────────────
 
 const listHandler: Handler = async (_r, _m, _s, _options, callback) => {
-	const svc = ensureService(callback, "CRON_LIST");
+	const svc = await ensureService(callback, "CRON_LIST");
 	if (!svc) return { success: false, error: "no cron service" };
 	const jobs = svc.listJobs();
 	const summary = jobs.length === 0 ? "No cron jobs." : jobs.map(fmtJob).join("\n");
@@ -244,7 +254,7 @@ const readHandler: Handler = async (_r, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const id = pickString(opts, ["id", "jobId"]) ?? pickString((opts?.params ?? {}) as Record<string, unknown>, ["id", "jobId"]);
 	if (!id) return missing("CRON_READ", "id", callback);
-	const svc = ensureService(callback, "CRON_READ");
+	const svc = await ensureService(callback, "CRON_READ");
 	if (!svc) return { success: false, error: "no cron service" };
 	const job = svc.getJob(id);
 	if (!job) {
@@ -274,7 +284,7 @@ const updateHandler: Handler = async (_r, _m, _s, options, callback) => {
 	const params = recordFromUnknown(opts?.params);
 	const id = pickString(opts, ["id", "jobId"]) ?? pickString(params, ["id", "jobId"]);
 	if (!id) return missing("CRON_UPDATE", "id", callback);
-	const svc = ensureService(callback, "CRON_UPDATE");
+	const svc = await ensureService(callback, "CRON_UPDATE");
 	if (!svc) return { success: false, error: "no cron service" };
 	const patch = buildCronPatch(opts);
 	if (Object.keys(patch).length === 0) {
@@ -318,7 +328,7 @@ const deleteHandler: Handler = async (_r, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const id = pickString(opts, ["id", "jobId"]) ?? pickString((opts?.params ?? {}) as Record<string, unknown>, ["id", "jobId"]);
 	if (!id) return missing("CRON_DELETE", "id", callback);
-	const svc = ensureService(callback, "CRON_DELETE");
+	const svc = await ensureService(callback, "CRON_DELETE");
 	if (!svc) return { success: false, error: "no cron service" };
 	const removed = svc.deleteJob(id);
 	if (!removed) {

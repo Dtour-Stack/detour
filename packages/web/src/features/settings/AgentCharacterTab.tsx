@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentCharacterConfig, AgentCharacterMessageExample } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 
@@ -11,7 +11,12 @@ function splitLines(value: string): string[] {
 }
 
 function parseExamples(value: string): AgentCharacterMessageExample[][] {
-	const parsed = JSON.parse(value) as unknown;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error("messageExamples must be valid JSON");
+	}
 	if (!Array.isArray(parsed)) throw new Error("messageExamples must be a JSON array");
 	for (const group of parsed) {
 		if (!Array.isArray(group)) throw new Error("each messageExamples entry must be a conversation array");
@@ -46,7 +51,11 @@ function draftFromCharacter(character: AgentCharacterConfig): Record<string, str
 	};
 }
 
-function draftCharacter(cfg: AgentCharacterConfig, draft: Record<string, string>): AgentCharacterConfig {
+function draftCharacter(
+	cfg: AgentCharacterConfig,
+	draft: Record<string, string>,
+	messageExamples: AgentCharacterMessageExample[][],
+): AgentCharacterConfig {
 	return {
 		name: draft.name ?? cfg.name,
 		username: draft.username ?? cfg.username,
@@ -61,7 +70,7 @@ function draftCharacter(cfg: AgentCharacterConfig, draft: Record<string, string>
 			post: splitLines(draft.stylePost ?? ""),
 		},
 		postExamples: splitLines(draft.postExamples ?? ""),
-		messageExamples: cfg.messageExamples,
+		messageExamples,
 	};
 }
 
@@ -185,18 +194,13 @@ export function AgentCharacterTab({ client }: { client: WebClient }) {
 		});
 	}, [client]);
 
-	const nextCharacter = useMemo<AgentCharacterConfig | null>(() => {
-		if (!cfg) return null;
-		return draftCharacter(cfg, draft);
-	}, [cfg, draft]);
-
 	async function save() {
-		if (!nextCharacter) return;
+		if (!cfg) return;
 		setSaving(true);
 		setError(null);
 		try {
 			const messageExamples = parseExamples(draft.messageExamples ?? "[]");
-			const payload = { ...nextCharacter, messageExamples };
+			const payload = draftCharacter(cfg, draft, messageExamples);
 			await client.setAgentCharacter(payload);
 			setCfg(payload);
 			setSavedAt(Date.now());

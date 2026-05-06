@@ -61,6 +61,12 @@ function modelString(raw: Record<string, unknown>, key: keyof ModelConfig): stri
 	return configuredString(raw, key) ?? String(DEFAULT_MODELS[key]);
 }
 
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? Object.fromEntries(Object.entries(value))
+		: {};
+}
+
 export class ConfigService {
 	constructor(private readonly vault: VaultService) {}
 
@@ -114,7 +120,7 @@ export class ConfigService {
 	}
 
 	async setCharacter(next: AgentCharacterConfig): Promise<AgentCharacterConfig> {
-		const sanitized = this.sanitizeCharacter(next as unknown as Record<string, unknown>);
+		const sanitized = this.sanitizeCharacter(recordFromUnknown(next));
 		await this.writeJson(KEY_CHARACTER, sanitized);
 		return sanitized;
 	}

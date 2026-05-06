@@ -193,7 +193,11 @@ function LoopIntervalSection({
 					max={600}
 					step={5}
 					value={Math.round((draftInterval ?? data.intervalMs) / 1000)}
-					onChange={(e) => onDraft(Number(e.target.value) * 1000)}
+					onChange={(e) => {
+						const seconds = Number(e.target.value);
+						const clamped = Number.isFinite(seconds) ? Math.max(5, Math.min(600, seconds)) : 5;
+						onDraft(clamped * 1000);
+					}}
 					className="pensieve-input"
 					style={{ width: 100 }}
 				/>

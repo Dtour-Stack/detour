@@ -267,6 +267,7 @@ export class ChannelGatewayService {
 	private readonly buffer: GatewayMessage[] = [];
 	private identities = new Map<string, IdentityRecord>();
 	private currentRuntime: IAgentRuntime | null = null;
+	private relationshipLocks = new Map<string, Promise<void>>();
 
 	constructor() {
 		this.stateDir = join(resolveStateDir(), "gateway");
@@ -424,7 +425,19 @@ export class ChannelGatewayService {
 		if (!runtime || !agentId || entry.entityId === agentId) return;
 		const entityId = entry.entityId;
 		await this.upsertObservedEntity(runtime, agentId, entityId, entry.externalHandle, entry, memory);
-		await this.upsertObservedRelationshipRecord(runtime, agentId, entityId, entry);
+		await this.withRelationshipLock(agentId, entityId, () =>
+			this.upsertObservedRelationshipRecord(runtime, agentId, entityId, entry),
+		);
+	}
+
+	private async withRelationshipLock(agentId: string, entityId: string, fn: () => Promise<void>): Promise<void> {
+		const key = `${agentId}:${entityId}`;
+		const previous = this.relationshipLocks.get(key) ?? Promise.resolve();
+		const next = previous.then(fn, fn).finally(() => {
+			if (this.relationshipLocks.get(key) === next) this.relationshipLocks.delete(key);
+		});
+		this.relationshipLocks.set(key, next);
+		await next;
 	}
 
 	private async upsertObservedEntity(

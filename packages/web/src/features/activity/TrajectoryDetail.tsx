@@ -594,12 +594,21 @@ function extractFragments(data: unknown): RagFragment[] {
 }
 
 function fragmentArrays(data: unknown): unknown[][] {
-	if (Array.isArray(data)) return [data];
-	if (!data || typeof data !== "object") return [];
-	const obj = data as Record<string, unknown>;
-	return ["fragments", "retrievedFragments", "results", "values", "knowledge"]
-		.map((key) => obj[key])
-		.filter((value): value is unknown[] => Array.isArray(value) && value.length > 0);
+	const found: unknown[][] = [];
+	const seen = new Set<object>();
+	collectFragmentArrays(data, found, seen, 0);
+	return found;
+}
+
+function collectFragmentArrays(data: unknown, found: unknown[][], seen: Set<object>, depth: number): void {
+	if (!data || typeof data !== "object" || depth > 6 || seen.has(data)) return;
+	seen.add(data);
+	if (Array.isArray(data)) {
+		if (data.length > 0 && data.some((item) => parseFragment(item))) found.push(data);
+		for (const item of data) collectFragmentArrays(item, found, seen, depth + 1);
+		return;
+	}
+	for (const value of Object.values(data)) collectFragmentArrays(value, found, seen, depth + 1);
 }
 
 function parseFragment(fragment: unknown): RagFragment | null {

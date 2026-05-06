@@ -52,6 +52,8 @@ function ConfigContent({ client, tab }: { client: WebClient; tab: ConfigTab }) {
 			return <OsPermissionsTab client={client} />;
 		case "window":
 			return <WindowTab client={client} />;
+		default:
+			return <div className="empty">Unknown configuration tab.</div>;
 	}
 }
 
@@ -63,6 +65,8 @@ function VaultContent({ client, tab }: { client: WebClient; tab: VaultTab }) {
 			return <SavedLoginsTab client={client} />;
 		case "backends":
 			return <BackendsTab client={client} />;
+		default:
+			return <div className="empty">Unknown vault tab.</div>;
 	}
 }
 

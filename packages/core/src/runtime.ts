@@ -197,6 +197,7 @@ type RuntimeState = {
 	runtime: AgentRuntime;
 	provider: ProviderId | "codex-chatgpt";
 };
+type RuntimeProvider = RuntimeState["provider"];
 
 const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugin>> = {
 	anthropic: async () => (await import("@elizaos/plugin-anthropic")).default,
@@ -210,6 +211,7 @@ type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
 export class RuntimeService {
 	private current: RuntimeState | null = null;
 	private buildPromise: Promise<RuntimeState | null> | null = null;
+	private providerPickPromise: Promise<RuntimeProvider | null> | null = null;
 	private afterBuildHooks: AfterBuildHook[] = [];
 
 	/**
@@ -446,7 +448,8 @@ export class RuntimeService {
 				type: "DM",
 			});
 		} catch (err) {
-			console.warn("[runtime] ensureConnection failed:", err instanceof Error ? err.message : err);
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to prepare chat connection: ${msg}`);
 		}
 		// Build Memory directly instead of via createMessageMemory(). The
 		// helper adds `metadata.scope: "private"` whenever agentId is set,
@@ -529,10 +532,7 @@ export class RuntimeService {
 
 	private async build(): Promise<RuntimeState | null> {
 		await this.vault.loadKeysIntoEnv();
-		const activeProvider = await this.vault.getActiveProvider();
-		const provider =
-			(activeProvider ? await this.resolveActiveProvider(activeProvider) : null)
-			?? await this.pickFromPriority();
+		const provider = await this.pickProvider();
 		if (!provider) return null;
 
 		const llmPlugin = await PROVIDER_PLUGINS[provider]();
@@ -755,6 +755,22 @@ export class RuntimeService {
 	private hasEnvKey(key: string): boolean {
 		const value = process.env[key];
 		return typeof value === "string" && value.length > 0;
+	}
+
+	private async pickProvider(): Promise<RuntimeProvider | null> {
+		if (!this.providerPickPromise) {
+			this.providerPickPromise = this.pickProviderUnlocked()
+				.finally(() => {
+					this.providerPickPromise = null;
+				});
+		}
+		return this.providerPickPromise;
+	}
+
+	private async pickProviderUnlocked(): Promise<RuntimeProvider | null> {
+		const activeProvider = await this.vault.getActiveProvider();
+		return (activeProvider ? await this.resolveActiveProvider(activeProvider) : null)
+			?? await this.pickFromPriority();
 	}
 
 	private async pickOpenAiOAuth(): Promise<"codex-chatgpt" | null> {
