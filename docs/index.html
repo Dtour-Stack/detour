@@ -254,6 +254,66 @@ section .sub {
   line-height: 1.55;
 }
 
+/* ── Parallax mascot decor ─────────────────────────────────────────── */
+/* Two transparent-PNG squirrels (the Detour agent mascot — matches the
+   `agent.detour-squirrel.*` vault entries). Positioned absolute inside
+   parallax-host containers so they don't shift the text layout, then
+   translated/faded by JS based on scroll-Y for a soft parallax effect.
+   `pointer-events: none` so they never block clicks on real content.
+   Drop-shadow gives them a warm glow that matches the accent gradient. */
+.parallax-host {
+  position: relative;
+  overflow: visible;
+}
+.mascot {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.8s ease-out;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 12px 40px rgba(255, 107, 53, 0.18))
+          drop-shadow(0 0 80px rgba(34, 211, 238, 0.06));
+}
+.mascot.in-view { opacity: 1; }
+
+.mascot-laptop {
+  /* Hero pose — sitting at the laptop, "I'm working" */
+  width: clamp(280px, 36vw, 560px);
+  right: -60px;
+  top: 30px;
+}
+.mascot-branch {
+  /* Reflective pose — alone on a branch with the dangling acorn */
+  width: clamp(280px, 36vw, 540px);
+  left: -80px;
+  top: -40px;
+}
+.mascot-corner {
+  /* Small footer accent */
+  width: clamp(120px, 14vw, 200px);
+  right: 24px;
+  bottom: 100%;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+}
+.mascot-corner.in-view {
+  opacity: 0.7;
+  transform: translateY(0);
+}
+
+/* Hide on tiny screens — they'd dominate the viewport */
+@media (max-width: 640px) {
+  .mascot-laptop, .mascot-branch { display: none; }
+}
+
+/* Honor reduced-motion: show full opacity, kill the parallax transform */
+@media (prefers-reduced-motion: reduce) {
+  .mascot { transition: none; }
+}
+
 /* ── Hierarchy cards ───────────────────────────────────────────────── */
 .tiers { display: grid; gap: 16px; grid-template-columns: 1fr; }
 @media (min-width: 768px) { .tiers { grid-template-columns: repeat(3, 1fr); } }
@@ -402,7 +462,16 @@ footer a:hover { color: var(--fg); }
   </div>
 </nav>
 
-<header class="hero">
+<header class="hero parallax-host">
+  <img
+    class="mascot mascot-laptop"
+    data-parallax="0.25"
+    src="assets/squirrel-laptop.png"
+    alt=""
+    aria-hidden="true"
+    loading="eager"
+    decoding="async"
+  />
   <div class="tag">
     <span class="blip"></span>
     <span>v0.3.0 — playground edition</span>
@@ -481,7 +550,16 @@ footer a:hover { color: var(--fg); }
   </div>
 </section>
 
-<section id="features">
+<section id="features" class="parallax-host">
+  <img
+    class="mascot mascot-branch"
+    data-parallax="0.15"
+    src="assets/squirrel-branch.png"
+    alt=""
+    aria-hidden="true"
+    loading="lazy"
+    decoding="async"
+  />
   <h2>What's <span class="accent">in the box.</span></h2>
   <p class="sub">
     The slice of capabilities I'm actively running today. Subject to
@@ -607,6 +685,68 @@ footer a:hover { color: var(--fg); }
       sel.addRange(range);
     }
   });
+})();
+
+// ── Mascot parallax + reveal ───────────────────────────────────────────
+// Each <img class="mascot" data-parallax="0.25"> translates upward as the
+// page scrolls, with `data-parallax` controlling the strength (0 = static,
+// 1 = scrolls with the page). We pair it with IntersectionObserver to
+// fade the mascot in on first appearance — keeps the hero hit cleanly
+// even before any scroll happens.
+(function() {
+  const mascots = document.querySelectorAll(".mascot");
+  if (!mascots.length) return;
+
+  // Reveal on first intersection
+  const io = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("in-view");
+        io.unobserve(entry.target);
+      }
+    }
+  }, { threshold: 0.08, rootMargin: "0px 0px -10% 0px" });
+  mascots.forEach((m) => io.observe(m));
+
+  // The hero mascot starts visible — page-load reveal so it doesn't
+  // pop in only after the user scrolls. IntersectionObserver fires on
+  // initial layout already, but adding the class up front avoids any
+  // race where the squirrel is white before observer settles.
+  const heroMascot = document.querySelector(".mascot-laptop");
+  if (heroMascot) {
+    requestAnimationFrame(() => heroMascot.classList.add("in-view"));
+  }
+
+  // Parallax: throttle to rAF so we never queue more work than the
+  // browser can paint. Skip when reduced-motion is requested.
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reducedMotion) return;
+
+  let ticking = false;
+  const apply = () => {
+    const scrollY = window.scrollY || window.pageYOffset;
+    for (const m of mascots) {
+      const factor = parseFloat(m.dataset.parallax || "0.2");
+      // Each mascot's reference frame is its parent section. Compute
+      // distance from the top of the parent so the parallax effect is
+      // local — squirrel at the top of features doesn't drift miles
+      // when the user scrolls past unrelated content above.
+      const host = m.parentElement;
+      const hostTop = host ? host.getBoundingClientRect().top + scrollY : 0;
+      const localScroll = scrollY - hostTop;
+      // Clamp so the squirrel doesn't fly off into infinity on long pages
+      const offset = Math.max(-200, Math.min(200, localScroll * factor * -1));
+      m.style.transform = `translate3d(0, ${offset}px, 0)`;
+    }
+    ticking = false;
+  };
+  window.addEventListener("scroll", () => {
+    if (!ticking) {
+      requestAnimationFrame(apply);
+      ticking = true;
+    }
+  }, { passive: true });
+  apply();
 })();
 
 // ── Particle network background ────────────────────────────────────────
