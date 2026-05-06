@@ -291,10 +291,12 @@ section .sub {
   opacity: 0;
   transition: opacity 0.8s ease-out;
   will-change: transform, opacity;
-  filter: drop-shadow(0 12px 40px rgba(255, 107, 53, 0.22))
-          drop-shadow(0 0 60px rgba(34, 211, 238, 0.06));
+  /* No drop-shadow filter — drop-shadow follows the alpha-channel
+     boundary, and on a near-binary alpha image (chroma-keyed PNG) the
+     "shadow" reads as a hard rectangular halo around the bounding box.
+     The squirrel's own warm rim-lighting in the asset is enough. */
 }
-.mascot.in-view { opacity: 0.6; }
+.mascot.in-view { opacity: 0.65; }
 
 /* Dedicated decorative band BETWEEN the hero and the next section.
    Lives on its own row so the squirrel can never overlap the install
