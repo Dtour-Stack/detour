@@ -263,64 +263,54 @@ section .sub {
 
 /* ── Parallax mascot decor ─────────────────────────────────────────── */
 /* Two transparent-PNG squirrels (the Detour agent mascot — matches the
-   `agent.detour-squirrel.*` vault entries). Positioned absolute inside
-   parallax-host containers so they don't shift the text layout, then
-   translated/faded by JS based on scroll-Y for a soft parallax effect.
-   `pointer-events: none` so they never block clicks on real content.
-   Drop-shadow gives them a warm glow that matches the accent gradient. */
+   `agent.detour-squirrel.*` vault entries). The new asset shape has the
+   squirrel anchored on the LEFT of the frame with a wide branch trailing
+   to the RIGHT, so we anchor each mascot to the BOTTOM of its host
+   section and let the branch trail off the side. Capped opacity at 0.6
+   so the squirrels read as decoration, never foreground — text always
+   wins. `pointer-events: none` so they never block clicks. */
 .parallax-host {
   position: relative;
-  overflow: visible;
+  overflow: hidden; /* keeps the trailing branch from causing horizontal scroll */
 }
 .mascot {
   position: absolute;
   pointer-events: none;
   user-select: none;
-  z-index: 1;
+  z-index: 0;
   opacity: 0;
   transition: opacity 0.8s ease-out;
   will-change: transform, opacity;
-  filter: drop-shadow(0 12px 40px rgba(255, 107, 53, 0.18))
-          drop-shadow(0 0 80px rgba(34, 211, 238, 0.06));
+  filter: drop-shadow(0 12px 40px rgba(255, 107, 53, 0.22))
+          drop-shadow(0 0 60px rgba(34, 211, 238, 0.06));
 }
-.mascot.in-view { opacity: 1; }
+.mascot.in-view { opacity: 0.6; }
 
 .mascot-laptop {
-  /* Hero pose — squirrel sitting on a long branch with the dangling acorn.
-     Squirrel is on the LEFT of the asset, branch trails right with empty
-     pixels at the far right. Anchor right: -22vw so the trailing branch
-     extends off-viewport but the squirrel itself stays well inside. */
-  width: clamp(420px, 56vw, 880px);
-  right: -22vw;
-  top: 80px;
+  /* Hero — sit at the BOTTOM of the hero, anchored bottom-left. The
+     squirrel (on the left of the asset) stays at viewport-left with
+     the branch trailing right. Doesn't fight the text since it's
+     below the headline + install card. */
+  width: clamp(360px, 50vw, 720px);
+  bottom: -40px;
+  left: -40px;
 }
 .mascot-branch {
-  /* Action pose — squirrel hanging off the branch, swinging. Squirrel is
-     mid-frame; anchor left: -8vw so the figure stays on the page edge. */
-  width: clamp(420px, 52vw, 820px);
-  left: -8vw;
-  top: -80px;
-}
-.mascot-corner {
-  /* Small footer accent */
-  width: clamp(120px, 14vw, 200px);
-  right: 24px;
-  bottom: 100%;
-  opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.8s ease-out, transform 0.8s ease-out;
-}
-.mascot-corner.in-view {
-  opacity: 0.7;
-  transform: translateY(0);
+  /* Features — anchored top-RIGHT, mirrored horizontally so the
+     squirrel sits in the right side of the viewport with the branch
+     trailing left into the empty space above the section heading. */
+  width: clamp(360px, 46vw, 680px);
+  top: -60px;
+  right: -40px;
+  transform: scaleX(-1);
 }
 
-/* Hide on tiny screens — they'd dominate the viewport */
-@media (max-width: 640px) {
+/* Hide on narrower viewports where they'd dominate */
+@media (max-width: 900px) {
   .mascot-laptop, .mascot-branch { display: none; }
 }
 
-/* Honor reduced-motion: show full opacity, kill the parallax transform */
+/* Honor reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   .mascot { transition: none; }
 }
@@ -747,7 +737,18 @@ footer a:hover { color: var(--fg); }
       const localScroll = scrollY - hostTop;
       // Clamp so the squirrel doesn't fly off into infinity on long pages
       const offset = Math.max(-200, Math.min(200, localScroll * factor * -1));
-      m.style.transform = `translate3d(0, ${offset}px, 0)`;
+      // Preserve any base transform the CSS already set (e.g. scaleX(-1) on
+      // the mirrored mascot). We stash it once on the element so we don't
+      // re-read it from getComputedStyle on every frame.
+      if (m._baseTransform === undefined) {
+        const base = getComputedStyle(m).transform;
+        m._baseTransform = (base && base !== "none" && !base.includes("matrix3d") && !base.includes("matrix")) ? base : "";
+        // matrix() representation breaks compose semantics, so check the inline style first
+        const inline = m.style.transform;
+        if (inline && inline.includes("scaleX")) m._baseTransform = "scaleX(-1)";
+        else if (m.classList.contains("mascot-branch")) m._baseTransform = "scaleX(-1)";
+      }
+      m.style.transform = `translate3d(0, ${offset}px, 0) ${m._baseTransform}`;
     }
     ticking = false;
   };
