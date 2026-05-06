@@ -1,0 +1,16 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e6]: Detour
+    - generic [ref=e7]:
+      - button "Appearance" [ref=e9] [cursor=pointer]:
+        - img [ref=e10]
+      - button "Configuration" [ref=e16] [cursor=pointer]:
+        - img [ref=e17]
+      - button "Hide window" [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+  - main [ref=e24]:
+    - generic [ref=e25]:
+      - generic [ref=e27]:
+        - text: No active provider configured.
+        - button "Open Settings" [ref=e28] [cursor=pointer]
+      - textbox "Configure a provider in Configuration to start" [disabled] [ref=e30]

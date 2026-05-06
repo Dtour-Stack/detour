@@ -34,6 +34,7 @@ import {
 	type HandlerCallback,
 	type IAgentRuntime,
 	type Plugin,
+	type Provider,
 } from "@elizaos/core";
 import { audit } from "./audit";
 
@@ -41,33 +42,78 @@ function caller(runtime: IAgentRuntime): string {
 	return `agent:${runtime.character?.name ?? "unknown"}`;
 }
 
+/**
+ * Eliza's contract delivers extracted action params at `options.parameters`.
+ * Some pipeline paths (planner repair, direct invocation, eliza version
+ * drift) deliver them top-level or under `params`/`<ACTION>`/`arguments`.
+ * Walk all those locations so the agent's chosen action params actually land
+ * here instead of returning empty. (Same fix shape as @detour/plugin-x-tweets.)
+ */
+function paramsBag(opts: Record<string, unknown> | undefined): Record<string, unknown> {
+	if (!opts) return {};
+	const p = (opts as { parameters?: unknown }).parameters;
+	if (p && typeof p === "object" && !Array.isArray(p)) return p as Record<string, unknown>;
+	return {};
+}
+
 function pickString(opts: Record<string, unknown> | undefined, keys: readonly string[]): string | undefined {
 	if (!opts) return undefined;
+	const params = paramsBag(opts);
+	for (const k of keys) {
+		const v = params[k];
+		if (typeof v === "string" && v.length > 0) return v;
+	}
 	for (const k of keys) {
 		const v = opts[k];
 		if (typeof v === "string" && v.length > 0) return v;
 	}
+	const queue: Record<string, unknown>[] = [opts];
+	const seen = new Set<unknown>();
+	while (queue.length > 0) {
+		const cur = queue.shift()!;
+		if (seen.has(cur)) continue;
+		seen.add(cur);
+		for (const k of keys) {
+			const v = cur[k];
+			if (typeof v === "string" && v.length > 0) return v;
+		}
+		for (const v of Object.values(cur)) {
+			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
+		}
+	}
 	return undefined;
 }
 function pickStringArray(opts: Record<string, unknown> | undefined, key: string): string[] | undefined {
-	const v = opts?.[key];
-	if (!Array.isArray(v)) return undefined;
-	const arr = v.map((x) => (typeof x === "string" ? x : null)).filter((x): x is string => !!x);
-	return arr.length > 0 ? arr : undefined;
+	const tryAt = (bag: Record<string, unknown>): string[] | undefined => {
+		const v = bag[key];
+		if (!Array.isArray(v)) return undefined;
+		const arr = v.map((x) => (typeof x === "string" ? x : null)).filter((x): x is string => !!x);
+		return arr.length > 0 ? arr : undefined;
+	};
+	if (!opts) return undefined;
+	return tryAt(paramsBag(opts)) ?? tryAt(opts);
 }
 function pickRecord(opts: Record<string, unknown> | undefined, key: string): Record<string, string> | undefined {
-	const v = opts?.[key];
-	if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
-	const out: Record<string, string> = {};
-	for (const [k, val] of Object.entries(v)) {
-		if (typeof val === "string") out[k] = val;
-		else if (val != null) out[k] = String(val);
-	}
-	return out;
+	const tryAt = (bag: Record<string, unknown>): Record<string, string> | undefined => {
+		const v = bag[key];
+		if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+		const out: Record<string, string> = {};
+		for (const [k, val] of Object.entries(v)) {
+			if (typeof val === "string") out[k] = val;
+			else if (val != null) out[k] = String(val);
+		}
+		return out;
+	};
+	if (!opts) return undefined;
+	return tryAt(paramsBag(opts)) ?? tryAt(opts);
 }
 function pickNumber(opts: Record<string, unknown> | undefined, key: string): number | undefined {
-	const v = opts?.[key];
-	return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+	const tryAt = (bag: Record<string, unknown>): number | undefined => {
+		const v = bag[key];
+		return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+	};
+	if (!opts) return undefined;
+	return tryAt(paramsBag(opts)) ?? tryAt(opts);
 }
 
 async function emit(callback: HandlerCallback | undefined, text: string, actionName: string): Promise<void> {
@@ -96,6 +142,50 @@ function services(runtime: IAgentRuntime) {
 	const templates = new PensieveTemplatesService(memories, () => runtime);
 	return { memories, relationships, templates };
 }
+
+export const pensieveChroniclerProvider: Provider = {
+	name: "USER_ACTIVITY_CONTEXT",
+	description: "Recent user activity observations from Pensieve.",
+	dynamic: true,
+	position: -20,
+	get: async (runtime) => {
+		const { memories } = services(runtime);
+		try {
+			const rows = await memories.list({
+				pathPrefix: "/observations/user-activity",
+				limit: 8,
+			});
+			if (rows.length === 0) {
+				return {
+					text: "",
+					values: { hasUserActivityContext: false },
+					data: { observations: [] },
+				};
+			}
+			const text = [
+				"# Recent User Activity",
+				...rows.map((row) => {
+					const when = row.createdAt ? new Date(row.createdAt).toLocaleString() : "unknown time";
+					return `- ${when}: ${row.preview}`;
+				}),
+			].join("\n");
+			return {
+				text,
+				values: {
+					hasUserActivityContext: true,
+					userActivityObservationCount: rows.length,
+				},
+				data: { observations: rows },
+			};
+		} catch (err) {
+			return {
+				text: `Recent user activity context is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+				values: { hasUserActivityContext: false },
+				data: { observations: [] },
+			};
+		}
+	},
+};
 
 // ── PENSIEVE_WRITE ─────────────────────────────────────────────────────────
 
@@ -373,6 +463,7 @@ export const pensieveToolsPlugin: Plugin = {
 	name: "@detour/plugin-pensieve-tools",
 	description:
 		"Lets the agent read/write/search the Pensieve, link entities, render templates, and set prompt variables.",
+	providers: [pensieveChroniclerProvider],
 	actions: [
 		pensieveWriteAction,
 		pensieveReadAction,

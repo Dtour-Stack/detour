@@ -11,10 +11,18 @@ import type {
 	ActivityTrajectoryDetail,
 	ActivityTrajectoryExport,
 	ActivityTrajectoryListResult,
+	AgentCharacterConfig,
 	AgentConfig,
 	BackendStatus,
+	BrowserCommand,
+	BrowserCommandInput,
+	BrowserCommandResult,
+	ChroniclerConfig,
+	ChroniclerObservation,
+	ChroniclerStatus,
 	ModelConfig,
 	OpDiagnostic,
+	OpenRouterModelsResponse,
 	OsPermissionId,
 	OsPermissionInfo,
 	PensieveEmbeddingMap,
@@ -57,6 +65,7 @@ export class WebClient {
 			ws.onopen = () => {
 				this.ws = ws;
 				for (const m of this.outbox.splice(0)) ws.send(JSON.stringify(m));
+				installWebviewLogForwarder(this);
 				resolve();
 			};
 			ws.onerror = reject;
@@ -102,6 +111,10 @@ export class WebClient {
 
 	async setActiveProvider(id: ProviderId): Promise<void> {
 		await this.json("PUT", "/api/providers/active", { id });
+	}
+
+	listOpenRouterModels(): Promise<OpenRouterModelsResponse> {
+		return this.json("GET", "/api/providers/openrouter/models");
 	}
 
 	detectBackends(): Promise<BackendStatus[]> {
@@ -185,6 +198,12 @@ export class WebClient {
 	}
 	async setAgentConfig(cfg: AgentConfig): Promise<void> {
 		await this.json("PUT", "/api/config/agent", cfg);
+	}
+	getAgentCharacter(): Promise<AgentCharacterConfig> {
+		return this.json("GET", "/api/config/character");
+	}
+	async setAgentCharacter(cfg: AgentCharacterConfig): Promise<void> {
+		await this.json("PUT", "/api/config/character", cfg);
 	}
 	getModelConfig(): Promise<ModelConfig> {
 		return this.json("GET", "/api/config/models");
@@ -272,6 +291,25 @@ export class WebClient {
 	async channelsReload(): Promise<{ ok: boolean; provider: string | null }> {
 		return this.json("POST", "/api/channels/reload");
 	}
+	// --- owner-bind (eliza /eliza_pair flow) ---
+	async ownerBindGenerateCode(connector: "telegram" | "discord"): Promise<{
+		ok: boolean;
+		code: string;
+		expiresAt: number;
+		connector: string;
+	}> {
+		return this.json("POST", "/api/owner-bind/code", { connector });
+	}
+	async ownerBindStatus(connector: "telegram" | "discord"): Promise<{
+		connector: string;
+		bound: boolean;
+		owner: { externalId: string; displayHandle: string } | null;
+	}> {
+		return this.json("GET", `/api/owner-bind/${connector}`);
+	}
+	async ownerBindUnbind(connector: "telegram" | "discord"): Promise<void> {
+		await this.json("DELETE", `/api/owner-bind/${connector}`);
+	}
 	async discordGuilds(): Promise<{ guilds: Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> }> {
 		return this.json("GET", "/api/channels/discord/guilds");
 	}
@@ -333,6 +371,21 @@ export class WebClient {
 	}
 	pensieveEmbeddingMap(): Promise<PensieveEmbeddingMap> {
 		return this.json("GET", "/api/pensieve/embedding-map");
+	}
+	pensieveChroniclerStatus(): Promise<ChroniclerStatus> {
+		return this.json("GET", "/api/pensieve/chronicler/status");
+	}
+	pensieveChroniclerConfig(): Promise<ChroniclerConfig> {
+		return this.json("GET", "/api/pensieve/chronicler/config");
+	}
+	pensieveSetChroniclerConfig(input: Partial<ChroniclerConfig>): Promise<ChroniclerConfig> {
+		return this.json("PUT", "/api/pensieve/chronicler/config", input);
+	}
+	pensieveChroniclerSample(): Promise<ChroniclerObservation> {
+		return this.json("POST", "/api/pensieve/chronicler/sample");
+	}
+	pensieveChroniclerRecent(limit = 20): Promise<ChroniclerObservation[]> {
+		return this.json("GET", `/api/pensieve/chronicler/recent?limit=${limit}`);
 	}
 	async pensieveIngestKnowledge(input: {
 		filename: string;
@@ -409,6 +462,19 @@ export class WebClient {
 	async openExternal(url: string): Promise<void> {
 		await this.json("POST", "/api/external/open", { url });
 	}
+	browserCommands(params: { after?: string; since?: number } = {}): Promise<{ commands: BrowserCommand[] }> {
+		const qs = new URLSearchParams();
+		if (params.after) qs.set("after", params.after);
+		if (params.since) qs.set("since", String(params.since));
+		const s = qs.toString();
+		return this.json("GET", `/api/browser/commands${s ? `?${s}` : ""}`);
+	}
+	queueBrowserCommand(command: BrowserCommandInput): Promise<{ command: BrowserCommand }> {
+		return this.json("POST", "/api/browser/commands", command);
+	}
+	reportBrowserCommandResult(commandId: string, result: Omit<BrowserCommandResult, "time">): Promise<{ result: BrowserCommandResult }> {
+		return this.json("POST", `/api/browser/commands/${encodeURIComponent(commandId)}/result`, result);
+	}
 
 	// --- window control (tray popup) ---
 	async hideWindow(): Promise<void> {
@@ -466,6 +532,9 @@ export class WebClient {
 	}
 	updateInboxStatus(id: string, status: string): Promise<{ ok: boolean; item: InboxItem }> {
 		return this.json("PATCH", `/api/inbox/${encodeURIComponent(id)}/status`, { status });
+	}
+	actInboxItem(id: string): Promise<{ ok: boolean; item: InboxItem }> {
+		return this.json("POST", `/api/inbox/${encodeURIComponent(id)}/act`);
 	}
 
 	// --- Gateway (unified inbound/outbound feed across channels) ---
@@ -552,4 +621,97 @@ export interface LlamaServerStatus {
 	readonly startedAt: number | null;
 	readonly lastError: string | null;
 	readonly downloadProgress?: { downloadedBytes: number; totalBytes: number; percent: number } | null;
+}
+
+/**
+ * Forward webview console output (and unhandled errors) to the server's
+ * ActivityLogService so they appear alongside main-process logs in
+ * Activity > Logs and the persisted JSONL file. Without this, JS errors and
+ * console warnings inside the chat / settings / pensieve windows are
+ * invisible until the user manually opens DevTools.
+ *
+ * Idempotent: only patches console once even if connect() retries.
+ */
+let webviewLogForwarderInstalled = false;
+/**
+ * Latest trace id received from the server (via chat:* WS messages). Used
+ * as the ambient trace id for webview console output that fires while a
+ * chat turn is in flight, so React-side logs stitch under the same id as
+ * the server-side eliza pipeline logs they were responding to.
+ */
+let lastServerTraceId: string | undefined;
+
+function installWebviewLogForwarder(client: WebClient): void {
+	if (webviewLogForwarderInstalled) return;
+	webviewLogForwarderInstalled = true;
+
+	const view =
+		typeof location !== "undefined"
+			? (location.hash || "").replace(/^#/, "") || "chat"
+			: "webview";
+
+	// Pick up the trace id from any inbound chat:* message so subsequent
+	// console.log calls during the same turn carry it.
+	client.on((m) => {
+		if (
+			(m.kind === "chat:delta" || m.kind === "chat:complete" || m.kind === "chat:error") &&
+			typeof (m as { traceId?: string }).traceId === "string"
+		) {
+			lastServerTraceId = (m as { traceId?: string }).traceId;
+		}
+	});
+
+	const send = (
+		level: "trace" | "debug" | "info" | "warn" | "error",
+		args: unknown[],
+	) => {
+		try {
+			const msg = args
+				.map((a) =>
+					typeof a === "string"
+						? a
+						: a instanceof Error
+						? `${a.name}: ${a.message}`
+						: (() => {
+								try {
+									return JSON.stringify(a);
+								} catch {
+									return String(a);
+								}
+						  })(),
+				)
+				.join(" ");
+			client.send({
+				kind: "log:webview",
+				level,
+				msg,
+				source: `webview:${view}`,
+				...(lastServerTraceId ? { traceId: lastServerTraceId } : {}),
+			});
+		} catch {
+			/* ignore — never let logging break the page */
+		}
+	};
+
+	for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+		const orig = console[level];
+		console[level] = (...args: unknown[]) => {
+			const lvl = level === "log" ? "info" : level;
+			send(lvl, args);
+			return orig.apply(console, args);
+		};
+	}
+
+	if (typeof window !== "undefined") {
+		window.addEventListener("error", (ev) => {
+			send("error", [`${ev.message} @ ${ev.filename}:${ev.lineno}:${ev.colno}`]);
+		});
+		window.addEventListener("unhandledrejection", (ev) => {
+			const r = ev.reason;
+			send("error", [
+				"unhandledrejection:",
+				r instanceof Error ? `${r.name}: ${r.message}` : r,
+			]);
+		});
+	}
 }

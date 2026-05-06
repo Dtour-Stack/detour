@@ -31,6 +31,7 @@ function fmtRelative(ts?: number): string {
 
 function fmtInterval(ms?: number): string {
 	if (!ms) return "—";
+	if (ms < 1000) return "<1s";
 	if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
 	if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
 	if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;

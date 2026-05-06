@@ -1,0 +1,56 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: Pensieve
+    - generic [ref=e6]:
+      - generic [ref=e7] [cursor=pointer]: Live
+      - generic [ref=e8]:
+        - button "Inbox" [ref=e9] [cursor=pointer]
+        - button "Channel feed" [ref=e10] [cursor=pointer]
+        - button "Chronicler" [active] [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]: Knowledge
+      - generic [ref=e14]:
+        - button "Notes" [ref=e15] [cursor=pointer]
+        - button "Knowledge" [ref=e16] [cursor=pointer]
+        - button "Memories" [ref=e17] [cursor=pointer]
+        - button "Templates" [ref=e18] [cursor=pointer]
+        - button "Relationships" [ref=e19] [cursor=pointer]
+        - button "Graph" [ref=e20] [cursor=pointer]
+        - button "Embedding map" [ref=e21] [cursor=pointer]
+    - generic [ref=e23]: ● connected
+  - main [ref=e24]:
+    - generic [ref=e336]:
+      - generic [ref=e337]:
+        - generic [ref=e338]: paused
+        - generic [ref=e339]:
+          - checkbox "Enabled" [disabled] [ref=e340]
+          - text: Enabled
+        - button "Sample now" [disabled] [ref=e341]
+        - generic [ref=e342]: loading
+      - generic [ref=e343]:
+        - generic [ref=e344]:
+          - generic [ref=e345]:
+            - generic [ref=e346]: Interval
+            - combobox [disabled] [ref=e347]:
+              - option "15s"
+              - option "30s"
+              - option "1m" [selected]
+              - option "5m"
+              - option "10m"
+          - generic [ref=e348]:
+            - generic [ref=e349]: Window titles
+            - checkbox [disabled] [ref=e350]
+          - generic [ref=e351]:
+            - generic [ref=e352]: Windows per screen
+            - spinbutton [disabled] [ref=e353]: "8"
+          - generic [ref=e354]:
+            - generic [ref=e355]:
+              - generic [ref=e356]: Path
+              - strong [ref=e357]: /observations/user-activity
+            - generic [ref=e358]:
+              - generic [ref=e359]: Screens
+              - strong [ref=e360]: "0"
+            - generic [ref=e361]:
+              - generic [ref=e362]: Windows
+              - strong [ref=e363]: "0"
+        - generic [ref=e365]: Recent

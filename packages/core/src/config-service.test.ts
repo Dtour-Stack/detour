@@ -85,6 +85,7 @@ describe("ConfigService", () => {
 		expect(m.codexLarge).toBe("gpt-5.2");
 		expect(m.codexSmall).toBe("gpt-5.2");
 		expect(m.codexImage).toBe("gpt-5.2");
+		expect(m.openRouterTextLarge).toBe("openrouter/free");
 		expect(m.providerPriority[0]).toBe("anthropic-subscription");
 	});
 
@@ -94,11 +95,17 @@ describe("ConfigService", () => {
 			codexLarge: "gpt-5.5",
 			codexSmall: "gpt-5.4-mini",
 			codexImage: "gpt-5.5",
-			providerPriority: ["openai-codex", "anthropic-subscription", "anthropic-api", "openai-api"],
+			openRouterTextLarge: "openrouter/free",
+			openRouterTextSmall: "openrouter/free",
+			openRouterEmbedding: "openai/text-embedding-3-small",
+			openRouterImage: "google/gemini-2.5-flash-image",
+			openRouterVision: "openrouter/free",
+			providerPriority: ["openai-codex", "anthropic-subscription", "openrouter-api", "anthropic-api", "openai-api"],
 		});
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
 		expect(process.env.CODEX_MODEL_SMALL).toBe("gpt-5.4-mini");
 		expect(process.env.CODEX_MODEL_IMAGE).toBe("gpt-5.5");
+		expect(process.env.OPENROUTER_MODEL_TEXT_LARGE).toBe("openrouter/free");
 	});
 
 	test("getWindow defaults match the popup's launch size", async () => {

@@ -154,6 +154,11 @@ interface TrajectoriesServiceShape {
 	// trajectories/TrajectoriesService.ts:1590.
 	getTrajectoryDetail?: (id: string) => Promise<Record<string, unknown> | null>;
 	startTrajectory?: unknown;
+	endTrajectory?: (
+		id: string,
+		status?: "active" | "completed" | "error" | "timeout",
+		metrics?: Record<string, unknown>,
+	) => Promise<void>;
 }
 
 function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | null {
@@ -395,6 +400,37 @@ export class ActivityTrajectoryService {
 		const t = await svc.getTrajectoryDetail(id);
 		if (!t) return EMPTY_DETAIL;
 		return flattenDetail(t);
+	}
+
+	/**
+	 * Sweep stale active trajectories. Eliza creates trajectories on every
+	 * inbound message but doesn't always close them when shouldRespond
+	 * returns IGNORE — so trajectories stay "active" forever, accumulating
+	 * memory and lying about runtime state. This closes any trajectory still
+	 * "active" after `olderThanMs` since startTime, marking them "timeout".
+	 *
+	 * Returns the number closed. Safe to call repeatedly.
+	 */
+	async sweepStale(olderThanMs = 5 * 60_000): Promise<{ closed: number; checked: number }> {
+		const runtime = this.resolveRuntime();
+		if (!runtime) return { closed: 0, checked: 0 };
+		const svc = findRealService(runtime);
+		if (!svc?.listTrajectories || !svc.endTrajectory) return { closed: 0, checked: 0 };
+		const now = Date.now();
+		const result = await svc.listTrajectories({ status: "active", limit: 500 });
+		let closed = 0;
+		for (const t of result.trajectories) {
+			const age = now - (t.startTime ?? now);
+			if (age >= olderThanMs) {
+				try {
+					await svc.endTrajectory(t.id, "timeout");
+					closed++;
+				} catch {
+					// best-effort — skip rows that can't be closed
+				}
+			}
+		}
+		return { closed, checked: result.trajectories.length };
 	}
 
 	/** For the bulk-export button — fetches detail for every trajectory in `ids`. */

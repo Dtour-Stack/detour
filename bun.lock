@@ -2596,6 +2596,8 @@
       "version": "0.3.0",
       "dependencies": {
         "@detour/plugin-codex-chatgpt": "workspace:*",
+        "@detour/plugin-codex-pets": "workspace:*",
+        "@detour/plugin-cron-tools": "workspace:*",
         "@detour/plugin-embedding-openai": "workspace:*",
         "@detour/plugin-pensieve-tools": "workspace:*",
         "@detour/plugin-vault-tools": "workspace:*",
@@ -2621,6 +2623,28 @@
     },
     "packages/plugin-codex-chatgpt": {
       "name": "@detour/plugin-codex-chatgpt",
+      "version": "0.3.0",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-codex-pets": {
+      "name": "@detour/plugin-codex-pets",
+      "version": "0.3.0",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-cron-tools": {
+      "name": "@detour/plugin-cron-tools",
       "version": "0.3.0",
       "dependencies": {
         "@elizaos/core": "workspace:*",
@@ -3120,6 +3144,10 @@
     "@detour/core": ["@detour/core@workspace:packages/core"],
 
     "@detour/plugin-codex-chatgpt": ["@detour/plugin-codex-chatgpt@workspace:packages/plugin-codex-chatgpt"],
+
+    "@detour/plugin-codex-pets": ["@detour/plugin-codex-pets@workspace:packages/plugin-codex-pets"],
+
+    "@detour/plugin-cron-tools": ["@detour/plugin-cron-tools@workspace:packages/plugin-cron-tools"],
 
     "@detour/plugin-embedding-openai": ["@detour/plugin-embedding-openai@workspace:packages/plugin-embedding-openai"],
 

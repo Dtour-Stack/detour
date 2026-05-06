@@ -1,0 +1,8 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: Channels
+    - generic [ref=e6]: Wire messaging connectors. Per-channel history comes from the agent's trajectory log.
+    - generic [ref=e8] [cursor=pointer]: Configured
+    - generic [ref=e10]: ● connected
+  - main [ref=e11]:
+    - generic [ref=e13]: Loading…

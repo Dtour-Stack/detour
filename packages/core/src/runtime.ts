@@ -1,9 +1,12 @@
 import {
 	AgentRuntime,
+	type Action,
 	ChannelType,
 	type Character,
+	type Content,
 	createCharacter,
 	createMessageMemory,
+	type Memory,
 	type Plugin,
 	provisionAgent,
 	stringToUuid,
@@ -11,7 +14,7 @@ import {
 } from "@elizaos/core";
 import sqlPlugin from "@elizaos/plugin-sql";
 import { v4 as uuidv4 } from "uuid";
-import type { ProviderId } from "@detour/shared";
+import type { ModelProviderRoute, ProviderId } from "@detour/shared";
 import type { VaultService } from "./vault";
 import type { AuthService } from "./auth";
 import { listAccounts, type AccountCredentialRecord } from "@elizaos/agent/auth";
@@ -23,12 +26,24 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // otherwise embedding-stub keeps the runtime alive with zero vectors.
 import { embeddingOpenAIPlugin } from "@detour/plugin-embedding-openai";
 import { decodeCodexJwt } from "@detour/plugin-codex-chatgpt";
+import { codexHatchAction, codexPetAction, codexPetsPlugin } from "@detour/plugin-codex-pets";
 import { pensieveToolsPlugin } from "@detour/plugin-pensieve-tools";
-import { vaultToolsPlugin } from "@detour/plugin-vault-tools";
+import {
+	browserFillLoginAction,
+	browserInspectAction,
+	browserOpenAction,
+	browserScriptAction,
+	loginListAction,
+	vaultToolsPlugin,
+} from "@detour/plugin-vault-tools";
+import { cronToolsPlugin } from "@detour/plugin-cron-tools";
 import { xTweetsPlugin } from "@detour/plugin-x-tweets";
+import { makeOwnerBindPlugin } from "./owner-bind";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ConfigService } from "./config-service";
+import { toElizaCharacter } from "./agent-character";
 
 /**
  * Read the system Codex CLI's auth.json (~/.codex/auth.json) — the file
@@ -72,7 +87,84 @@ async function detectSystemCodexAuth(): Promise<{ accessToken: string; accountId
 
 const ROOM_ID = stringToUuid("tray-app:default-room");
 const WORLD_ID = stringToUuid("tray-app:default-world");
-const USER_ID = uuidv4() as UUID;
+// Stable USER_ID derived deterministically — was previously `uuidv4()`, which
+// minted a fresh random UUID on every restart. Eliza's shouldRespond
+// classifier treats a never-seen entity in DM as a stranger and tends to
+// IGNORE, which is why chat sends were producing trajectories with 0 LLM
+// calls while the inbox/cron path (which uses a stable system entity) worked.
+const USER_ID = stringToUuid("tray-app:default-user");
+
+type NativeSlashDispatch =
+	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
+	| { kind: "reply"; text: string };
+
+function nativeSlashCommand(text: string): NativeSlashDispatch | null {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("/")) return null;
+	const space = trimmed.search(/\s/);
+	const command = (space < 0 ? trimmed : trimmed.slice(0, space)).toLowerCase();
+	const tail = space < 0 ? "" : trimmed.slice(space + 1).trim();
+	if (command === "/help" || command === "/commands") {
+		return {
+			kind: "reply",
+			text: [
+				"Native commands:",
+				"/browser <url or search>",
+				"/open <url or search>",
+				"/inspect",
+				"/script <javascript>",
+				"/logins [domain]",
+				"/login <source> <identifier> [url]",
+				"/1password <identifier> [url]",
+				"/pet [name]",
+				"/hatch <concept>",
+			].join("\n"),
+		};
+	}
+	if (command === "/browser" || command === "/open" || command === "/web" || command === "/internet") {
+		if (!tail) return { kind: "reply", text: "Usage: /browser <url or search>" };
+		return { kind: "action", action: browserOpenAction, options: { url: tail, newTab: true } };
+	}
+	if (command === "/logins" || command === "/passwords") {
+		return { kind: "action", action: loginListAction, options: tail ? { domain: tail } : {} };
+	}
+	if (command === "/inspect" || command === "/read-page") {
+		return { kind: "action", action: browserInspectAction, options: {} };
+	}
+	if (command === "/script" || command === "/js") {
+		if (!tail) return { kind: "reply", text: "Usage: /script <javascript>" };
+		return { kind: "action", action: browserScriptAction, options: { script: tail } };
+	}
+	if (command === "/login" || command === "/fill-login") {
+		const parts = tail.split(/\s+/).filter(Boolean);
+		const source = parts[0];
+		const identifier = parts[1];
+		if (source !== "in-house" && source !== "1password" && source !== "bitwarden") {
+			return { kind: "reply", text: "Usage: /login <in-house|1password|bitwarden> <identifier> [url]" };
+		}
+		if (!identifier) return { kind: "reply", text: "Usage: /login <source> <identifier> [url]" };
+		const targetUrl = parts.slice(2).join(" ");
+		return {
+			kind: "action",
+			action: browserFillLoginAction,
+			options: { source, identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
+		};
+	}
+	if (command === "/1password" || command === "/op") {
+		const parts = tail.split(/\s+/).filter(Boolean);
+		const identifier = parts[0];
+		if (!identifier) return { kind: "reply", text: "Usage: /1password <identifier> [url]" };
+		const targetUrl = parts.slice(1).join(" ");
+		return {
+			kind: "action",
+			action: browserFillLoginAction,
+			options: { source: "1password", identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
+		};
+	}
+	if (command === "/pet") return { kind: "action", action: codexPetAction, options: {} };
+	if (command === "/hatch") return { kind: "action", action: codexHatchAction, options: {} };
+	return null;
+}
 
 type RuntimeState = {
 	runtime: AgentRuntime;
@@ -82,6 +174,7 @@ type RuntimeState = {
 const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugin>> = {
 	anthropic: async () => (await import("@elizaos/plugin-anthropic")).default,
 	openai: async () => (await import("@elizaos/plugin-openai")).default,
+	openrouter: async () => (await import("@detour/plugin-openrouter")).default,
 	"codex-chatgpt": async () => (await import("@detour/plugin-codex-chatgpt")).default,
 };
 
@@ -102,6 +195,8 @@ export class RuntimeService {
 		this.afterBuildHooks.push(hook);
 	}
 
+	private ownerBind?: import("./owner-bind").OwnerBindService;
+
 	constructor(
 		private readonly vault: VaultService,
 		// auth dep is currently sourced via the singleton listAccounts() helper;
@@ -109,12 +204,17 @@ export class RuntimeService {
 		_auth?: AuthService,
 		private readonly channels?: import("./channels").ChannelsService,
 		private gateway?: import("./channels/gateway").ChannelGatewayService,
+		private readonly config?: ConfigService,
 	) {
 		void _auth;
 	}
 
 	setGateway(gateway: import("./channels/gateway").ChannelGatewayService): void {
 		this.gateway = gateway;
+	}
+
+	setOwnerBind(svc: import("./owner-bind").OwnerBindService): void {
+		this.ownerBind = svc;
 	}
 
 	async getOrBuild(): Promise<RuntimeState | null> {
@@ -137,6 +237,123 @@ export class RuntimeService {
 				});
 		}
 		return this.buildPromise;
+	}
+
+	/**
+	 * Force-wire the /eliza_pair Telegram command after both the
+	 * TelegramService and OWNER_BIND_VERIFY are loaded. Eliza's pairing
+	 * service races against TelegramService.bot's init and can no-op the
+	 * registration while still logging "registered". This bypasses the race
+	 * by attaching the handler directly to the live Telegraf bot.
+	 */
+	private async wireTelegramPairCommand(runtime: import("@elizaos/core").IAgentRuntime): Promise<void> {
+		const r = runtime as unknown as {
+			getServiceLoadPromise?: (t: string) => Promise<unknown>;
+			getService?: (t: string) => unknown;
+		};
+		// Wait for telegram + owner-bind to be live. Telegraf's startup
+		// backoff (2+4+8+16 = 30s on 409-conflict retries) means we may need
+		// a long timeout after a recent restart that left the bot's
+		// long-poll lease still active on Telegram's side. 60s gives enough
+		// headroom for the full retry cycle on a clean network.
+		const tlg = await Promise.race([
+			r.getServiceLoadPromise?.("telegram") ?? Promise.resolve(null),
+			new Promise((res) => setTimeout(() => res(null), 60_000)),
+		]);
+		const verifySvc = r.getService?.("OWNER_BIND_VERIFY");
+		if (!tlg || !verifySvc) {
+			console.warn("[runtime] /eliza_pair wire skipped — telegram or owner-bind not loaded in 60s");
+			return;
+		}
+		// Telegraf bot lives at TelegramService.bot. We don't have telegraf
+		// in our deps (it's a transitive dep of @elizaos/plugin-telegram), so
+		// duck-type the methods we need rather than importing the type.
+		const bot = (tlg as { bot?: unknown }).bot as
+			| { command: (n: string, h: (ctx: unknown) => Promise<void>) => void }
+			| undefined;
+		if (!bot || typeof bot.command !== "function") {
+			console.warn("[runtime] /eliza_pair wire skipped — bot.command unavailable");
+			return;
+		}
+		// Inline handler — eliza's handleElizaPairCommand isn't re-exported
+		// from plugin-telegram's main entry, and the bun bundler can't
+		// resolve deep imports. Reuse our OwnerBindService directly.
+		const ownerBindSvc = this.ownerBind;
+		bot.command("eliza_pair", async (ctx: unknown) => {
+			console.log("[eliza_pair] command handler FIRED");
+			try {
+				const c = ctx as {
+					message?: { text?: string; from?: { id?: number; username?: string; first_name?: string } };
+					reply: (text: string) => Promise<unknown>;
+				};
+				const text = c.message?.text ?? "";
+				const parts = text.split(/\s+/);
+				const code = parts[1]?.trim();
+				const from = c.message?.from;
+				console.log(`[eliza_pair] text=${JSON.stringify(text)} code=${code} from=${from?.username ?? from?.id}`);
+				if (!code || !/^\d{6}$/.test(code)) {
+					await c.reply("usage: /eliza_pair <6-digit-code> — generate a code in Detour first.");
+					return;
+				}
+				if (!from?.id) {
+					await c.reply("could not read your Telegram user id from this chat.");
+					return;
+				}
+				if (!ownerBindSvc) {
+					await c.reply("owner-bind backend isn't loaded — restart Detour.");
+					return;
+				}
+				const displayHandle = from.username ? `@${from.username}` : (from.first_name ?? String(from.id));
+				const result = await ownerBindSvc.verifyOwnerBindFromConnector({
+					connector: "telegram",
+					externalId: String(from.id),
+					displayHandle,
+					code,
+				});
+				if (result.success) {
+					await c.reply(`✅ paired. you (${displayHandle}, id ${from.id}) are now the owner of this Detour install.`);
+				} else {
+					await c.reply(`❌ pair failed: ${result.error ?? "unknown"}`);
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				try { await (ctx as { reply: (s: string) => Promise<unknown> }).reply(`error: ${msg}`); } catch { /* ignore */ }
+			}
+		});
+		console.log("[runtime] /eliza_pair command wired into Telegraf bot (inline handler)");
+		// Diag: log every inbound message so we can see if Telegraf is even
+		// receiving anything. (Use bot.use to wrap; runs before command handlers.)
+		const botUse = (bot as unknown as { use?: (mw: (ctx: unknown, next: () => Promise<unknown>) => Promise<unknown>) => void }).use;
+		if (typeof botUse === "function") {
+			botUse.call(bot, async (ctx: unknown, next: () => Promise<unknown>) => {
+				const c = ctx as { updateType?: string; message?: { text?: string; from?: { username?: string; id?: number } } };
+				const text = c.message?.text ?? "";
+				const from = c.message?.from?.username ?? c.message?.from?.id ?? "?";
+				console.log(`[telegram] inbound update=${c.updateType ?? "?"} from=${from} text=${JSON.stringify(text.slice(0, 60))}`);
+				return next();
+			});
+			console.log("[runtime] telegram diag middleware installed");
+		}
+	}
+
+	private async wireDiscordPairCommand(runtime: import("@elizaos/core").IAgentRuntime): Promise<void> {
+		const r = runtime as unknown as {
+			getServiceLoadPromise?: (t: string) => Promise<unknown>;
+			getService?: (t: string) => unknown;
+		};
+		const dsc = await Promise.race([
+			r.getServiceLoadPromise?.("discord") ?? Promise.resolve(null),
+			new Promise((res) => setTimeout(() => res(null), 10_000)),
+		]);
+		const verifySvc = r.getService?.("OWNER_BIND_VERIFY");
+		if (!dsc || !verifySvc) {
+			console.warn("[runtime] /eliza-pair (discord) wire skipped — discord or owner-bind not loaded in 10s");
+			return;
+		}
+		// Discord pairing wiring lives inside its own service — no clean
+		// post-hoc hook for now. The eliza pairing service usually wires it
+		// up correctly because Discord client init order differs from Telegraf.
+		console.log("[runtime] discord pairing left to eliza's DiscordOwnerPairingService (no race observed)");
 	}
 
 	async rebuild(): Promise<RuntimeState | null> {
@@ -177,12 +394,78 @@ export class RuntimeService {
 				"Agent runtime has no messageService — check that @elizaos/plugin-sql initialised correctly.",
 			);
 		}
-		const message = createMessageMemory({
+		// Ensure the entity/room/world exist before posting the memory —
+		// eliza's messageService drops messages whose room isn't registered.
+		// Mirror the inbox path's ensureConnection call exactly, including
+		// type as the literal string "DM".
+		try {
+			await (state.runtime as unknown as {
+				ensureConnection?: (opts: {
+					entityId: string;
+					roomId: string;
+					worldId?: string;
+					userName?: string;
+					source?: string;
+					channelId?: string;
+					type?: string;
+				}) => Promise<void>;
+			}).ensureConnection?.({
+				entityId: USER_ID,
+				roomId: ROOM_ID,
+				worldId: WORLD_ID,
+				userName: "User",
+				source: "tray-app",
+				channelId: "chat",
+				type: "DM",
+			});
+		} catch (err) {
+			console.warn("[runtime] ensureConnection failed:", err instanceof Error ? err.message : err);
+		}
+		// Build Memory directly instead of via createMessageMemory(). The
+		// helper adds `metadata.scope: "private"` whenever agentId is set,
+		// and that scope tag was causing eliza's planner to bail before
+		// calling the LLM (chat trajectories had providerAccessCount=5 +
+		// llmCallCount=0 — providers gathered, planner skipped). The inbox
+		// path constructs Memory directly with no metadata, and that path
+		// works (inbox trajectories show 10+ LLM calls). Mirror that shape.
+		const message: Memory = {
 			id: uuidv4() as UUID,
 			entityId: USER_ID,
+			agentId: state.runtime.agentId,
 			roomId: ROOM_ID,
-			content: { text, source: "tray-app", channelType: ChannelType.DM },
-		});
+			content: { text, source: "tray-app", attachments: [] },
+			createdAt: Date.now(),
+		};
+		const slash = nativeSlashCommand(text);
+		if (slash) {
+			let emitted = "";
+			if (slash.kind === "reply") {
+				onDelta(slash.text);
+				emitted = slash.text;
+			} else {
+				const result = await slash.action.handler(state.runtime, message, undefined, slash.options, async (content: Content) => {
+					const next = typeof content.text === "string" ? content.text : "";
+					if (!next) return [];
+					onDelta(next);
+					emitted = next;
+					return [];
+				});
+				if (!emitted && typeof result?.text === "string" && result.text.length > 0) {
+					onDelta(result.text);
+					emitted = result.text;
+				}
+			}
+			if (this.gateway && emitted.length > 0) {
+				this.gateway.recordChatReply({
+					text: emitted,
+					roomId: String(ROOM_ID),
+					entityId: String(state.runtime.agentId),
+					channel: "chat",
+					source: "tray-app",
+				});
+			}
+			return;
+		}
 		// Eliza's messageService can fire the callback multiple times per turn
 		// (action result, post-action narration, etc.). Track what we've already
 		// emitted so we don't duplicate text on the wire — emit only the diff
@@ -218,22 +501,27 @@ export class RuntimeService {
 	}
 
 	private async build(): Promise<RuntimeState | null> {
-		// Prefer OAuth subscription tokens when present + not expired —
-		// claude-code-stealth-fetch-interceptor swaps Anthropic-subscription
-		// tokens in for x-api-key, and the new codex-chatgpt plugin handles
-		// OpenAI Codex JWTs natively against chatgpt.com/backend-api.
-		let provider: ProviderId | "codex-chatgpt" | null = await this.pickFromOAuth();
-		if (!provider) {
-			const direct = await this.vault.loadKeysIntoEnv();
-			if (direct) provider = direct;
-		}
+		await this.vault.loadKeysIntoEnv();
+		const activeProvider = await this.vault.getActiveProvider();
+		const provider =
+			(activeProvider ? await this.resolveActiveProvider(activeProvider) : null)
+			?? await this.pickFromPriority();
 		if (!provider) return null;
 
 		const llmPlugin = await PROVIDER_PLUGINS[provider]();
-		const character: Character = createCharacter({
-			name: "Detour",
-			bio: "A helpful assistant living in your menu bar.",
-		});
+		const characterConfig = this.config ? await this.config.getCharacter() : undefined;
+		const character: Character = createCharacter(toElizaCharacter(characterConfig ?? {
+			name: "Detour Squirrel",
+			username: "detour_squirrel",
+			system: "You are Detour Squirrel, Dexploarer's sidequest agent.",
+			bio: ["Dexploarer's sidequest agent"],
+			lore: [],
+			adjectives: ["useful"],
+			topics: ["agents"],
+			style: { all: [], chat: [], post: [] },
+			postExamples: [],
+			messageExamples: [],
+		}));
 
 		// Channel plugins load conditionally based on vault credentials —
 		// no Discord bot in memory unless DISCORD_API_TOKEN is set, etc.
@@ -259,6 +547,9 @@ export class RuntimeService {
 			...channelResolved.settings,
 			EMBEDDING_DIMENSION: "384",
 		};
+		settings.TELEGRAM_AUTO_REPLY ??= "true";
+		settings.DISCORD_AUTO_REPLY ??= "true";
+		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "true";
 		const llamaUrl = process.env.OPENAI_EMBEDDING_URL;
 		if (typeof llamaUrl === "string" && llamaUrl.length > 0 && !settings.OPENAI_EMBEDDING_URL) {
 			settings.OPENAI_EMBEDDING_URL = llamaUrl;
@@ -294,10 +585,69 @@ export class RuntimeService {
 			// (eliza picks first-registered for equal priority). It internally
 			// falls back to zero vectors when OPENAI_EMBEDDING_API_KEY is unset,
 			// so embeddingStubPlugin is now redundant — kept as final safety net.
-			plugins: [sqlPlugin, llmPlugin, embeddingOpenAIPlugin, embeddingStubPlugin, vaultToolsPlugin, pensieveToolsPlugin, xTweetsPlugin, ...channelResolved.plugins],
+			// Channel plugins are registered SEPARATELY after runtime.initialize()
+			// so we can guarantee OWNER_BIND_VERIFY is fully started BEFORE the
+			// telegram/discord pairing services run their start-time check
+			// (they use sync getService("OWNER_BIND_VERIFY") which returns null
+			// until OUR service is in runtime.services).
+			plugins: [
+				sqlPlugin,
+				llmPlugin,
+				embeddingOpenAIPlugin,
+				embeddingStubPlugin,
+				vaultToolsPlugin,
+				pensieveToolsPlugin,
+				codexPetsPlugin,
+				xTweetsPlugin,
+				cronToolsPlugin,
+				...(this.ownerBind ? [makeOwnerBindPlugin(this.ownerBind)] : []),
+			],
+			enableAutonomy: true,
 			settings,
 		});
 		await runtime.initialize();
+
+		// Wait until OWNER_BIND_VERIFY is actually started before letting any
+		// channel plugin register. After this resolves, runtime.getService(
+		// "OWNER_BIND_VERIFY") returns truthy, so telegram + discord pairing
+		// services see it during their own start() and register the slash commands.
+		if (this.ownerBind) {
+			try {
+				await (runtime as unknown as {
+					getServiceLoadPromise?: (t: string) => Promise<unknown>;
+				}).getServiceLoadPromise?.("OWNER_BIND_VERIFY");
+				console.log("[runtime] OWNER_BIND_VERIFY started — channel plugins safe to load");
+			} catch (err) {
+				console.warn("[runtime] OWNER_BIND_VERIFY start failed:", err instanceof Error ? err.message : err);
+			}
+		}
+
+		// Now register channel plugins. Their pairing services will find
+		// OWNER_BIND_VERIFY at start() time and wire /eliza_pair + /eliza-pair.
+		for (const channelPlugin of channelResolved.plugins) {
+			try {
+				await (runtime as unknown as {
+					registerPlugin: (p: import("@elizaos/core").Plugin) => Promise<void>;
+				}).registerPlugin(channelPlugin);
+			} catch (err) {
+				console.warn(`[runtime] failed to register channel plugin ${channelPlugin.name}:`, err instanceof Error ? err.message : err);
+			}
+		}
+
+		// Even after the above, eliza's TelegramOwnerPairingService races
+		// against TelegramService's start (`bot.launch`). When pairing fires
+		// before TelegramService.bot is ready, registerPairCommand silently
+		// no-ops yet logs "started; /eliza_pair command registered" (the
+		// success log fires regardless of actual wiring — eliza bug). We
+		// force-wire the command ourselves AFTER both services are loaded.
+		// Fire-and-forget so chat / cron don't block on telegram coming up.
+		void this.wireTelegramPairCommand(runtime).catch((err) =>
+			console.warn("[runtime] /eliza_pair wire failed:", err instanceof Error ? err.message : err),
+		);
+		void this.wireDiscordPairCommand(runtime).catch((err) =>
+			console.warn("[runtime] /eliza-pair wire failed:", err instanceof Error ? err.message : err),
+		);
+
 		// provisionAgent runs migrations + ensures the database adapter knows
 		// which dim_N column to use for embeddings (reads EMBEDDING_DIMENSION
 		// from settings — we set it to 384 above for bge-small-en-v1.5).
@@ -364,27 +714,55 @@ export class RuntimeService {
 	 * aggressively rate-limited as the Anthropic Claude subscription tier.
 	 *
 	 * Auth source priority:
-	 *   1. system Codex CLI auth (`~/.codex/auth.json`) — set by `codex login`
-	 *   2. our own per-account OAuth files (`~/.eliza/auth/openai-codex/*.json`)
-	 *   3. anthropic-subscription as fallback
-	 *
 	 * Reading the system Codex CLI's auth means the user only logs in ONCE
 	 * via the CLI (or ChatGPT desktop app, which writes the same file) and
 	 * the desktop app picks it up automatically — no re-auth dance.
 	 */
-	private async pickFromOAuth(): Promise<ProviderId | "codex-chatgpt" | null> {
-		// 1. Try the system Codex CLI auth file first — user's existing login.
+	private async resolveActiveProvider(provider: ProviderId): Promise<ProviderId | "codex-chatgpt" | null> {
+		if (provider === "openrouter") {
+			return this.hasEnvKey("OPENROUTER_API_KEY") ? "openrouter" : null;
+		}
+		if (provider === "openai") {
+			return await this.pickOpenAiOAuth() ?? (this.hasEnvKey("OPENAI_API_KEY") ? "openai" : null);
+		}
+		return this.hasEnvKey("ANTHROPIC_API_KEY") ? "anthropic" : await this.pickAnthropicOAuth();
+	}
+
+	private async pickFromPriority(): Promise<ProviderId | "codex-chatgpt" | null> {
+		const fallback: ModelProviderRoute[] = ["anthropic-subscription", "openai-codex", "openrouter-api", "anthropic-api", "openai-api"];
+		const routes = this.config ? (await this.config.getModels()).providerPriority : fallback;
+		for (const route of routes.length > 0 ? routes : fallback) {
+			const provider = await this.pickRoute(route);
+			if (provider) return provider;
+		}
+		return null;
+	}
+
+	private async pickRoute(route: ModelProviderRoute): Promise<ProviderId | "codex-chatgpt" | null> {
+		if (route === "openai-codex") return this.pickOpenAiOAuth();
+		if (route === "anthropic-subscription") return this.pickAnthropicOAuth();
+		if (route === "openrouter-api") return this.hasEnvKey("OPENROUTER_API_KEY") ? "openrouter" : null;
+		if (route === "anthropic-api") return this.hasEnvKey("ANTHROPIC_API_KEY") ? "anthropic" : null;
+		if (route === "openai-api") return this.hasEnvKey("OPENAI_API_KEY") ? "openai" : null;
+		return null;
+	}
+
+	private hasEnvKey(key: string): boolean {
+		const value = process.env[key];
+		return typeof value === "string" && value.length > 0;
+	}
+
+	private async pickOpenAiOAuth(): Promise<"codex-chatgpt" | null> {
 		const systemCodex = await detectSystemCodexAuth();
 		if (systemCodex) {
 			process.env.CODEX_OAUTH_TOKEN = systemCodex.accessToken;
 			process.env.CODEX_CHATGPT_ACCOUNT_ID = systemCodex.accountId;
 			console.log(
-				`[runtime] using system Codex CLI auth from ~/.codex/auth.json (account_id=${systemCodex.accountId}) — primary provider, no re-auth required`,
+				`[runtime] using system Codex CLI auth from ~/.codex/auth.json (account_id=${systemCodex.accountId})`,
 			);
 			return "codex-chatgpt";
 		}
 
-		// 2. Fall back to our own per-account OAuth files.
 		try {
 			const codexAccounts = listAccounts("openai-codex") as AccountCredentialRecord[];
 			const usable = codexAccounts
@@ -402,17 +780,19 @@ export class RuntimeService {
 					process.env.CODEX_OAUTH_TOKEN = token;
 					process.env.CODEX_CHATGPT_ACCOUNT_ID = acctId;
 					console.log(
-						`[runtime] using openai-codex account "${pick.label}" (id=${pick.id}, chatgpt_account_id=${acctId}) — primary provider`,
+						`[runtime] using openai-codex account "${pick.label}" (id=${pick.id}, chatgpt_account_id=${acctId})`,
 					);
 					return "codex-chatgpt";
 				}
-				console.warn("[runtime] codex token has no chatgpt_account_id claim — falling back to anthropic");
+				console.warn("[runtime] codex token has no chatgpt_account_id claim");
 			}
 		} catch (err) {
 			console.warn("[runtime] codex OAuth probe failed:", err instanceof Error ? err.message : err);
 		}
+		return null;
+	}
 
-		// Anthropic fallback.
+	private async pickAnthropicOAuth(): Promise<"anthropic" | null> {
 		try {
 			const anthropicAccounts = listAccounts("anthropic-subscription") as AccountCredentialRecord[];
 			const usable = anthropicAccounts
@@ -424,7 +804,7 @@ export class RuntimeService {
 			if (usable.length > 0) {
 				const pick = usable[0]!;
 				process.env.ANTHROPIC_API_KEY = pick.credentials!.access;
-				console.log(`[runtime] using anthropic-subscription account "${pick.label}" (id=${pick.id}) — fallback provider`);
+				console.log(`[runtime] using anthropic-subscription account "${pick.label}" (id=${pick.id})`);
 				return "anthropic";
 			}
 		} catch (err) {

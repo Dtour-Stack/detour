@@ -40,6 +40,8 @@ import {
 import { audit } from "./audit";
 import { check } from "./permissions";
 
+const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
+
 // ── Manager singleton ─────────────────────────────────────────────────────
 //
 // We don't get the host's VaultService passed in (eliza's Plugin constructor
@@ -71,14 +73,70 @@ function caller(runtime: IAgentRuntime): string {
 	return `agent:${runtime.character?.name ?? "unknown"}`;
 }
 
+type BrowserControl = {
+	enqueue(command:
+		| { kind: "open"; url: string; newTab?: boolean; source?: "agent" }
+		| { kind: "inspect"; source?: "agent"; timeoutMs?: number }
+		| { kind: "script"; script: string; source?: "agent"; timeoutMs?: number }
+		| { kind: "fill-login"; source: "in-house" | "1password" | "bitwarden"; identifier: string; targetUrl?: string; newTab?: boolean; timeoutMs?: number }
+	): { id: string; time: number };
+	enqueueAndWait(command:
+		| { kind: "inspect"; source?: "agent"; timeoutMs?: number }
+		| { kind: "script"; script: string; source?: "agent"; timeoutMs?: number }
+		| { kind: "fill-login"; source: "in-house" | "1password" | "bitwarden"; identifier: string; targetUrl?: string; newTab?: boolean; timeoutMs?: number },
+		timeoutMs?: number,
+	): Promise<{ ok: boolean; result?: unknown; error?: string; text?: string; time: number }>;
+};
+
+function getBrowserControl(): BrowserControl | null {
+	const value = (globalThis as Record<symbol, unknown>)[BROWSER_CONTROL_GLOBAL];
+	if (!value || typeof value !== "object") return null;
+	const control = value as Partial<BrowserControl>;
+	return typeof control.enqueue === "function" && typeof control.enqueueAndWait === "function"
+		? control as BrowserControl
+		: null;
+}
+
+/**
+ * Eliza delivers extracted action params at `options.parameters` (canonical
+ * contract). Some pipeline paths put them at the top level or nested under
+ * `params`/`<ACTION>`/`arguments`. Walk all of those so the agent's chosen
+ * action params actually land here. (Same fix shape as @detour/plugin-x-tweets.)
+ */
+function paramsBagV(opts: Record<string, unknown> | undefined): Record<string, unknown> {
+	if (!opts) return {};
+	const p = (opts as { parameters?: unknown }).parameters;
+	if (p && typeof p === "object" && !Array.isArray(p)) return p as Record<string, unknown>;
+	return {};
+}
+
 function pickStringOption(
 	options: Record<string, unknown> | undefined,
 	keys: readonly string[],
 ): string | undefined {
 	if (!options) return undefined;
+	const params = paramsBagV(options);
+	for (const k of keys) {
+		const v = params[k];
+		if (typeof v === "string" && v.length > 0) return v;
+	}
 	for (const k of keys) {
 		const v = options[k];
 		if (typeof v === "string" && v.length > 0) return v;
+	}
+	const queue: Record<string, unknown>[] = [options];
+	const seen = new Set<unknown>();
+	while (queue.length > 0) {
+		const cur = queue.shift()!;
+		if (seen.has(cur)) continue;
+		seen.add(cur);
+		for (const k of keys) {
+			const v = cur[k];
+			if (typeof v === "string" && v.length > 0) return v;
+		}
+		for (const v of Object.values(cur)) {
+			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
+		}
 	}
 	return undefined;
 }
@@ -89,15 +147,60 @@ function pickBoolOption(
 	fallback: boolean,
 ): boolean {
 	if (!options) return fallback;
-	for (const k of keys) {
-		const v = options[k];
-		if (typeof v === "boolean") return v;
-		if (typeof v === "string") {
-			if (v === "true") return true;
-			if (v === "false") return false;
+	const params = paramsBagV(options);
+	const tryAt = (bag: Record<string, unknown>): boolean | undefined => {
+		for (const k of keys) {
+			const v = bag[k];
+			if (typeof v === "boolean") return v;
+			if (typeof v === "string") {
+				if (v === "true") return true;
+				if (v === "false") return false;
+			}
+		}
+		return undefined;
+	};
+	return tryAt(params) ?? tryAt(options) ?? fallback;
+}
+
+function pickNumberOption(
+	options: Record<string, unknown> | undefined,
+	keys: readonly string[],
+	fallback: number,
+): number {
+	if (!options) return fallback;
+	const params = paramsBagV(options);
+	for (const bag of [params, options]) {
+		for (const k of keys) {
+			const v = bag[k];
+			if (typeof v === "number" && Number.isFinite(v)) return v;
+			if (typeof v === "string") {
+				const parsed = Number.parseInt(v, 10);
+				if (Number.isFinite(parsed)) return parsed;
+			}
 		}
 	}
 	return fallback;
+}
+
+function previewValue(value: unknown, maxLength = 4_000): string {
+	const text = typeof value === "string"
+		? value
+		: JSON.stringify(value, null, 2) ?? String(value);
+	return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function inspectMessage(value: unknown): string {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return `Browser page inspected.\n${previewValue(value)}`;
+	}
+	const page = value as { title?: string; url?: string; text?: string };
+	const lines = [
+		"Browser page inspected.",
+		page.title ? `Title: ${page.title}` : "",
+		page.url ? `URL: ${page.url}` : "",
+		page.text ? `Text:\n${previewValue(page.text, 3_000)}` : "",
+	].filter((line) => line.length > 0);
+	return lines.join("\n");
 }
 
 async function emit(callback: HandlerCallback | undefined, text: string, actionName: string): Promise<void> {
@@ -289,9 +392,19 @@ const loginListHandler: Handler = async (runtime, _message, _state, options, cal
 		username: l.username,
 		title: l.title,
 	}));
+	const preview = summary.slice(0, 20).map((l) => {
+		const label = l.title || l.domain || l.username || l.identifier;
+		const username = l.username ? ` — ${l.username}` : "";
+		return `- ${label}${username} [${l.source}] ${l.identifier}`;
+	});
+	const extra = summary.length > preview.length ? [`…and ${summary.length - preview.length} more.`] : [];
 	await emit(
 		callback,
-		`Found ${summary.length} saved logins${domain ? ` for ${domain}` : ""} (${result.failures.length} backend failures).`,
+		[
+			`Found ${summary.length} saved logins${domain ? ` for ${domain}` : ""} (${result.failures.length} backend failures).`,
+			...preview,
+			...extra,
+		].join("\n"),
 		"LOGIN_LIST",
 	);
 	return ok(
@@ -408,6 +521,164 @@ export const loginSaveAction: Action = {
 	],
 } as Action;
 
+// ── BROWSER_OPEN ───────────────────────────────────────────────────────────
+
+const browserOpenHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const url = pickStringOption(opts, ["url", "target", "site", "query"]);
+	if (!url || url.length > 2048) return fail("BROWSER_OPEN requires `url`.");
+	const browser = getBrowserControl();
+	if (!browser) return fail("Browser control is unavailable. Open the Detour app runtime first.");
+	const newTab = pickBoolOption(opts, ["newTab", "new_tab"], true);
+	const command = browser.enqueue({ kind: "open", url, newTab, source: "agent" });
+	audit({ action: "browser_open", key: url, success: true, caller: caller(runtime), ts: Date.now() });
+	await emit(callback, `Queued browser navigation for ${url}.`, "BROWSER_OPEN");
+	return ok(`Browser command queued (${command.id}).`);
+};
+
+export const browserOpenAction: Action = {
+	name: "BROWSER_OPEN",
+	similes: ["OPEN_BROWSER", "NAVIGATE_BROWSER", "GO_TO_WEBSITE", "OPEN_URL"],
+	description:
+		"Open a URL or search query in the Detour browser window. The browser has multi-tab Electrobun webviews and shares a persistent browser partition for cookies and signed-in sessions.",
+	validate: alwaysValid,
+	handler: browserOpenHandler,
+	examples: [],
+	parameters: [
+		{ name: "url", description: "URL, host, or search query to open.", required: true, schema: { type: "string" as const } },
+		{ name: "newTab", description: "Open in a new tab. Defaults to true.", required: false, schema: { type: "boolean" as const } },
+	],
+} as Action;
+
+// ── BROWSER_INSPECT ────────────────────────────────────────────────────────
+
+const browserInspectHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const browser = getBrowserControl();
+	if (!browser) return fail("Browser control is unavailable. Open the Detour app runtime first.");
+	const timeoutMs = pickNumberOption(opts, ["timeoutMs", "timeout_ms"], 30_000);
+	const result = await browser.enqueueAndWait({ kind: "inspect", source: "agent", timeoutMs }, timeoutMs + 2_000);
+	audit({
+		action: "browser_inspect",
+		success: result.ok,
+		...(result.error ? { error: result.error } : {}),
+		caller: caller(runtime),
+		ts: Date.now(),
+	});
+	if (!result.ok) return fail(result.error ?? "BROWSER_INSPECT failed.");
+	const message = inspectMessage(result.result);
+	await emit(callback, message, "BROWSER_INSPECT");
+	return ok(message, { browser: result.result } as never);
+};
+
+export const browserInspectAction: Action = {
+	name: "BROWSER_INSPECT",
+	similes: ["INSPECT_BROWSER", "READ_BROWSER", "READ_PAGE", "GET_PAGE"],
+	description:
+		"Inspect the active Detour browser tab and return page URL, title, visible text, links, buttons, and fields. Use this before deciding what to click or type.",
+	validate: alwaysValid,
+	handler: browserInspectHandler,
+	examples: [],
+	parameters: [
+		{ name: "timeoutMs", description: "Optional timeout in milliseconds.", required: false, schema: { type: "number" as const } },
+	],
+} as Action;
+
+// ── BROWSER_SCRIPT ─────────────────────────────────────────────────────────
+
+const browserScriptHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const script = pickStringOption(opts, ["script", "javascript", "js"]);
+	if (!script) return fail("BROWSER_SCRIPT requires `script`.");
+	if (script.length > 100_000) return fail("BROWSER_SCRIPT script is too large.");
+	const browser = getBrowserControl();
+	if (!browser) return fail("Browser control is unavailable. Open the Detour app runtime first.");
+	const timeoutMs = pickNumberOption(opts, ["timeoutMs", "timeout_ms"], 30_000);
+	const result = await browser.enqueueAndWait({ kind: "script", script, source: "agent", timeoutMs }, timeoutMs + 2_000);
+	audit({
+		action: "browser_script",
+		success: result.ok,
+		...(result.error ? { error: result.error } : {}),
+		caller: caller(runtime),
+		ts: Date.now(),
+	});
+	if (!result.ok) return fail(result.error ?? "BROWSER_SCRIPT failed.");
+	const message = `Browser script executed.\nResult:\n${previewValue(result.result)}`;
+	await emit(callback, message, "BROWSER_SCRIPT");
+	return ok(message, { result: result.result } as never);
+};
+
+export const browserScriptAction: Action = {
+	name: "BROWSER_SCRIPT",
+	similes: ["RUN_BROWSER_SCRIPT", "EVALUATE_BROWSER", "CLICK_BROWSER", "TYPE_BROWSER"],
+	description:
+		"Run JavaScript in the active Detour browser tab and return the result. Use for page interaction, clicking elements, typing into forms, or extracting structured page data after BROWSER_INSPECT.",
+	validate: alwaysValid,
+	handler: browserScriptHandler,
+	examples: [],
+	parameters: [
+		{ name: "script", description: "JavaScript to evaluate in the active browser tab.", required: true, schema: { type: "string" as const } },
+		{ name: "timeoutMs", description: "Optional timeout in milliseconds.", required: false, schema: { type: "number" as const } },
+	],
+} as Action;
+
+// ── BROWSER_FILL_LOGIN ─────────────────────────────────────────────────────
+
+const browserFillLoginHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const source = pickStringOption(opts, ["source"]);
+	const identifier = pickStringOption(opts, ["identifier", "id"]);
+	const targetUrl = pickStringOption(opts, ["targetUrl", "url", "site"]);
+	if (source !== "in-house" && source !== "1password" && source !== "bitwarden") {
+		return fail("BROWSER_FILL_LOGIN requires `source` as in-house, 1password, or bitwarden.");
+	}
+	if (!identifier) return fail("BROWSER_FILL_LOGIN requires `identifier` from LOGIN_LIST.");
+	const perm = check({ action: "read", target: `creds.${identifier}` });
+	if (!perm.allowed) {
+		audit({ action: "browser_fill_login", source, success: false, error: perm.reason, caller: caller(runtime), ts: Date.now() });
+		return fail(perm.reason ?? "denied");
+	}
+	const browser = getBrowserControl();
+	if (!browser) return fail("Browser control is unavailable. Open the Detour app runtime first.");
+	const timeoutMs = pickNumberOption(opts, ["timeoutMs", "timeout_ms"], 30_000);
+	const result = await browser.enqueueAndWait({
+		kind: "fill-login",
+		source,
+		identifier,
+		...(targetUrl ? { targetUrl } : {}),
+		newTab: targetUrl ? pickBoolOption(opts, ["newTab", "new_tab"], true) : false,
+		timeoutMs,
+	}, timeoutMs + 15_000);
+	audit({
+		action: "browser_fill_login",
+		source,
+		success: result.ok,
+		...(result.error ? { error: result.error } : {}),
+		caller: caller(runtime),
+		ts: Date.now(),
+	});
+	if (!result.ok) return fail(result.error ?? "BROWSER_FILL_LOGIN failed.");
+	await emit(callback, `Queued browser autofill from ${source}.`, "BROWSER_FILL_LOGIN");
+	return ok("Browser autofill complete.");
+};
+
+export const browserFillLoginAction: Action = {
+	name: "BROWSER_FILL_LOGIN",
+	similes: ["AUTOFILL_LOGIN", "FILL_PASSWORD", "USE_SAVED_LOGIN", "USE_1PASSWORD_LOGIN"],
+	description:
+		"Ask the Detour browser to autofill a saved login selected from LOGIN_LIST. This does not print the password in chat; the browser view reveals the credential locally and injects it into visible username/password/TOTP fields.",
+	validate: alwaysValid,
+	handler: browserFillLoginHandler,
+	examples: [],
+	parameters: [
+		{ name: "source", description: "Login source from LOGIN_LIST: in-house | 1password | bitwarden.", required: true, schema: { type: "string" as const } },
+		{ name: "identifier", description: "Login identifier from LOGIN_LIST.", required: true, schema: { type: "string" as const } },
+		{ name: "targetUrl", description: "Optional URL/site to open before filling.", required: false, schema: { type: "string" as const } },
+		{ name: "newTab", description: "Open targetUrl in a new tab. Defaults to true when targetUrl is set.", required: false, schema: { type: "boolean" as const } },
+		{ name: "timeoutMs", description: "Optional timeout in milliseconds.", required: false, schema: { type: "number" as const } },
+	],
+} as Action;
+
 // ── Plugin export ──────────────────────────────────────────────────────────
 
 export const vaultToolsPlugin: Plugin = {
@@ -423,6 +694,10 @@ export const vaultToolsPlugin: Plugin = {
 		loginListAction,
 		loginRevealAction,
 		loginSaveAction,
+		browserOpenAction,
+		browserInspectAction,
+		browserScriptAction,
+		browserFillLoginAction,
 	],
 };
 

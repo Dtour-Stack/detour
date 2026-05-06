@@ -33,6 +33,7 @@ import {
 const DEFAULT_MODEL = "text-embedding-3-small";
 const DEFAULT_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_DIM = 1536; // text-embedding-3-small native dim
+const DEFAULT_MAX_CHARS = 1_600;
 const REQUEST_TIMEOUT = 10_000;
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
@@ -49,6 +50,12 @@ function extractText(params: TextEmbeddingParams | string | null | undefined): s
 	const text = (params as { text?: unknown }).text;
 	if (typeof text === "string") return text;
 	return "";
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+	if (!value) return fallback;
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function callOpenAIEmbeddings(opts: {
@@ -91,6 +98,7 @@ async function callOpenAIEmbeddings(opts: {
 }
 
 let warnedNoKey = false;
+let warnedTruncatedInput = false;
 
 export const embeddingOpenAIPlugin: Plugin = {
 	name: "embedding-openai",
@@ -105,10 +113,22 @@ export const embeddingOpenAIPlugin: Plugin = {
 			const model = pickSetting(runtime, "OPENAI_EMBEDDING_MODEL") ?? DEFAULT_MODEL;
 			const url = pickSetting(runtime, "OPENAI_EMBEDDING_URL") ?? DEFAULT_URL;
 			const dimRaw = pickSetting(runtime, "OPENAI_EMBEDDING_DIMENSIONS");
-			const dim = dimRaw ? Number.parseInt(dimRaw, 10) : DEFAULT_DIM;
+			const dim = positiveInteger(dimRaw, DEFAULT_DIM);
+			const maxChars = positiveInteger(
+				pickSetting(runtime, "OPENAI_EMBEDDING_MAX_CHARS"),
+				DEFAULT_MAX_CHARS,
+			);
 
 			const text = extractText(params);
 			if (text.length === 0) return new Array(dim).fill(0);
+			const input = text.length > maxChars ? text.slice(0, maxChars) : text;
+			if (input.length !== text.length && !warnedTruncatedInput) {
+				warnedTruncatedInput = true;
+				logger.warn(
+					{ src: "embedding-openai", inputChars: text.length, maxChars },
+					"embedding input exceeded configured limit — truncating before OpenAI request",
+				);
+			}
 
 			if (!apiKey) {
 				if (!warnedNoKey) {
@@ -126,7 +146,7 @@ export const embeddingOpenAIPlugin: Plugin = {
 					apiKey,
 					url,
 					model,
-					input: text,
+					input,
 					...(dimRaw && Number.isFinite(dim) ? { dimensions: dim } : {}),
 				});
 				warnedNoKey = false;

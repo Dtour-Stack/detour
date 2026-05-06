@@ -10,7 +10,10 @@
 	},
 	"dependencies": {
 		"@detour/plugin-codex-chatgpt": "workspace:*",
+		"@detour/plugin-codex-pets": "workspace:*",
+		"@detour/plugin-cron-tools": "workspace:*",
 		"@detour/plugin-embedding-openai": "workspace:*",
+		"@detour/plugin-openrouter": "workspace:*",
 		"@detour/plugin-pensieve-tools": "workspace:*",
 		"@detour/plugin-vault-tools": "workspace:*",
 		"@detour/plugin-x-tweets": "workspace:*",

@@ -30,12 +30,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ChannelGatewayService, GatewayMessage } from "../channels/gateway";
 import type { RuntimeService } from "../runtime";
+import { getTraceId, newTraceId, traceScope } from "../trace";
 
 const RING_CAP = 1000;
 const INBOX_TAG = "inbox";
 
 export type InboxKind = "message" | "notification" | "identity-conflict" | "task" | "event";
-export type InboxStatus = "pending" | "acknowledged" | "acted" | "dismissed";
+export type InboxStatus = "pending" | "acting" | "acknowledged" | "acted" | "dismissed";
 
 export interface InboxItem {
 	readonly id: string;
@@ -75,6 +76,61 @@ export interface ListOptions {
 	limit?: number;
 }
 
+type InboxStatusUpdateLogEntry = {
+	id: string;
+	statusUpdate: InboxStatus;
+	time: number;
+};
+
+type InboxReplyLogEntry = {
+	id: string;
+	replyText: string;
+	time: number;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isInboxStatus(value: unknown): value is InboxStatus {
+	return value === "pending" || value === "acting" || value === "acknowledged" || value === "acted" || value === "dismissed";
+}
+
+function isInboxKind(value: unknown): value is InboxKind {
+	return value === "message" || value === "notification" || value === "identity-conflict" || value === "task" || value === "event";
+}
+
+function isInboxItemLogEntry(value: unknown): value is InboxItem {
+	return (
+		isRecord(value) &&
+		typeof value.id === "string" &&
+		typeof value.time === "number" &&
+		isInboxKind(value.kind) &&
+		isInboxStatus(value.status) &&
+		typeof value.title === "string" &&
+		typeof value.body === "string" &&
+		typeof value.source === "string"
+	);
+}
+
+function isInboxStatusUpdateLogEntry(value: unknown): value is InboxStatusUpdateLogEntry {
+	return (
+		isRecord(value) &&
+		typeof value.id === "string" &&
+		typeof value.time === "number" &&
+		isInboxStatus(value.statusUpdate)
+	);
+}
+
+function isInboxReplyLogEntry(value: unknown): value is InboxReplyLogEntry {
+	return (
+		isRecord(value) &&
+		typeof value.id === "string" &&
+		typeof value.time === "number" &&
+		typeof value.replyText === "string"
+	);
+}
+
 function resolveStateDir(): string {
 	return (
 		process.env.ELIZA_STATE_DIR?.trim() ||
@@ -86,6 +142,7 @@ export class InboxService {
 	private readonly logPath: string;
 	private readonly buffer: InboxItem[] = [];
 	private readonly statusOverrides = new Map<string, InboxStatus>();
+	private readonly replyTexts = new Map<string, string>();
 
 	constructor(
 		private readonly runtimeService: RuntimeService,
@@ -109,15 +166,27 @@ export class InboxService {
 		try {
 			const raw = readFileSync(this.logPath, "utf8");
 			const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-			// Read the last RING_CAP items only — older history stays on disk.
+			const items = new Map<string, InboxItem>();
 			for (const line of lines.slice(-RING_CAP)) {
 				try {
-					const item = JSON.parse(line) as InboxItem;
-					this.buffer.push(item);
+					const entry = JSON.parse(line) as unknown;
+					if (isInboxStatusUpdateLogEntry(entry)) {
+						this.statusOverrides.set(entry.id, entry.statusUpdate);
+						continue;
+					}
+					if (isInboxReplyLogEntry(entry)) {
+						this.replyTexts.set(entry.id, entry.replyText);
+						continue;
+					}
+					if (isInboxItemLogEntry(entry)) {
+						items.delete(entry.id);
+						items.set(entry.id, entry);
+					}
 				} catch {
 					// skip malformed
 				}
 			}
+			this.buffer.push(...items.values());
 		} catch (err) {
 			logger.warn({ src: "inbox", err: err instanceof Error ? err.message : err }, "history reload failed");
 		}
@@ -240,9 +309,17 @@ export class InboxService {
 
 		const shouldPrompt = opts.prompt ?? (opts.kind === "notification" || opts.kind === "task");
 		if (shouldPrompt) {
-			await this.promptAgent(item).catch((err) => {
-				logger.debug({ src: "inbox", err: err instanceof Error ? err.message : err }, "agent prompt failed");
-			});
+			this.setStatus(item.id, "acting");
+			// Open a trace scope so every log line and downstream message
+			// service call carries the same trace id — critical for stitching
+			// the whole inbox-driven turn (cron fire → reply pipeline → action
+			// execution) under one searchable id.
+			const inheritedTrace = getTraceId() ?? newTraceId();
+			await traceScope(inheritedTrace, () =>
+				this.promptAgent(item).catch((err) => {
+					logger.debug({ src: "inbox", err: err instanceof Error ? err.message : err }, "agent prompt failed");
+				}),
+			);
 		}
 		return item;
 	}
@@ -286,6 +363,22 @@ export class InboxService {
 			} as unknown as Memory["metadata"],
 		};
 		await r.createMemory(memory, "memories");
+	}
+
+	private promptText(item: InboxItem): string {
+		return [
+			"Inbox item needs action.",
+			`Kind: ${item.kind}`,
+			`Source: ${item.source}`,
+			item.channel ? `Channel: ${item.channel}` : "",
+			item.fromHandle ? `From: ${item.fromHandle}` : "",
+			item.meta?.roomId ? `Room: ${String(item.meta.roomId)}` : "",
+			"",
+			`Title: ${item.title}`,
+			item.body ? `Message:\n${item.body}` : "",
+			"",
+			"Decide whether to act. If a channel reply is appropriate, use the available message connector action for the relevant channel/contact. Then summarize what you did.",
+		].filter((line) => line.length > 0).join("\n");
 	}
 
 	private async promptAgent(item: InboxItem): Promise<void> {
@@ -340,7 +433,7 @@ export class InboxService {
 			agentId: r.agentId as Memory["agentId"],
 			roomId,
 			content: {
-				text: `${item.title}\n\n${item.body}`,
+				text: this.promptText(item),
 				source: `inbox:${item.source}`,
 				attachments: [],
 			},
@@ -371,10 +464,15 @@ export class InboxService {
 			return [];
 		}).then(() => {
 			if (replyText.length > 0) {
-				this.statusOverrides.set(item.id, "acted");
-				this.replyTexts.set(item.id, replyText);
+				this.setReply(item.id, replyText);
+			}
+			if ((this.statusOverrides.get(item.id) ?? item.status) !== "dismissed") {
+				this.updateStatus(item.id, "acted");
 			}
 		}).catch((err) => {
+			if ((this.statusOverrides.get(item.id) ?? item.status) !== "dismissed") {
+				this.updateStatus(item.id, "pending");
+			}
 			logger.warn(
 				{ src: "inbox", err: err instanceof Error ? err.message : err },
 				"agent processing of inbox item failed",
@@ -383,22 +481,25 @@ export class InboxService {
 		(item as unknown as { prompted: boolean }).prompted = true;
 	}
 
-	private readonly replyTexts = new Map<string, string>();
-
 	getReply(id: string): string | undefined {
 		return this.replyTexts.get(id);
+	}
+
+	private withRuntimeState(item: InboxItem): InboxItem {
+		const status = this.statusOverrides.get(item.id) ?? item.status;
+		const replyText = this.replyTexts.get(item.id);
+		return {
+			...item,
+			status,
+			...(replyText ? { replyText } : {}),
+		};
 	}
 
 	list(opts: ListOptions = {}): { items: InboxItem[]; total: number } {
 		const limit = Math.max(1, Math.min(opts.limit ?? 100, 1000));
 		const since = opts.since ?? 0;
 		const filtered = this.buffer
-			.map((m) => {
-				const status = this.statusOverrides.get(m.id) ?? m.status;
-				const replyText = this.replyTexts.get(m.id);
-				if (status === m.status && !replyText) return m;
-				return { ...m, status, ...(replyText ? { replyText } : {}) };
-			})
+			.map((m) => this.withRuntimeState(m))
 			.filter((m) => {
 				if (m.time < since) return false;
 				if (opts.status && m.status !== opts.status) return false;
@@ -411,9 +512,7 @@ export class InboxService {
 		return { items: sliced, total: filtered.length };
 	}
 
-	updateStatus(id: string, status: InboxStatus): InboxItem | null {
-		const item = this.buffer.find((i) => i.id === id);
-		if (!item) return null;
+	private setStatus(id: string, status: InboxStatus): void {
 		this.statusOverrides.set(id, status);
 		try {
 			appendFileSync(
@@ -422,9 +521,45 @@ export class InboxService {
 				{ mode: 0o600 },
 			);
 		} catch {
-			// best effort
 		}
-		return { ...item, status };
+	}
+
+	private setReply(id: string, replyText: string): void {
+		this.replyTexts.set(id, replyText);
+		try {
+			appendFileSync(
+				this.logPath,
+				`${JSON.stringify({ id, replyText, time: Date.now() })}\n`,
+				{ mode: 0o600 },
+			);
+		} catch {
+		}
+	}
+
+	updateStatus(id: string, status: InboxStatus): InboxItem | null {
+		const item = this.buffer.find((i) => i.id === id);
+		if (!item) return null;
+		this.setStatus(id, status);
+		return this.withRuntimeState(item);
+	}
+
+	async act(id: string): Promise<InboxItem | null> {
+		const item = this.buffer.find((i) => i.id === id);
+		if (!item) return null;
+		const current = this.statusOverrides.get(id) ?? item.status;
+		if (current === "acting" || current === "acted" || current === "dismissed") return this.withRuntimeState(item);
+		this.setStatus(id, "acting");
+		const inheritedTrace = getTraceId() ?? newTraceId();
+		await traceScope(inheritedTrace, () =>
+			this.promptAgent(item).catch((err) => {
+				this.updateStatus(id, "pending");
+				logger.warn(
+					{ src: "inbox", err: err instanceof Error ? err.message : err },
+					"agent action of inbox item failed",
+				);
+			}),
+		);
+		return this.withRuntimeState(item);
 	}
 
 	stats(): { total: number; pending: number; byKind: Record<string, number> } {

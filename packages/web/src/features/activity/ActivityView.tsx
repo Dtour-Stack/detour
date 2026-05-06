@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { WebClient } from "../../api/client";
+import { useDetourTheme } from "../../useDetourTheme";
 import { TrajectoriesPane } from "./TrajectoriesPane";
 import { LogsPane } from "./LogsPane";
 import { RuntimePane } from "./RuntimePane";
@@ -30,6 +31,7 @@ const TABS: { id: Tab; label: string }[] = [
  */
 export function ActivityView() {
 	const client = useMemo(() => new WebClient(), []);
+	useDetourTheme(client);
 	const [connected, setConnected] = useState(false);
 	const [tab, setTab] = useState<Tab>(() => {
 		try {

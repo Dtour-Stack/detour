@@ -11,8 +11,23 @@
  */
 
 import type { IAgentRuntime } from "@elizaos/core";
+import { CONTINUOUS_IMPROVEMENT_TASK_NAME } from "../continuous-improvement-service";
 
 const AUTONOMY_SERVICE_TYPE = "AUTONOMY";
+const AUTONOMY_TASK_NAMES = new Set(["AUTONOMY_THINK", "X_AUTONOMY", "BATCHER_DRAIN", CONTINUOUS_IMPROVEMENT_TASK_NAME]);
+const AUTONOMY_TASK_TAGS = new Set(["autonomy", "x-autonomy", "batcher", "continuous-improvement"]);
+const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
+const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
+const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
+	"elizaOS",
+	"Dexploarer",
+	"ai agents",
+	"autonomous agents",
+	"agent framework",
+	"personal AI",
+	"developer tools",
+];
 
 export interface ActivityAutonomySnapshot {
 	available: boolean;
@@ -20,7 +35,71 @@ export interface ActivityAutonomySnapshot {
 	running: boolean;
 	thinking: boolean;
 	intervalMs: number;
+	runner: "prompt-batcher" | "task" | "missing" | "none";
 	autonomousRoomId?: string;
+	tasks: ActivityAutonomyTask[];
+	x: ActivityXAutonomySnapshot;
+	improvement: ActivityImprovementSnapshot;
+}
+
+export interface ActivityAutonomyTask {
+	id: string;
+	name: string;
+	description?: string;
+	tags: string[];
+	updateInterval?: number;
+	nextRunAt?: number;
+	lastExecuted?: number;
+	lastError?: string;
+	failureCount: number;
+	paused: boolean;
+	hasWorker: boolean;
+}
+
+export interface ActivityXAutonomySnapshot {
+	available: boolean;
+	enabled: boolean;
+	writeEnabled: boolean;
+	statusPostingEnabled: boolean;
+	discoveryEnabled: boolean;
+	proactiveEngagementEnabled: boolean;
+	followEnabled: boolean;
+	intervalMs: number;
+	statusIntervalMs: number;
+	discoveryIntervalMs: number;
+	maxDiscoveryPerTick: number;
+	discoveryQueries: string[];
+	lastRunAt?: number;
+	lastStatusAt?: number;
+	lastDiscoveryAt?: number;
+	lastStatusTweetId?: string;
+	lastHandledCount: number;
+	lastHandled: ActivityXAutonomyHandled[];
+}
+
+export interface ActivityXAutonomyHandled {
+	action: string;
+	success?: boolean;
+	tweetId?: string;
+	resultTweetId?: string;
+	error?: string;
+	reason?: string;
+	text?: string;
+	authorScreenName?: string;
+	query?: string;
+	score?: number;
+}
+
+export interface ActivityImprovementSnapshot {
+	available: boolean;
+	enabled: boolean;
+	intervalMs: number;
+	lastRunAt?: number;
+	lastResult?: string;
+	lastCategory?: string;
+	lastProposal?: string;
+	lastError?: string;
+	lastMemoryIds: string[];
 }
 
 interface AutonomyServiceShape {
@@ -33,8 +112,15 @@ interface AutonomyServiceShape {
 	};
 	enableAutonomy?: () => Promise<void>;
 	disableAutonomy?: () => Promise<void>;
-	getInterval?: () => number;
-	setInterval?: (ms: number) => Promise<void> | void;
+	getLoopInterval?: () => number;
+	setLoopInterval?: (ms: number) => Promise<void> | void;
+}
+
+interface RuntimeTaskShape {
+	taskWorkers?: Map<string, { name: string }>;
+	getTasks?: (params: { tags?: string[]; limit?: number }) => Promise<unknown[]>;
+	getSetting?: (key: string) => string | undefined | null;
+	promptBatcher?: unknown;
 }
 
 const EMPTY: ActivityAutonomySnapshot = {
@@ -43,6 +129,30 @@ const EMPTY: ActivityAutonomySnapshot = {
 	running: false,
 	thinking: false,
 	intervalMs: 0,
+	runner: "none",
+	tasks: [],
+	x: {
+		available: false,
+		enabled: false,
+		writeEnabled: false,
+		statusPostingEnabled: false,
+		discoveryEnabled: false,
+		proactiveEngagementEnabled: false,
+		followEnabled: false,
+		intervalMs: X_AUTONOMY_DEFAULT_INTERVAL_MS,
+		statusIntervalMs: X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS,
+		discoveryIntervalMs: X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS,
+		maxDiscoveryPerTick: 0,
+		discoveryQueries: [],
+		lastHandledCount: 0,
+		lastHandled: [],
+	},
+	improvement: {
+		available: false,
+		enabled: false,
+		intervalMs: 30 * 60_000,
+		lastMemoryIds: [],
+	},
 };
 
 function findService(runtime: IAgentRuntime): AutonomyServiceShape | null {
@@ -56,22 +166,249 @@ function findService(runtime: IAgentRuntime): AutonomyServiceShape | null {
 	return (all[0] as AutonomyServiceShape) ?? null;
 }
 
+function asString(v: unknown): string | undefined {
+	return typeof v === "string" ? v : undefined;
+}
+
+function asNumber(v: unknown): number | undefined {
+	if (typeof v === "number" && Number.isFinite(v)) return v;
+	if (typeof v === "bigint") return Number(v);
+	if (v instanceof Date) return v.getTime();
+	return undefined;
+}
+
+function asObject(v: unknown): Record<string, unknown> {
+	return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function readTimestamp(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+	if (typeof value === "string") {
+		const parsed = Date.parse(value);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+	}
+	return undefined;
+}
+
+function setting(runtime: RuntimeTaskShape, key: string): string | undefined {
+	const v = runtime.getSetting?.(key);
+	return typeof v === "string" && v.trim().length > 0 ? v : undefined;
+}
+
+function booleanSetting(runtime: RuntimeTaskShape, key: string, defaultValue: boolean): boolean {
+	const v = setting(runtime, key);
+	if (v === undefined) return defaultValue;
+	return !["0", "false", "no", "off"].includes(v.trim().toLowerCase());
+}
+
+function numberSetting(runtime: RuntimeTaskShape, key: string, defaultValue: number): number {
+	const v = setting(runtime, key);
+	if (v === undefined) return defaultValue;
+	const n = Number(v);
+	return Number.isFinite(n) ? n : defaultValue;
+}
+
+function listSetting(runtime: RuntimeTaskShape, key: string, defaultValue: string[]): string[] {
+	const v = setting(runtime, key);
+	if (!v) return [...defaultValue];
+	const parsed = v
+		.split(/[\n,]+/)
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0);
+	return parsed.length > 0 ? parsed : [...defaultValue];
+}
+
+function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityAutonomyTask | null {
+	const t = asObject(raw);
+	const id = asString(t.id);
+	if (!id) return null;
+	const meta = asObject(t.metadata);
+	const tags = Array.isArray(t.tags) ? t.tags.map(String) : [];
+	const name = asString(t.name) ?? "(unnamed)";
+	const updateInterval = asNumber(meta.updateInterval);
+	const lastExecuted =
+		readTimestamp(meta.lastExecuted) ?? asNumber(meta.updatedAt) ?? asNumber(t.updatedAt);
+	const nextRunAt =
+		updateInterval && lastExecuted ? lastExecuted + updateInterval : asNumber(t.dueAt);
+	return {
+		id,
+		name,
+		...(asString(t.description) !== undefined && { description: asString(t.description)! }),
+		tags,
+		...(updateInterval !== undefined && { updateInterval }),
+		...(nextRunAt !== undefined && { nextRunAt }),
+		...(lastExecuted !== undefined && { lastExecuted }),
+		...(asString(meta.lastError) !== undefined && { lastError: asString(meta.lastError)! }),
+		failureCount: asNumber(meta.failureCount) ?? 0,
+		paused: meta.paused === true,
+		hasWorker: knownWorkerNames.has(name),
+	};
+}
+
+function isAutonomyTask(task: ActivityAutonomyTask): boolean {
+	return AUTONOMY_TASK_NAMES.has(task.name) || task.tags.some((tag) => AUTONOMY_TASK_TAGS.has(tag));
+}
+
+function normalizeHandled(raw: unknown): ActivityXAutonomyHandled[] {
+	if (!Array.isArray(raw)) return [];
+	return raw.slice(-10).flatMap((item) => {
+		const h = asObject(item);
+		const action = asString(h.action);
+		if (!action) return [];
+		return [{
+			action,
+			...(typeof h.success === "boolean" && { success: h.success }),
+			...(asString(h.tweetId) !== undefined && { tweetId: asString(h.tweetId)! }),
+			...(asString(h.resultTweetId) !== undefined && { resultTweetId: asString(h.resultTweetId)! }),
+			...(asString(h.error) !== undefined && { error: asString(h.error)! }),
+			...(asString(h.reason) !== undefined && { reason: asString(h.reason)! }),
+			...(asString(h.text) !== undefined && { text: asString(h.text)! }),
+			...(asString(h.authorScreenName) !== undefined && { authorScreenName: asString(h.authorScreenName)! }),
+			...(asString(h.query) !== undefined && { query: asString(h.query)! }),
+			...(asNumber(h.score) !== undefined && { score: asNumber(h.score)! }),
+		}];
+	});
+}
+
+function xSnapshot(runtime: RuntimeTaskShape, tasks: ActivityAutonomyTask[], rawTasks: unknown[]): ActivityXAutonomySnapshot {
+	const rawXTask = rawTasks.find((task) => asString(asObject(task).name) === "X_AUTONOMY");
+	const metadata = asObject(asObject(rawXTask).metadata);
+	const lastHandled = normalizeHandled(metadata.xAutonomyLastHandled);
+	const intervalMs = Math.max(
+		30_000,
+		Math.min(30 * 60_000, numberSetting(runtime, "X_AUTONOMY_INTERVAL_MS", X_AUTONOMY_DEFAULT_INTERVAL_MS)),
+	);
+	const statusIntervalMs = Math.max(
+		15 * 60_000,
+		Math.min(24 * 60 * 60_000, numberSetting(runtime, "X_AUTONOMY_STATUS_INTERVAL_MS", X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS)),
+	);
+	const discoveryIntervalMs = Math.max(
+		5 * 60_000,
+		Math.min(
+			24 * 60 * 60_000,
+			numberSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS),
+		),
+	);
+	const maxDiscoveryPerTick = Math.max(0, Math.min(8, numberSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 2)));
+	const statusTweetId = asString(metadata.xAutonomyLastStatusTweetId);
+	const lastRunAt = readTimestamp(metadata.xAutonomyLastRunAt);
+	const lastStatusAt = readTimestamp(metadata.xAutonomyLastStatusAt);
+	const lastDiscoveryAt = readTimestamp(metadata.xAutonomyLastDiscoveryAt);
+	return {
+		available: tasks.some((task) => task.name === "X_AUTONOMY") || Boolean(runtime.taskWorkers?.has("X_AUTONOMY")),
+		enabled: booleanSetting(runtime, "X_AUTONOMY_ENABLED", true),
+		writeEnabled: booleanSetting(runtime, "X_AUTONOMY_WRITE", true),
+		statusPostingEnabled: booleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
+		discoveryEnabled: booleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true),
+		proactiveEngagementEnabled: booleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
+		followEnabled: booleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),
+		intervalMs,
+		statusIntervalMs,
+		discoveryIntervalMs,
+		maxDiscoveryPerTick,
+		discoveryQueries: listSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES),
+		...(lastRunAt !== undefined && { lastRunAt }),
+		...(lastStatusAt !== undefined && { lastStatusAt }),
+		...(lastDiscoveryAt !== undefined && { lastDiscoveryAt }),
+		...(statusTweetId !== undefined && { lastStatusTweetId: statusTweetId }),
+		lastHandledCount: lastHandled.length,
+		lastHandled,
+	};
+}
+
+function improvementSnapshot(runtime: RuntimeTaskShape, tasks: ActivityAutonomyTask[], rawTasks: unknown[]): ActivityImprovementSnapshot {
+	const hasQueue = (task: unknown): number => {
+		const tags = asObject(task).tags;
+		return Array.isArray(tags) && tags.map(String).includes("queue") ? 1 : 0;
+	};
+	const lastImprovementRun = (task: unknown): number =>
+		readTimestamp(asObject(asObject(task).metadata).continuousImprovementLastRunAt) ?? 0;
+	const candidates = rawTasks
+		.filter((task) => asString(asObject(task).name) === CONTINUOUS_IMPROVEMENT_TASK_NAME)
+		.sort((a, b) => {
+			const at = hasQueue(a);
+			const bt = hasQueue(b);
+			if (at !== bt) return bt - at;
+			return lastImprovementRun(b) - lastImprovementRun(a);
+		});
+	const rawTask = candidates[0];
+	const metadata = asObject(asObject(rawTask).metadata);
+	const intervalMs = Math.max(
+		5 * 60_000,
+		Math.min(24 * 60 * 60_000, numberSetting(runtime, "CONTINUOUS_IMPROVEMENT_INTERVAL_MS", 30 * 60_000)),
+	);
+	const lastRunAt = readTimestamp(metadata.continuousImprovementLastRunAt);
+	const lastMemoryIds = Array.isArray(metadata.continuousImprovementLastMemoryIds)
+		? metadata.continuousImprovementLastMemoryIds.map(String)
+		: [];
+	const lastResult = asString(metadata.continuousImprovementLastResult);
+	const lastCategory = asString(metadata.continuousImprovementLastCategory);
+	const lastProposal = asString(metadata.continuousImprovementLastProposal);
+	const lastError = asString(metadata.continuousImprovementLastError);
+	return {
+		available:
+			tasks.some((task) => task.name === CONTINUOUS_IMPROVEMENT_TASK_NAME) ||
+			Boolean(runtime.taskWorkers?.has(CONTINUOUS_IMPROVEMENT_TASK_NAME)),
+		enabled: booleanSetting(runtime, "CONTINUOUS_IMPROVEMENT_ENABLED", true),
+		intervalMs,
+		...(lastRunAt !== undefined && { lastRunAt }),
+		...(lastResult !== undefined && { lastResult }),
+		...(lastCategory !== undefined && { lastCategory }),
+		...(lastProposal !== undefined && { lastProposal }),
+		...(lastError !== undefined && { lastError }),
+		lastMemoryIds,
+	};
+}
+
 export class ActivityAutonomyService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
 
-	snapshot(): ActivityAutonomySnapshot {
+	async snapshot(): Promise<ActivityAutonomySnapshot> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return EMPTY;
 		const svc = findService(runtime);
 		if (!svc?.getStatus) return EMPTY;
 		const s = svc.getStatus();
+		const r = runtime as unknown as RuntimeTaskShape;
+		const workerNames = new Set<string>();
+		if (r.taskWorkers) {
+			for (const name of r.taskWorkers.keys()) workerNames.add(name);
+		}
+		let rawTasks: unknown[] = [];
+		try {
+			rawTasks = (await r.getTasks?.({ tags: [] })) ?? [];
+		} catch {
+			rawTasks = [];
+		}
+		const tasks = rawTasks
+			.map((item) => normalizeTask(item, workerNames))
+			.filter((task): task is ActivityAutonomyTask => !!task && isAutonomyTask(task))
+			.sort((a, b) => {
+				const an = a.nextRunAt ?? Number.POSITIVE_INFINITY;
+				const bn = b.nextRunAt ?? Number.POSITIVE_INFINITY;
+				if (an !== bn) return an - bn;
+				return a.name.localeCompare(b.name);
+			});
+		const hasFallbackTask = tasks.some((task) => task.name === "AUTONOMY_THINK" && task.hasWorker);
+		const hasPromptBatcher = Boolean(r.promptBatcher);
+		const runner = hasPromptBatcher
+			? "prompt-batcher"
+			: hasFallbackTask
+				? "task"
+				: s.enabled
+					? "missing"
+					: "none";
 		return {
 			available: true,
 			enabled: !!s.enabled,
 			running: !!s.running,
 			thinking: !!s.thinking,
 			intervalMs: s.interval ?? 0,
+			runner,
 			...(s.autonomousRoomId ? { autonomousRoomId: s.autonomousRoomId } : {}),
+			tasks,
+			x: xSnapshot(r, tasks, rawTasks),
+			improvement: improvementSnapshot(r, tasks, rawTasks),
 		};
 	}
 
@@ -95,8 +432,8 @@ export class ActivityAutonomyService {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return false;
 		const svc = findService(runtime);
-		if (!svc?.setInterval) return false;
-		await svc.setInterval(Math.max(5_000, Math.min(600_000, Math.round(ms))));
+		if (!svc?.setLoopInterval) return false;
+		await svc.setLoopInterval(Math.max(5_000, Math.min(600_000, Math.round(ms))));
 		return true;
 	}
 }

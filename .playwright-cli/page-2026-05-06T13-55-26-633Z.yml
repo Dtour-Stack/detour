@@ -1,0 +1,16 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: Activity
+    - generic [ref=e6]:
+      - generic [ref=e7] [cursor=pointer]: Live runtime
+      - generic [ref=e8]:
+        - button "Trajectories" [ref=e9] [cursor=pointer]
+        - button "Logs" [ref=e10] [cursor=pointer]
+        - button "Tasks" [ref=e11] [cursor=pointer]
+        - button "Autonomy" [active] [ref=e12] [cursor=pointer]
+        - button "Plugins" [ref=e13] [cursor=pointer]
+        - button "DB" [ref=e14] [cursor=pointer]
+        - button "Runtime" [ref=e15] [cursor=pointer]
+    - generic [ref=e17]: ● connected
+  - main [ref=e18]:
+    - generic [ref=e631]: Loading autonomy state...

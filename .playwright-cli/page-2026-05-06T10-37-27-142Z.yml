@@ -1,0 +1,28 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: Pensieve
+    - generic [ref=e6]:
+      - generic [ref=e7] [cursor=pointer]: Live
+      - generic [ref=e8]:
+        - button "Inbox" [ref=e9] [cursor=pointer]
+        - button "Channel feed" [ref=e10] [cursor=pointer]
+        - button "Chronicler" [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - generic [ref=e13] [cursor=pointer]: Knowledge
+      - generic [ref=e14]:
+        - button "Notes" [ref=e15] [cursor=pointer]
+        - button "Knowledge" [ref=e16] [cursor=pointer]
+        - button "Memories" [ref=e17] [cursor=pointer]
+        - button "Templates" [ref=e18] [cursor=pointer]
+        - button "Relationships" [ref=e19] [cursor=pointer]
+        - button "Graph" [ref=e20] [cursor=pointer]
+        - button "Embedding map" [ref=e21] [cursor=pointer]
+    - generic [ref=e23]: ○ connecting…
+  - main [ref=e24]:
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - heading "Inbox" [level=2] [ref=e28]
+          - generic [ref=e29]: Loading… · auto-promoted channel messages and programmatic notifications
+        - button "+ New notification" [ref=e30]
+      - generic [ref=e31]: No inbox items yet. Channel messages from Discord/Telegram/iMessage auto-promote here, or click "+ New notification" to push one programmatically.

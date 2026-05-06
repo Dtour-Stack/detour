@@ -116,11 +116,21 @@ function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: Chan
 	}
 
 	if (id === "imessage") {
-		// imessage uses local SQLite — "online" once the service has read chat.db.
-		// service.chatDbReady or similar; fall back to "loaded".
-		const ready = svc.chatDbReady ?? svc.ready ?? svc.started;
-		if (ready === true) return { status: "online", detail: "chat.db readable" };
-		return { status: "loaded", detail: "Send-only mode (Full Disk Access required for receive)" };
+		const getStatus = (svc as { getStatus?: () => unknown }).getStatus;
+		if (typeof getStatus === "function") {
+			const status = getStatus.call(svc);
+			if (status && typeof status === "object") {
+				const record = status as Record<string, unknown>;
+				if (record.chatDbAvailable === true) return { status: "online", detail: "chat.db readable; inbound polling ready" };
+				if (record.connected === true) {
+					const reason = typeof record.reason === "string" ? record.reason : "Full Disk Access required for receive";
+					return { status: "loaded", detail: `Send-only mode (${reason})` };
+				}
+				const reason = typeof record.reason === "string" ? record.reason : "service not connected";
+				return { status: "connecting", detail: reason };
+			}
+		}
+		return { status: "loaded", detail: "iMessage service loaded; status unavailable" };
 	}
 
 	return { status: "loaded" };
@@ -207,7 +217,7 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		label: "Discord",
 		description: "Connect a Discord bot. Required: DISCORD_API_TOKEN. Optional: DISCORD_APPLICATION_ID.",
 		requiredVaultKeys: ["DISCORD_API_TOKEN"],
-		optionalVaultKeys: ["DISCORD_APPLICATION_ID"],
+		optionalVaultKeys: ["DISCORD_APPLICATION_ID", "DISCORD_AUTO_REPLY", "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS"],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-discord",
 		loadPlugin: loadDiscord,
@@ -217,7 +227,7 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		label: "Telegram",
 		description: "Connect a Telegram bot. Required: TELEGRAM_BOT_TOKEN.",
 		requiredVaultKeys: ["TELEGRAM_BOT_TOKEN"],
-		optionalVaultKeys: [],
+		optionalVaultKeys: ["TELEGRAM_AUTO_REPLY"],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-telegram",
 		loadPlugin: loadTelegram,
@@ -259,6 +269,8 @@ export interface ChannelStatus {
 	pluginLoaded: boolean;
 	liveStatus: ChannelLiveStatus;
 	liveDetail?: string;
+	autoReply?: boolean;
+	respondOnlyToMentions?: boolean;
 }
 
 export interface ChannelsSnapshot {
@@ -280,6 +292,17 @@ export class ChannelsService {
 			if (!(await v.has(k))) missing.push(k);
 		}
 		return { ok: missing.length === 0, missing };
+	}
+
+	private boolSetting(runtime: IAgentRuntime | null, key: string): boolean | undefined {
+		const value = runtime?.getSetting(key);
+		if (value === true || value === false) return value;
+		if (typeof value === "string") {
+			const normalized = value.trim().toLowerCase();
+			if (["true", "1", "yes", "on"].includes(normalized)) return true;
+			if (["false", "0", "no", "off"].includes(normalized)) return false;
+		}
+		return undefined;
 	}
 
 	async snapshot(loadedPlugins: string[] = [], runtime: IAgentRuntime | null = null): Promise<ChannelsSnapshot> {
@@ -335,6 +358,19 @@ export class ChannelsService {
 				pluginLoaded,
 				liveStatus,
 				...(liveDetail ? { liveDetail } : {}),
+				...(def.id === "discord"
+					? {
+							...(this.boolSetting(runtime, "DISCORD_AUTO_REPLY") !== undefined
+								? { autoReply: this.boolSetting(runtime, "DISCORD_AUTO_REPLY") }
+								: {}),
+							...(this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS") !== undefined
+								? { respondOnlyToMentions: this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS") }
+								: {}),
+						}
+					: {}),
+				...(def.id === "telegram" && this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY") !== undefined
+					? { autoReply: this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY") }
+					: {}),
 			});
 		}
 		return { channels: out };

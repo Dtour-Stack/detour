@@ -16,7 +16,11 @@ export type AuditAction =
 	| "vault_list"
 	| "login_list"
 	| "login_reveal"
-	| "login_save";
+	| "login_save"
+	| "browser_open"
+	| "browser_inspect"
+	| "browser_script"
+	| "browser_fill_login";
 
 export interface AuditEvent {
 	readonly action: AuditAction;

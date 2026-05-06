@@ -13,20 +13,40 @@
  */
 
 import {
+	ContentType,
 	logger,
 	ModelType,
+	type Action,
+	type ActionResult,
 	type GenerateTextParams,
+	type Handler,
+	type HandlerCallback,
 	type IAgentRuntime,
 	type ImageDescriptionParams,
+	type ImageGenerationParams,
+	type ImageGenerationResult,
 	type ObjectGenerationParams,
 	type Plugin,
 } from "@elizaos/core";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	CodexResponsesClient,
 	type CreateResponseRequest,
 	type ResponsesInputItem,
 	type ResponsesContentItem,
 } from "./responses-client";
+
+type CodexImageGenerationParams = ImageGenerationParams & {
+	quality?: "low" | "medium" | "high" | "auto";
+	n?: number;
+};
+
+type CodexImageGenerationResult = ImageGenerationResult & {
+	revisedPrompt?: string;
+};
 
 function getSetting(runtime: IAgentRuntime, key: string, fallback?: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -49,6 +69,65 @@ function buildClient(runtime: IAgentRuntime): CodexResponsesClient {
 
 function pickModel(runtime: IAgentRuntime, key: string, fallback: string): string {
 	return getSetting(runtime, key, fallback) ?? fallback;
+}
+
+function paramsBag(options: Record<string, unknown> | undefined): Record<string, unknown> {
+	if (!options) return {};
+	const params = options.parameters;
+	if (params && typeof params === "object" && !Array.isArray(params)) return params as Record<string, unknown>;
+	return {};
+}
+
+function pickString(options: Record<string, unknown> | undefined, keys: readonly string[]): string | undefined {
+	if (!options) return undefined;
+	const params = paramsBag(options);
+	for (const key of keys) {
+		const value = params[key];
+		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	}
+	for (const key of keys) {
+		const value = options[key];
+		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	}
+	return undefined;
+}
+
+function normalizeImageSize(size: string | undefined): string {
+	if (!size) return "1024x1024";
+	const trimmed = size.trim().toLowerCase();
+	if (trimmed === "auto") return "1024x1024";
+	const match = trimmed.match(/^(\d{3,4})x(\d{3,4})$/);
+	if (!match) return trimmed;
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	return width * height < 1024 * 1024 ? "1024x1024" : trimmed;
+}
+
+function imageExtension(mimeSubtype: string): string {
+	const normalized = mimeSubtype.toLowerCase();
+	if (normalized === "jpeg") return "jpg";
+	const safe = normalized.replace(/[^a-z0-9]/g, "");
+	return safe.length > 0 ? safe : "png";
+}
+
+function materializeGeneratedImage(url: string): string {
+	const match = url.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
+	if (!match) return url;
+	const payload = match[2];
+	if (!payload) throw new Error("Image generation returned an empty image payload.");
+	const dir = mkdtempSync(join(tmpdir(), "detour-generated-image-"));
+	const filePath = join(dir, `${randomUUID()}.${imageExtension(match[1] ?? "png")}`);
+	writeFileSync(filePath, Buffer.from(payload, "base64"), { mode: 0o600 });
+	return filePath;
+}
+
+async function emit(callback: HandlerCallback | undefined, text: string): Promise<void> {
+	if (!callback) return;
+	await callback({ text, source: "codex-chatgpt" }, "GENERATE_IMAGE");
+}
+
+function fail(reason: string): ActionResult {
+	return { success: false, text: reason, error: reason };
 }
 
 function buildInput(params: GenerateTextParams): {
@@ -91,11 +170,11 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 		// required". Fall back to a minimal default so the call succeeds even
 		// when the caller (and the prompt's system message) didn't provide one.
 		instructions: instructions ?? "You are a helpful assistant.",
-		// Codex Responses API rejects `temperature` with HTTP 400 ("Unsupported
-		// parameter: temperature"). Eliza's reflection/fact-extractor evaluators
-		// pass temperature in their generateText params; we silently drop it
-		// here so those follow-up calls don't fail and crash the trajectory.
-		...(params.maxTokens !== undefined ? { max_output_tokens: params.maxTokens } : {}),
+		// Codex Responses API rejects BOTH `temperature` AND `max_output_tokens`
+		// with HTTP 400 ("Unsupported parameter: …"). Eliza's planner +
+		// evaluators pass both in their generateText params; we silently drop
+		// them here so every LLM call doesn't 400-fail (which causes
+		// trajectory.llmCallCount=0 and the agent to never reply / never act).
 	};
 
 	let collected = "";
@@ -114,9 +193,98 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 	return collected;
 }
 
+const generateImageHandler: Handler = async (runtime, message, _state, options, callback): Promise<ActionResult> => {
+	const opts = options as Record<string, unknown> | undefined;
+	const prompt =
+		pickString(opts, ["prompt", "description", "imagePrompt", "text"]) ??
+		(typeof message.content.text === "string" ? message.content.text.trim() : undefined);
+	if (!prompt) {
+		const text = "GENERATE_IMAGE requires a prompt.";
+		await emit(callback, text);
+		return fail(text);
+	}
+
+	try {
+		const size = pickString(opts, ["size", "dimensions"]);
+		const params: ImageGenerationParams = {
+			prompt,
+			size: normalizeImageSize(size),
+		};
+		const images = (await runtime.useModel(ModelType.IMAGE, params)) as CodexImageGenerationResult[];
+		const image = images[0];
+		if (!image?.url) {
+			const text = "Image generation returned no image.";
+			await emit(callback, text);
+			return fail(text);
+		}
+		const attachmentUrl = materializeGeneratedImage(image.url);
+		const text = "Generated image.";
+		if (callback) {
+			await callback(
+				{
+					text,
+					source: "codex-chatgpt",
+					actions: ["GENERATE_IMAGE"],
+					attachments: [
+						{
+							id: `generated-image-${randomUUID()}`,
+							url: attachmentUrl,
+							title: "Generated image",
+							source: "codex-chatgpt",
+							description: text,
+							contentType: ContentType.IMAGE,
+						},
+					],
+				},
+				"GENERATE_IMAGE",
+			);
+		}
+		return {
+			success: true,
+			text,
+			values: { generatedImage: true, imageUrl: attachmentUrl },
+			data: {
+				actionName: "GENERATE_IMAGE",
+				imageUrl: attachmentUrl,
+				...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
+			},
+		};
+	} catch (error) {
+		const reason = `Image generation failed: ${error instanceof Error ? error.message : String(error)}`;
+		await emit(callback, reason);
+		return fail(reason);
+	}
+};
+
+export const generateImageAction: Action = {
+	name: "GENERATE_IMAGE",
+	similes: ["CREATE_IMAGE", "MAKE_IMAGE", "DRAW_IMAGE", "GENERATE_PHOTO", "CREATE_PHOTO"],
+	description: "Generate an image from a text prompt and send it back as an image attachment.",
+	validate: async () => true,
+	handler: generateImageHandler,
+	suppressPostActionContinuation: true,
+	examples: [],
+	parameters: [
+		{
+			name: "prompt",
+			description: "A detailed prompt describing the image to generate.",
+			required: true,
+			schema: { type: "string" as const },
+		},
+		{
+			name: "size",
+			description: "Optional image size, such as 1024x1024.",
+			required: false,
+			schema: { type: "string" as const },
+		},
+	],
+	contexts: ["media", "general"],
+};
+
 export const codexChatGptPlugin: Plugin = {
 	name: "codex-chatgpt",
 	description: "OpenAI Codex via ChatGPT subscription OAuth (chatgpt.com/backend-api/codex/responses)",
+	actions: [generateImageAction],
 
 	models: {
 		// Text — all three size buckets route through Responses API; pick model
@@ -157,11 +325,13 @@ export const codexChatGptPlugin: Plugin = {
 		}) as never,
 
 		// Image generation — uses the Responses API's built-in image_generation tool.
-		// Returns base64-encoded PNG payloads.
+		// Returns base64-encoded PNG payloads. Codex requires stream:true here
+		// too — the image_generation_call output item arrives as a stream
+		// event we need to capture.
 		[ModelType.IMAGE]: async (
 			runtime: IAgentRuntime,
-			params: { prompt: string; n?: number; size?: string; quality?: "low" | "medium" | "high" | "auto" },
-		): Promise<Array<{ url: string; revisedPrompt?: string }>> => {
+			params: CodexImageGenerationParams,
+		): Promise<CodexImageGenerationResult[]> => {
 			const client = buildClient(runtime);
 			const model = pickModel(runtime, "CODEX_MODEL_IMAGE", "gpt-5.2");
 			const req: CreateResponseRequest = {
@@ -171,25 +341,35 @@ export const codexChatGptPlugin: Plugin = {
 					{
 						type: "image_generation",
 						quality: params.quality ?? "auto",
-						...(params.size ? { size: params.size } : {}),
+						size: normalizeImageSize(params.size),
 					},
 				],
 				instructions: "You are an image generation assistant. Generate an image matching the user's request.",
-				stream: false,
+				stream: true,
 				store: false,
 			};
-			const out = await client.create(req);
-			const outputs = (out.output as Array<Record<string, unknown>> | undefined) ?? [];
 			const images: Array<{ url: string; revisedPrompt?: string }> = [];
-			for (const item of outputs) {
-				if (item.type === "image_generation_call" && typeof item.result === "string") {
-					// Codex returns base64-encoded PNG. Wrap as data URL so it
-					// satisfies the ImageGenerationResult.url contract without
-					// requiring an upload step.
-					const url = `data:image/png;base64,${item.result as string}`;
-					const entry: { url: string; revisedPrompt?: string } = { url };
-					if (typeof item.revised_prompt === "string") entry.revisedPrompt = item.revised_prompt as string;
-					images.push(entry);
+			for await (const ev of client.stream(req)) {
+				// Image generation outputs come through as `response.completed`
+				// or `response.output_item.done` carrying the full output array.
+				const anyEv = ev as unknown as { type?: string; response?: { output?: Array<Record<string, unknown>> }; item?: Record<string, unknown> };
+				const items: Array<Record<string, unknown>> = [];
+				if (anyEv.response?.output) items.push(...anyEv.response.output);
+				if (anyEv.item) items.push(anyEv.item);
+				for (const item of items) {
+					if (item.type === "image_generation_call" && typeof item.result === "string") {
+						const url = `data:image/png;base64,${item.result as string}`;
+						const entry: { url: string; revisedPrompt?: string } = { url };
+						if (typeof item.revised_prompt === "string") entry.revisedPrompt = item.revised_prompt as string;
+						images.push(entry);
+					}
+				}
+				if (anyEv.type === "response.failed" || anyEv.type === "response.error") {
+					const errMessage =
+						((anyEv.response as { error?: { message?: string } } | undefined)?.error?.message) ??
+						((ev as { error?: { message?: string } }).error?.message) ??
+						"Codex Responses API stream failed";
+					throw new Error(errMessage);
 				}
 			}
 			if (images.length === 0) {
@@ -199,7 +379,9 @@ export const codexChatGptPlugin: Plugin = {
 		},
 
 		// Image description / vision — Codex models accept image inputs via
-		// input_image content blocks. Caller passes a URL or base64 data URI.
+		// input_image content blocks. Codex Responses API REQUIRES stream:true
+		// (returns "Stream must be set to true" 400 for non-streaming), so we
+		// accumulate text-delta events and parse JSON at the end.
 		[ModelType.IMAGE_DESCRIPTION]: async (
 			runtime: IAgentRuntime,
 			params: ImageDescriptionParams | string,
@@ -224,17 +406,27 @@ export const codexChatGptPlugin: Plugin = {
 					},
 				],
 				instructions: "You are a helpful vision assistant. Analyze the image and respond as requested.",
-				stream: false,
+				stream: true,
 				store: false,
 			};
-			const out = await client.create(req);
-			const text = extractOutputText(out);
+			let collected = "";
+			for await (const ev of client.stream(req)) {
+				if (ev.type === "response.output_text.delta") {
+					collected += (ev as { delta?: string }).delta ?? "";
+				} else if (ev.type === "response.failed" || ev.type === "response.error") {
+					const errMessage =
+						(ev as { response?: { error?: { message?: string } }; error?: { message?: string } }).response?.error?.message ??
+						(ev as { error?: { message?: string } }).error?.message ??
+						"Codex Responses API stream failed";
+					throw new Error(errMessage);
+				}
+			}
 			try {
-				const fenced = text.match(/```(?:json)?\s*([\s\S]+?)```/);
-				const parsed = JSON.parse(fenced ? fenced[1]! : text) as { title?: string; description?: string };
-				return { title: parsed.title ?? "Image", description: parsed.description ?? text };
+				const fenced = collected.match(/```(?:json)?\s*([\s\S]+?)```/);
+				const parsed = JSON.parse(fenced ? fenced[1]! : collected) as { title?: string; description?: string };
+				return { title: parsed.title ?? "Image", description: parsed.description ?? collected };
 			} catch {
-				return { title: "Image", description: text };
+				return { title: "Image", description: collected };
 			}
 		},
 

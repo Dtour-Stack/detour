@@ -8,9 +8,10 @@
  * the agent's permission state survives restarts without env vars.
  */
 
-import type { AgentConfig, ChroniclerConfig, ModelConfig, WindowConfig } from "@detour/shared";
+import type { AgentCharacterConfig, AgentCharacterMessageExample, AgentConfig, ChroniclerConfig, ModelConfig, WindowConfig } from "@detour/shared";
 import { setPermissionConfig, type AgentVaultMode } from "@detour/plugin-vault-tools";
 import type { VaultService } from "./vault";
+import { DEFAULT_AGENT_CHARACTER } from "./agent-character";
 
 const DEFAULT_AGENT: AgentConfig = {
 	deny: false,
@@ -23,7 +24,12 @@ const DEFAULT_MODELS: ModelConfig = {
 	codexLarge: "gpt-5.2",
 	codexSmall: "gpt-5.2",
 	codexImage: "gpt-5.2",
-	providerPriority: ["anthropic-subscription", "openai-codex", "anthropic-api", "openai-api"],
+	openRouterTextLarge: "openrouter/free",
+	openRouterTextSmall: "openrouter/free",
+	openRouterEmbedding: "openai/text-embedding-3-small",
+	openRouterImage: "google/gemini-2.5-flash-image",
+	openRouterVision: "openrouter/free",
+	providerPriority: ["anthropic-subscription", "openai-codex", "openrouter-api", "anthropic-api", "openai-api"],
 };
 
 const DEFAULT_WINDOW: WindowConfig = {
@@ -41,6 +47,7 @@ const DEFAULT_CHRONICLER: ChroniclerConfig = {
 };
 
 const KEY_AGENT = "config.agent";
+const KEY_CHARACTER = "config.character";
 const KEY_MODELS = "config.models";
 const KEY_WINDOW = "config.window";
 const KEY_CHRONICLER = "config.chronicler";
@@ -89,6 +96,20 @@ export class ConfigService {
 		});
 	}
 
+	// ── Agent character ────────────────────────────────────────────────
+
+	async getCharacter(): Promise<AgentCharacterConfig> {
+		const raw = await this.readJson(KEY_CHARACTER);
+		if (!raw) return structuredClone(DEFAULT_AGENT_CHARACTER);
+		return this.sanitizeCharacter(raw);
+	}
+
+	async setCharacter(next: AgentCharacterConfig): Promise<AgentCharacterConfig> {
+		const sanitized = this.sanitizeCharacter(next as unknown as Record<string, unknown>);
+		await this.writeJson(KEY_CHARACTER, sanitized);
+		return sanitized;
+	}
+
 	// ── Models (codex overrides + provider priority) ───────────────────
 
 	async getModels(): Promise<ModelConfig> {
@@ -98,8 +119,13 @@ export class ConfigService {
 			codexLarge: typeof raw.codexLarge === "string" && raw.codexLarge ? raw.codexLarge : DEFAULT_MODELS.codexLarge,
 			codexSmall: typeof raw.codexSmall === "string" && raw.codexSmall ? raw.codexSmall : DEFAULT_MODELS.codexSmall,
 			codexImage: typeof raw.codexImage === "string" && raw.codexImage ? raw.codexImage : DEFAULT_MODELS.codexImage,
+			openRouterTextLarge: typeof raw.openRouterTextLarge === "string" && raw.openRouterTextLarge ? raw.openRouterTextLarge : DEFAULT_MODELS.openRouterTextLarge,
+			openRouterTextSmall: typeof raw.openRouterTextSmall === "string" && raw.openRouterTextSmall ? raw.openRouterTextSmall : DEFAULT_MODELS.openRouterTextSmall,
+			openRouterEmbedding: typeof raw.openRouterEmbedding === "string" && raw.openRouterEmbedding ? raw.openRouterEmbedding : DEFAULT_MODELS.openRouterEmbedding,
+			openRouterImage: typeof raw.openRouterImage === "string" && raw.openRouterImage ? raw.openRouterImage : DEFAULT_MODELS.openRouterImage,
+			openRouterVision: typeof raw.openRouterVision === "string" && raw.openRouterVision ? raw.openRouterVision : DEFAULT_MODELS.openRouterVision,
 			providerPriority: Array.isArray(raw.providerPriority) && raw.providerPriority.length > 0
-				? (raw.providerPriority as ModelConfig["providerPriority"])
+				? this.cleanProviderPriority(raw.providerPriority)
 				: DEFAULT_MODELS.providerPriority,
 		};
 	}
@@ -110,10 +136,14 @@ export class ConfigService {
 	}
 
 	private applyModels(cfg: ModelConfig): void {
-		// Plugin-codex-chatgpt reads these via getSetting (which falls through to env).
 		process.env.CODEX_MODEL_LARGE = cfg.codexLarge;
 		process.env.CODEX_MODEL_SMALL = cfg.codexSmall;
 		process.env.CODEX_MODEL_IMAGE = cfg.codexImage;
+		process.env.OPENROUTER_MODEL_TEXT_LARGE = cfg.openRouterTextLarge;
+		process.env.OPENROUTER_MODEL_TEXT_SMALL = cfg.openRouterTextSmall;
+		process.env.OPENROUTER_MODEL_EMBEDDING = cfg.openRouterEmbedding;
+		process.env.OPENROUTER_MODEL_IMAGE = cfg.openRouterImage;
+		process.env.OPENROUTER_MODEL_VISION = cfg.openRouterVision;
 	}
 
 	// ── Window ─────────────────────────────────────────────────────────
@@ -156,6 +186,23 @@ export class ConfigService {
 		return value === "off" || value === "read" || value === "read-write" ? value : "read";
 	}
 
+	private cleanProviderPriority(raw: unknown[]): ModelConfig["providerPriority"] {
+		const allowed = new Set<ModelConfig["providerPriority"][number]>([
+			"anthropic-subscription",
+			"openai-codex",
+			"openrouter-api",
+			"anthropic-api",
+			"openai-api",
+		]);
+		const values = raw.filter((value): value is ModelConfig["providerPriority"][number] =>
+			typeof value === "string" && allowed.has(value as ModelConfig["providerPriority"][number]),
+		);
+		const merged = [...values, ...DEFAULT_MODELS.providerPriority].filter((value, index, array) =>
+			array.indexOf(value) === index,
+		);
+		return merged.length > 0 ? merged : DEFAULT_MODELS.providerPriority;
+	}
+
 	private sanitizeChronicler(raw: Record<string, unknown>): ChroniclerConfig {
 		const intervalMs = typeof raw.intervalMs === "number" && Number.isFinite(raw.intervalMs)
 			? Math.max(15_000, Math.min(600_000, Math.round(raw.intervalMs)))
@@ -169,6 +216,72 @@ export class ConfigService {
 			includeWindowTitles: typeof raw.includeWindowTitles === "boolean" ? raw.includeWindowTitles : DEFAULT_CHRONICLER.includeWindowTitles,
 			maxWindowsPerScreen,
 		};
+	}
+
+	private sanitizeCharacter(raw: Record<string, unknown>): AgentCharacterConfig {
+		return {
+			name: this.cleanString(raw.name, DEFAULT_AGENT_CHARACTER.name),
+			username: this.cleanString(raw.username, DEFAULT_AGENT_CHARACTER.username),
+			system: this.cleanString(raw.system, DEFAULT_AGENT_CHARACTER.system),
+			bio: this.cleanStringArray(raw.bio, DEFAULT_AGENT_CHARACTER.bio),
+			lore: this.cleanStringArray(raw.lore, DEFAULT_AGENT_CHARACTER.lore),
+			adjectives: this.cleanStringArray(raw.adjectives, DEFAULT_AGENT_CHARACTER.adjectives),
+			topics: this.cleanStringArray(raw.topics, DEFAULT_AGENT_CHARACTER.topics),
+			style: this.cleanStyle(raw.style),
+			postExamples: this.cleanStringArray(raw.postExamples, DEFAULT_AGENT_CHARACTER.postExamples),
+			messageExamples: this.cleanMessageExamples(raw.messageExamples),
+		};
+	}
+
+	private cleanStyle(raw: unknown): AgentCharacterConfig["style"] {
+		const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+		return {
+			all: this.cleanStringArray(obj.all, DEFAULT_AGENT_CHARACTER.style.all),
+			chat: this.cleanStringArray(obj.chat, DEFAULT_AGENT_CHARACTER.style.chat),
+			post: this.cleanStringArray(obj.post, DEFAULT_AGENT_CHARACTER.style.post),
+		};
+	}
+
+	private cleanMessageExamples(raw: unknown): AgentCharacterMessageExample[][] {
+		if (!Array.isArray(raw)) return DEFAULT_AGENT_CHARACTER.messageExamples;
+		const groups = raw.flatMap((group): AgentCharacterMessageExample[][] => {
+			if (!Array.isArray(group)) return [];
+			const messages = group.flatMap((item): AgentCharacterMessageExample[] => {
+				if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+				const obj = item as Record<string, unknown>;
+				const content = obj.content && typeof obj.content === "object" && !Array.isArray(obj.content)
+					? obj.content as Record<string, unknown>
+					: {};
+				const text = this.cleanString(content.text, "");
+				if (!text) return [];
+				return [{
+					name: this.cleanString(obj.name, "{{user}}"),
+					content: {
+						text,
+						actions: this.cleanOptionalStringArray(content.actions),
+						providers: this.cleanOptionalStringArray(content.providers),
+					},
+				}];
+			});
+			return messages.length > 0 ? [messages] : [];
+		});
+		return groups.length > 0 ? groups : DEFAULT_AGENT_CHARACTER.messageExamples;
+	}
+
+	private cleanString(raw: unknown, fallback: string): string {
+		return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : fallback;
+	}
+
+	private cleanStringArray(raw: unknown, fallback: string[]): string[] {
+		if (!Array.isArray(raw)) return [...fallback];
+		const values = raw.map((value) => typeof value === "string" ? value.trim() : "").filter((value) => value.length > 0);
+		return values.length > 0 ? values : [...fallback];
+	}
+
+	private cleanOptionalStringArray(raw: unknown): string[] | undefined {
+		if (!Array.isArray(raw)) return undefined;
+		const values = raw.map((value) => typeof value === "string" ? value.trim() : "").filter((value) => value.length > 0);
+		return values.length > 0 ? values : undefined;
 	}
 
 	private async readJson(key: string): Promise<Record<string, unknown> | null> {

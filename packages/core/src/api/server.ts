@@ -11,11 +11,15 @@ import type { ConfigService } from "../config-service";
 import type { ActivityService } from "../activity";
 import type { ChannelsService } from "../channels";
 import type { ChannelGatewayService } from "../channels/gateway";
+import type { CronService } from "../cron-service";
+import type { OwnerBindService, OwnerConnector } from "../owner-bind";
+import { newTraceId, traceScope } from "../trace";
 import type { InboxService, InboxKind, InboxStatus } from "../inbox";
 import type { LlamaServerService } from "../llama/server-service";
 import type { PensieveService } from "../pensieve";
 import { pensieveAudit } from "../pensieve";
 import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
+import { fetchOpenRouterModels } from "../openrouter-models";
 import {
 	BACKEND_INSTALL_SPECS,
 	buildInstallCommand,
@@ -41,7 +45,11 @@ import type {
 	SetProviderKeyBody,
 	SetActiveProviderBody,
 	SetEnabledBackendsBody,
+	ChroniclerConfig,
 	ProviderId,
+	BrowserCommand,
+	BrowserCommandInput,
+	BrowserCommandResult,
 } from "@detour/shared";
 
 const VERSION = "0.0.1";
@@ -49,6 +57,19 @@ const VERSION = "0.0.1";
 type WsData = { id: string };
 
 type Listener = (msg: WsServerMessage) => void;
+
+const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
+const MAX_BROWSER_COMMANDS = 100;
+const INBOX_STATUSES = new Set(["pending", "acting", "acknowledged", "acted", "dismissed"]);
+
+function parseInboxStatus(value: unknown): InboxStatus | null {
+	return typeof value === "string" && INBOX_STATUSES.has(value) ? value as InboxStatus : null;
+}
+
+type BrowserControlGlobal = {
+	enqueue(command: BrowserCommandInput): BrowserCommand;
+	enqueueAndWait(command: BrowserCommandInput, timeoutMs?: number): Promise<BrowserCommandResult>;
+};
 
 export type WindowCommand =
 	| { kind: "hide" }
@@ -64,6 +85,12 @@ export class ApiServer {
 	private lockFile = join(homedir(), ".detour", "runtime.json");
 	private windowController: WindowController | null = null;
 	private channelReloadTimer: ReturnType<typeof setTimeout> | null = null;
+	private browserCommands: BrowserCommand[] = [];
+	private browserResults = new Map<string, BrowserCommandResult>();
+	private browserWaiters = new Map<string, {
+		resolve: (result: BrowserCommandResult) => void;
+		timer: ReturnType<typeof setTimeout>;
+	}>();
 
 	/**
 	 * Debounce runtime reloads triggered by channel credential changes.
@@ -83,6 +110,124 @@ export class ApiServer {
 		}, 1500);
 	}
 
+	private installBrowserControlGlobal(): void {
+		(globalThis as Record<symbol, BrowserControlGlobal>)[BROWSER_CONTROL_GLOBAL] = {
+			enqueue: (command) => this.enqueueBrowserCommand(command),
+			enqueueAndWait: (command, timeoutMs) => this.enqueueBrowserCommandAndWait(command, timeoutMs),
+		};
+	}
+
+	private removeBrowserControlGlobal(): void {
+		const g = globalThis as Record<symbol, BrowserControlGlobal | undefined>;
+		if (g[BROWSER_CONTROL_GLOBAL]?.enqueue) {
+			delete g[BROWSER_CONTROL_GLOBAL];
+		}
+	}
+
+	private enqueueBrowserCommand(input: BrowserCommandInput): BrowserCommand {
+		const command = {
+			...input,
+			id: crypto.randomUUID(),
+			time: Date.now(),
+		} as BrowserCommand;
+		this.browserCommands.push(command);
+		if (this.browserCommands.length > MAX_BROWSER_COMMANDS) {
+			this.browserCommands.splice(0, this.browserCommands.length - MAX_BROWSER_COMMANDS);
+		}
+		this.broadcast({ kind: "ui:open-browser" });
+		this.broadcast({ kind: "browser:command", command });
+		return command;
+	}
+
+	private enqueueBrowserCommandAndWait(input: BrowserCommandInput, timeoutMs = 30_000): Promise<BrowserCommandResult> {
+		const command = this.enqueueBrowserCommand(input);
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				this.browserWaiters.delete(command.id);
+				resolve({
+					ok: false,
+					error: `Browser command timed out after ${timeoutMs}ms`,
+					time: Date.now(),
+				});
+			}, timeoutMs);
+			this.browserWaiters.set(command.id, { resolve, timer });
+		});
+	}
+
+	private finishBrowserCommand(commandId: string, result: Omit<BrowserCommandResult, "time"> & { time?: number }): BrowserCommandResult {
+		const complete: BrowserCommandResult = {
+			...result,
+			time: typeof result.time === "number" ? result.time : Date.now(),
+		};
+		this.browserResults.set(commandId, complete);
+		if (this.browserResults.size > MAX_BROWSER_COMMANDS) {
+			const first = this.browserResults.keys().next().value;
+			if (typeof first === "string") this.browserResults.delete(first);
+		}
+		const waiter = this.browserWaiters.get(commandId);
+		if (waiter) {
+			clearTimeout(waiter.timer);
+			this.browserWaiters.delete(commandId);
+			waiter.resolve(complete);
+		}
+		return complete;
+	}
+
+	private parseBrowserCommand(body: unknown): BrowserCommandInput | null {
+		if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+		const bag = body as Record<string, unknown>;
+			if (bag.kind === "open") {
+			const url = typeof bag.url === "string" ? bag.url.trim() : "";
+			if (!url || url.length > 2048) return null;
+			return {
+				kind: "open",
+				url,
+				...(typeof bag.newTab === "boolean" ? { newTab: bag.newTab } : {}),
+				...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
+				source: "api",
+			};
+			}
+			if (bag.kind === "inspect") {
+				return {
+					kind: "inspect",
+					...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
+					...(typeof bag.timeoutMs === "number" ? { timeoutMs: bag.timeoutMs } : {}),
+					source: "api",
+				};
+			}
+			if (bag.kind === "script") {
+				const script = typeof bag.script === "string" ? bag.script.trim() : "";
+				if (!script || script.length > 100_000) return null;
+				return {
+					kind: "script",
+					script,
+					...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
+					...(typeof bag.timeoutMs === "number" ? { timeoutMs: bag.timeoutMs } : {}),
+					source: "api",
+				};
+			}
+			if (bag.kind === "fill-login") {
+			const source = bag.source;
+			const identifier = typeof bag.identifier === "string" ? bag.identifier.trim() : "";
+			if ((source !== "in-house" && source !== "1password" && source !== "bitwarden") || !identifier) {
+				return null;
+			}
+			const targetUrl = typeof bag.targetUrl === "string" && bag.targetUrl.trim().length > 0
+				? bag.targetUrl.trim()
+				: undefined;
+			return {
+				kind: "fill-login",
+				source,
+				identifier,
+					...(targetUrl ? { targetUrl } : {}),
+					...(typeof bag.newTab === "boolean" ? { newTab: bag.newTab } : {}),
+					...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
+					...(typeof bag.timeoutMs === "number" ? { timeoutMs: bag.timeoutMs } : {}),
+				};
+			}
+		return null;
+	}
+
 	setWindowController(fn: WindowController | null): void {
 		this.windowController = fn;
 	}
@@ -99,9 +244,12 @@ export class ApiServer {
 		private readonly gateway: ChannelGatewayService,
 		private readonly inbox: InboxService,
 		private readonly llama: LlamaServerService,
+		private readonly cron: CronService,
+		private readonly ownerBind: OwnerBindService,
 	) {}
 
 	async start(preferredPort = 2138): Promise<{ port: number }> {
+		this.installBrowserControlGlobal();
 		// Try preferred port first; fall back to ephemeral if taken
 		try {
 			return await this.tryStart(preferredPort);
@@ -143,23 +291,28 @@ export class ApiServer {
 					}
 					if (req.method === "GET" && path === "/api/providers") {
 						const list = await this.vault.listProviders();
-						// Trigger build if no runtime exists so OAuth-derived providers
-						// surface as active without waiting for the first chat message.
 						await this.runtime.getOrBuild().catch(() => {});
 						const runtimeProvider = this.runtime.getCurrentProvider();
 						const enriched = list.map((p) => ({
 							...p,
-							active: p.active || runtimeProvider === p.id,
+							active: runtimeProvider === p.id,
 						}));
 						return json(enriched);
+					}
+					if (req.method === "GET" && path === "/api/providers/openrouter/models") {
+						const manager = await this.vault.manager();
+						const apiKey = await manager.has("OPENROUTER_API_KEY")
+							? await manager.get("OPENROUTER_API_KEY")
+							: undefined;
+						return json(await fetchOpenRouterModels({ apiKey }));
 					}
 					const setKey = path.match(/^\/api\/providers\/([^/]+)\/key$/);
 					if (req.method === "PUT" && setKey) {
 						const id = setKey[1] as ProviderId;
 						const body = (await req.json()) as SetProviderKeyBody;
 						await this.vault.setProviderKey(id, body.key);
-						const wasFirst = this.runtime.getCurrentProvider() === null;
-						if (wasFirst) await this.runtime.rebuild();
+						const current = this.runtime.getCurrentProvider();
+						if (!current || current === id) await this.runtime.rebuild();
 						this.broadcast({
 							kind: "provider:changed",
 							activeProvider: await this.vault.getActiveProvider(),
@@ -247,6 +400,36 @@ export class ApiServer {
 						return ok();
 					}
 
+					if (req.method === "GET" && path === "/api/browser/commands") {
+						const after = url.searchParams.get("after") ?? "";
+						const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : 0;
+						const afterIndex = after
+							? this.browserCommands.findIndex((command) => command.id === after)
+							: -1;
+						const commands = afterIndex >= 0
+							? this.browserCommands.slice(afterIndex + 1)
+							: this.browserCommands.filter((command) => !since || command.time >= since);
+						return json({ commands: commands.filter((command) => !this.browserResults.has(command.id)) });
+					}
+					if (req.method === "POST" && path === "/api/browser/commands") {
+						const input = this.parseBrowserCommand(await req.json());
+						if (!input) return error("invalid browser command", 400);
+						return json({ command: this.enqueueBrowserCommand(input) });
+					}
+					const browserResultMatch = path.match(/^\/api\/browser\/commands\/([^/]+)\/result$/);
+					if (req.method === "POST" && browserResultMatch) {
+						const id = decodeURIComponent(browserResultMatch[1] ?? "");
+						const body = await req.json() as Record<string, unknown>;
+						const okResult = body.ok === true;
+						const result = this.finishBrowserCommand(id, {
+							ok: okResult,
+							...(body.result !== undefined ? { result: body.result } : {}),
+							...(typeof body.error === "string" ? { error: body.error } : {}),
+							...(typeof body.text === "string" ? { text: body.text } : {}),
+						});
+						return json({ result });
+					}
+
 					// --- window control (chat popup) ---
 					if (req.method === "POST" && path === "/api/window/hide") {
 						this.windowController?.({ kind: "hide" });
@@ -291,6 +474,15 @@ export class ApiServer {
 						await this.config.setAgent(body);
 						return ok();
 					}
+					if (req.method === "GET" && path === "/api/config/character") {
+						return json(await this.config.getCharacter());
+					}
+					if (req.method === "PUT" && path === "/api/config/character") {
+						const body = (await req.json()) as Parameters<ConfigService["setCharacter"]>[0];
+						await this.config.setCharacter(body);
+						await this.runtime.rebuild().catch(() => {});
+						return ok();
+					}
 					if (req.method === "GET" && path === "/api/config/models") {
 						return json(await this.config.getModels());
 					}
@@ -322,6 +514,17 @@ export class ApiServer {
 						const v = await this.vault.vault();
 						if (typeof body.theme === "string") await v.set("ui.theme", body.theme);
 						if (typeof body.accent === "string") await v.set("ui.accent", body.accent);
+						// Broadcast so other open windows (Pensieve, Activity, Channels)
+						// can re-apply the new theme/accent live without a reload.
+						const theme = ((await v.has("ui.theme")) ? await v.get("ui.theme") : "system") as
+							| "system"
+							| "light"
+							| "dark";
+						const accent = (await v.has("ui.accent")) ? await v.get("ui.accent") : "#0a84ff";
+						this.broadcast({
+							kind: "ui:preferences-changed",
+							preferences: { theme, accent },
+						});
 						return ok();
 					}
 
@@ -545,6 +748,73 @@ export class ApiServer {
 					}
 					if (req.method === "GET" && path === "/api/pensieve/embedding-map") {
 						return json(await this.pensieve.embeddingMap.snapshot());
+					}
+					if (req.method === "GET" && path === "/api/pensieve/chronicler/status") {
+						return json(this.pensieve.chronicler.status());
+					}
+					if (req.method === "GET" && path === "/api/pensieve/chronicler/config") {
+						return json(this.pensieve.chronicler.getConfig());
+					}
+					if (req.method === "PUT" && path === "/api/pensieve/chronicler/config") {
+						const raw = (await req.json()) as Partial<ChroniclerConfig> | null;
+						if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+							return error("invalid chronicler config", 400);
+						}
+						const body = raw;
+						if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+							return error("enabled must be boolean", 400);
+						}
+						if (body.includeWindowTitles !== undefined && typeof body.includeWindowTitles !== "boolean") {
+							return error("includeWindowTitles must be boolean", 400);
+						}
+						if (body.intervalMs !== undefined && typeof body.intervalMs !== "number") {
+							return error("intervalMs must be number", 400);
+						}
+						if (body.maxWindowsPerScreen !== undefined && typeof body.maxWindowsPerScreen !== "number") {
+							return error("maxWindowsPerScreen must be number", 400);
+						}
+						const current = this.pensieve.chronicler.getConfig();
+						const next = await this.pensieve.chronicler.configure({
+							enabled: body.enabled ?? current.enabled,
+							intervalMs: body.intervalMs ?? current.intervalMs,
+							includeWindowTitles: body.includeWindowTitles ?? current.includeWindowTitles,
+							maxWindowsPerScreen: body.maxWindowsPerScreen ?? current.maxWindowsPerScreen,
+						});
+						pensieveAudit({
+							action: "chronicler.configure",
+							success: true,
+							target: next.enabled ? "enabled" : "disabled",
+							caller: "ui-pensieve",
+							ts: Date.now(),
+						});
+						return json(next);
+					}
+					if (req.method === "POST" && path === "/api/pensieve/chronicler/sample") {
+						try {
+							const observation = await this.pensieve.chronicler.sampleNow();
+							pensieveAudit({
+								action: "chronicler.sample",
+								target: observation.id,
+								success: true,
+								caller: "ui-pensieve",
+								ts: Date.now(),
+							});
+							return json(observation);
+						} catch (err) {
+							const msg = err instanceof Error ? err.message : String(err);
+							pensieveAudit({
+								action: "chronicler.sample",
+								success: false,
+								error: msg,
+								caller: "ui-pensieve",
+								ts: Date.now(),
+							});
+							return error(msg, 400);
+						}
+					}
+					if (req.method === "GET" && path === "/api/pensieve/chronicler/recent") {
+						const limit = Number(url.searchParams.get("limit") ?? 20);
+						return json(this.pensieve.chronicler.recent(limit));
 					}
 					if (req.method === "POST" && path === "/api/pensieve/knowledge/ingest") {
 						const body = (await req.json()) as {
@@ -987,6 +1257,44 @@ export class ApiServer {
 						return json(this.llama.status());
 					}
 
+					// --- Debug: probe text-model pipeline end-to-end ---
+					if (req.method === "POST" && path === "/api/debug/text-model") {
+						const body = (await req.json().catch(() => ({}))) as { type?: string; prompt?: string };
+						const modelType = body.type ?? "TEXT_LARGE";
+						const prompt = body.prompt ?? "Reply with the single word: pong";
+						const live = this.runtime.peek();
+						if (!live) return error("runtime not built", 503);
+						const r = live as unknown as {
+							useModel?: (type: string, params: unknown) => Promise<unknown>;
+							getModel?: (type: string) => unknown;
+							models?: Map<string, unknown[]>;
+						};
+						const handlers = r.models?.get?.(modelType);
+						const handlerCount = Array.isArray(handlers) ? handlers.length : (handlers ? 1 : 0);
+						const hasModel = typeof r.getModel === "function" && r.getModel(modelType) !== undefined;
+						let result: unknown = null;
+						let err: string | null = null;
+						const t0 = Date.now();
+						try {
+							if (typeof r.useModel === "function") {
+								result = await r.useModel(modelType, { prompt, maxTokens: 50, temperature: 0 });
+							} else {
+								err = "runtime.useModel is not a function";
+							}
+						} catch (e) {
+							err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+						}
+						const latency = Date.now() - t0;
+						return json({
+							modelType,
+							handlerCount,
+							hasModel,
+							latencyMs: latency,
+							error: err,
+							result: typeof result === "string" ? result.slice(0, 500) : result,
+						});
+					}
+
 					// --- Debug: probe embedding pipeline end-to-end ---
 					if (req.method === "POST" && path === "/api/debug/embedding") {
 						const body = (await req.json().catch(() => ({}))) as { text?: string; storeAs?: string };
@@ -1084,10 +1392,97 @@ export class ApiServer {
 					if (req.method === "PATCH" && inboxStatusUpdate) {
 						const id = decodeURIComponent(inboxStatusUpdate[1] ?? "");
 						const body = (await req.json()) as { status?: InboxStatus };
-						if (!body.status) return error("status required", 400);
-						const updated = this.inbox.updateStatus(id, body.status);
+						const status = parseInboxStatus(body.status);
+						if (!status) return error("valid status required", 400);
+						const updated = this.inbox.updateStatus(id, status);
 						if (!updated) return error("inbox item not found", 404);
 						return json({ ok: true, item: updated });
+					}
+					const inboxAct = path.match(/^\/api\/inbox\/([^/]+)\/act$/);
+					if (req.method === "POST" && inboxAct) {
+						const id = decodeURIComponent(inboxAct[1] ?? "");
+						const updated = await this.inbox.act(id);
+						if (!updated) return error("inbox item not found", 404);
+						return json({ ok: true, item: updated });
+					}
+
+					// --- Cron / scheduled prompts ---
+					if (req.method === "GET" && path === "/api/cron") {
+						return json({ jobs: this.cron.listJobs() });
+					}
+					if (req.method === "POST" && path === "/api/cron") {
+						const body = (await req.json()) as {
+							schedule?: string;
+							prompt?: string;
+							name?: string;
+							enabled?: boolean;
+						};
+						if (!body.schedule) return error("schedule required", 400);
+						if (!body.prompt) return error("prompt required", 400);
+						try {
+							const job = await this.cron.createJob({
+								schedule: body.schedule,
+								prompt: body.prompt,
+								...(body.name ? { name: body.name } : {}),
+								...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+								createdBy: "ui",
+							});
+							return json({ ok: true, job });
+						} catch (err) {
+							return error(err instanceof Error ? err.message : String(err), 400);
+						}
+					}
+					// --- Owner-bind (eliza /eliza_pair flow) ---
+					if (req.method === "POST" && path === "/api/owner-bind/code") {
+						const body = (await req.json()) as { connector?: string };
+						const connector = body.connector;
+						if (connector !== "telegram" && connector !== "discord" && connector !== "wechat" && connector !== "matrix") {
+							return error("connector must be telegram | discord | wechat | matrix", 400);
+						}
+						const issued = this.ownerBind.generateCode(connector);
+						return json({ ok: true, ...issued, connector });
+					}
+					const ownerStatus = path.match(/^\/api\/owner-bind\/(telegram|discord|wechat|matrix)$/);
+					if (ownerStatus) {
+						const connector = (ownerStatus[1] ?? "") as OwnerConnector;
+						if (req.method === "GET") {
+							const owner = await this.ownerBind.getOwner(connector);
+							return json({ connector, bound: !!owner, owner });
+						}
+						if (req.method === "DELETE") {
+							await this.ownerBind.unbind(connector);
+							return json({ ok: true });
+						}
+					}
+
+					const cronById = path.match(/^\/api\/cron\/([^/]+)$/);
+					if (cronById) {
+						const id = decodeURIComponent(cronById[1] ?? "");
+						if (req.method === "GET") {
+							const job = this.cron.getJob(id);
+							if (!job) return error("not found", 404);
+							return json({ job });
+						}
+						if (req.method === "PATCH") {
+							const body = (await req.json()) as {
+								schedule?: string;
+								prompt?: string;
+								name?: string;
+								enabled?: boolean;
+							};
+							try {
+								const job = await this.cron.updateJob(id, body);
+								if (!job) return error("not found", 404);
+								return json({ ok: true, job });
+							} catch (err) {
+								return error(err instanceof Error ? err.message : String(err), 400);
+							}
+						}
+						if (req.method === "DELETE") {
+							const removed = await this.cron.deleteJob(id);
+							if (!removed) return error("not found", 404);
+							return json({ ok: true });
+						}
 					}
 
 					// --- Activity DB inspector (read-only) ---
@@ -1123,7 +1518,7 @@ export class ApiServer {
 
 					// --- Activity autonomy ---
 					if (req.method === "GET" && path === "/api/activity/autonomy") {
-						return json(this.activity.autonomy.snapshot());
+						return json(await this.activity.autonomy.snapshot());
 					}
 					if (req.method === "POST" && path === "/api/activity/autonomy/enable") {
 						const success = await this.activity.autonomy.setEnabled(true);
@@ -1319,17 +1714,49 @@ export class ApiServer {
 						this.send(ws, { kind: "pong" });
 						return;
 					}
+					if (msg.kind === "log:webview") {
+						this.activity.logs.captureWebviewLog({
+							level: msg.level,
+							msg: msg.msg,
+							...(msg.source ? { source: msg.source } : {}),
+							...(msg.traceId ? { traceId: msg.traceId } : {}),
+							...(msg.extras ? { extras: msg.extras } : {}),
+						});
+						return;
+					}
 					if (msg.kind === "chat:send") {
 						const { convId, text } = msg;
-						try {
-							await this.runtime.sendMessage(text, (delta) =>
-								this.broadcast({ kind: "chat:delta", convId, delta }),
-							);
-							this.broadcast({ kind: "chat:complete", convId });
-						} catch (err) {
-							const message = err instanceof Error ? err.message : String(err);
-							this.broadcast({ kind: "chat:error", convId, message });
-						}
+						// One trace id per chat send. Stamps every log line emitted
+						// during the eliza pipeline (via AsyncLocalStorage) and
+						// every chat:* WS message back to the webview, so the
+						// React side can correlate its own console output with
+						// server-side logs for the same turn.
+						const traceId = newTraceId();
+						let completeFired = false;
+						let idleTimer: ReturnType<typeof setTimeout> | null = null;
+						const fireComplete = () => {
+							if (completeFired) return;
+							completeFired = true;
+							if (idleTimer) clearTimeout(idleTimer);
+							this.broadcast({ kind: "chat:complete", convId, traceId });
+						};
+						const armIdle = () => {
+							if (idleTimer) clearTimeout(idleTimer);
+							idleTimer = setTimeout(fireComplete, 1500);
+						};
+						await traceScope(traceId, async () => {
+							try {
+								await this.runtime.sendMessage(text, (delta) => {
+									this.broadcast({ kind: "chat:delta", convId, delta, traceId });
+									armIdle();
+								});
+								fireComplete();
+							} catch (err) {
+								if (idleTimer) clearTimeout(idleTimer);
+								const message = err instanceof Error ? err.message : String(err);
+								this.broadcast({ kind: "chat:error", convId, message, traceId });
+							}
+						});
 					}
 				},
 			},
@@ -1341,11 +1768,17 @@ export class ApiServer {
 	}
 
 	stop(): void {
+		this.removeBrowserControlGlobal();
 		this.removeLockfile();
 		this.server?.stop(true);
 		this.server = null;
 		for (const ws of this.subscribers.values()) ws.close();
 		this.subscribers.clear();
+		for (const [id, waiter] of this.browserWaiters.entries()) {
+			clearTimeout(waiter.timer);
+			waiter.resolve({ ok: false, error: `Browser command ${id} canceled because API server stopped.`, time: Date.now() });
+		}
+		this.browserWaiters.clear();
 	}
 
 	listen(handler: Listener): () => void {

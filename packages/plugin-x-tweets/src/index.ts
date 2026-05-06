@@ -3,11 +3,9 @@
  *
  * Auth: cookie-based (`X_AUTH_TOKEN` + `X_CT0`). No developer key.
  *
- * Action set is ordered by what actually moves profile reach in X's
- * open-source ranker (https://github.com/twitter/the-algorithm). Highest-
- * leverage actions for cold-start growth are X_REPLY and X_NOTIFICATIONS
- * (replying fast to mentions hits the AUTHOR_REPLIED ≈ 75× weight). Likes
- * and retweets are useful in volume but each individual one is small.
+ * Action set follows X's open-source recommendation pipeline shape:
+ * discover candidates, hydrate/filter them, score likely engagement, diversify
+ * authors, then avoid negative-feedback traps.
  */
 
 import {
@@ -16,9 +14,15 @@ import {
 	type HandlerCallback,
 	type IAgentRuntime,
 	logger,
+	ModelType,
+	parseToonKeyValue,
 	type Plugin,
+	Service,
+	type Task,
+	type TaskMetadata,
+	type UUID,
 } from "@elizaos/core";
-import { XClient } from "./x-client";
+import { XClient, type XTweetSummary } from "./x-client";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -59,21 +63,85 @@ async function emit(callback: HandlerCallback | undefined, text: string, action:
 
 const alwaysValid: Action["validate"] = async () => true;
 
+/**
+ * Pull validated params from a Handler's options bag.
+ *
+ * Eliza's contract (HandlerOptions in @elizaos/core/types/components):
+ *   "Validated input parameters extracted from the conversation will be
+ *    passed to the handler via HandlerOptions.parameters"
+ *
+ * So canonical first: `options.parameters[key]`. We then fall back to the
+ * top level (some plugins call actions imperatively without going through
+ * the planner extractor) and finally do a deep walk for resilience against
+ * intermediate eliza versions where the TOON parser stuffs params under
+ * `options.params`, `options.<ACTION_NAME>`, or `options.arguments`.
+ */
+function paramsBag(opts: Record<string, unknown> | undefined): Record<string, unknown> {
+	if (!opts) return {};
+	const p = (opts as { parameters?: unknown }).parameters;
+	if (p && typeof p === "object" && !Array.isArray(p)) return p as Record<string, unknown>;
+	return {};
+}
+
 function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
 	if (!opts) return undefined;
+	// 1. canonical eliza contract
+	const params = paramsBag(opts);
+	for (const k of keys) {
+		const v = params[k];
+		if (typeof v === "string" && v.length > 0) return v;
+	}
+	// 2. top-level (imperative callers / direct invocations)
 	for (const k of keys) {
 		const v = opts[k];
 		if (typeof v === "string" && v.length > 0) return v;
+	}
+	// 3. defensive deep walk — handles eliza versions that nest params
+	// under `options.<ACTION>`, `options.arguments`, etc.
+	const queue: Record<string, unknown>[] = [opts];
+	const seen = new Set<unknown>();
+	while (queue.length > 0) {
+		const cur = queue.shift()!;
+		if (seen.has(cur)) continue;
+		seen.add(cur);
+		for (const k of keys) {
+			const v = cur[k];
+			if (typeof v === "string" && v.length > 0) return v;
+		}
+		for (const v of Object.values(cur)) {
+			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
+		}
 	}
 	return undefined;
 }
 
 function pickNumber(opts: Record<string, unknown> | undefined, keys: string[]): number | undefined {
 	if (!opts) return undefined;
+	const params = paramsBag(opts);
+	for (const k of keys) {
+		const v = params[k];
+		if (typeof v === "number" && Number.isFinite(v)) return v;
+		if (typeof v === "string" && v.length > 0 && Number.isFinite(Number(v))) return Number(v);
+	}
 	for (const k of keys) {
 		const v = opts[k];
 		if (typeof v === "number" && Number.isFinite(v)) return v;
 		if (typeof v === "string" && v.length > 0 && Number.isFinite(Number(v))) return Number(v);
+	}
+	const queue: Record<string, unknown>[] = [opts];
+	const seen = new Set<unknown>();
+	while (queue.length > 0) {
+		const cur = queue.shift()!;
+		if (seen.has(cur)) continue;
+		seen.add(cur);
+		for (const k of keys) {
+			const v = cur[k];
+			if (typeof v === "number" && Number.isFinite(v)) return v;
+			if (typeof v === "string" && v.length > 0 && Number.isFinite(Number(v))) return Number(v);
+		}
+		for (const v of Object.values(cur)) {
+			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
+		}
 	}
 	return undefined;
 }
@@ -90,6 +158,698 @@ function withClient<T>(
 		return Promise.resolve({ success: false, error: error ?? "X auth not configured." });
 	}
 	return fn(client);
+}
+
+const X_AUTONOMY_TASK_NAME = "X_AUTONOMY";
+const X_AUTONOMY_TASK_TAGS = ["queue", "repeat", "x-autonomy"];
+const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
+const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
+const X_AUTONOMY_SEEN_LIMIT = 500;
+const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
+	"elizaOS",
+	"Dexploarer",
+	"ai agents",
+	"autonomous agents",
+	"agent framework",
+	"personal AI",
+	"developer tools",
+];
+
+const X_ALGORITHM_PLAYBOOK = [
+	"X algorithm playbook:",
+	"- Treat growth as a candidate pipeline: discover relevant conversations, filter low-quality or unsafe candidates, rank by likely useful engagement, then diversify authors.",
+	"- Use the same broad signal families X exposes: follows, likes, replies, reposts, quotes, bookmarks, clicks, video watch, profile clicks, shares, dwell, not-interested, blocks, mutes, and reports.",
+	"- Replies matter most when they are specific, fast, and likely to create useful downstream conversation. Low-effort replies create negative feedback risk.",
+	"- Search should cover both in-orbit keywords and adjacent out-of-network audiences: elizaOS, AI agents, agent frameworks, personal AI, developer tools, autonomous workflows, and the user's active product terms.",
+	"- Prefer recent posts with real conversation potential over huge stale posts. Avoid bait, giveaways, outrage loops, politics traps, spam, and generic viral slop.",
+	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; do not hammer one account or one thread.",
+	"- Status posts should be original, concrete, concise, and public-safe. Do not leak private context or promise product state the app cannot prove.",
+	"- Public writes are gated: notification replies use X_AUTONOMY_WRITE; proactive discovery replies/likes/follows require X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED; status posts require X_AUTONOMY_POST_STATUS_ENABLED.",
+	"",
+	"Primary sources:",
+	"https://github.com/xai-org/x-algorithm",
+	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/scorers/weighted_scorer.rs",
+	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/candidate_pipeline/phoenix_candidate_pipeline.rs",
+	"https://github.com/twitter/the-algorithm",
+	"https://github.com/twitter/the-algorithm/blob/main/RETREIVAL_SIGNALS.md",
+];
+
+type XAutonomyDecision = {
+	action?: string;
+	reply_text?: string;
+	reason?: string;
+};
+
+type XStatusDecision = {
+	should_post?: boolean | string;
+	text?: string;
+	reason?: string;
+};
+
+type XDiscoveryDecision = {
+	action?: string;
+	reply_text?: string;
+	reason?: string;
+};
+
+type XDiscoveryCandidate = {
+	tweet: XTweetSummary;
+	query: string;
+	score: number;
+	reason: string;
+};
+
+function readBooleanSetting(runtime: IAgentRuntime, key: string, defaultValue: boolean): boolean {
+	const v = pickSetting(runtime, key);
+	if (v === undefined) return defaultValue;
+	return !["0", "false", "no", "off"].includes(v.trim().toLowerCase());
+}
+
+function readNumberSetting(runtime: IAgentRuntime, key: string, defaultValue: number): number {
+	const v = pickSetting(runtime, key);
+	if (v === undefined) return defaultValue;
+	const n = Number(v);
+	return Number.isFinite(n) ? n : defaultValue;
+}
+
+function splitList(value: string | undefined): string[] {
+	if (!value) return [];
+	return value
+		.split(/[\n,]+/)
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0);
+}
+
+function readListSetting(runtime: IAgentRuntime, key: string, defaultValue: string[]): string[] {
+	const parsed = splitList(pickSetting(runtime, key));
+	return parsed.length > 0 ? parsed : [...defaultValue];
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
+
+function readSeenIds(metadata: unknown): string[] {
+	if (!isRecord(metadata)) return [];
+	const raw = metadata.xAutonomySeenIds;
+	if (!Array.isArray(raw)) return [];
+	return raw.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+function buildXAutonomyMetadata(current: unknown, runtime: IAgentRuntime): TaskMetadata {
+	const intervalMs = Math.max(
+		30_000,
+		Math.min(30 * 60_000, readNumberSetting(runtime, "X_AUTONOMY_INTERVAL_MS", X_AUTONOMY_DEFAULT_INTERVAL_MS)),
+	);
+	return {
+		...(isRecord(current) ? current : {}),
+		updateInterval: intervalMs,
+		baseInterval: intervalMs,
+		blocking: true,
+		xAutonomy: {
+			kind: "notifications",
+			version: 1,
+		},
+	};
+}
+
+function isXAutonomyTask(task: Task): boolean {
+	return task.name === X_AUTONOMY_TASK_NAME && isRecord(task.metadata?.xAutonomy);
+}
+
+async function ensureXAutonomyTask(runtime: IAgentRuntime): Promise<UUID | null> {
+	if (!readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return null;
+	const tasks = await runtime.getTasks({
+		agentIds: [runtime.agentId],
+		tags: [...X_AUTONOMY_TASK_TAGS],
+	});
+	const existing = tasks.filter(isXAutonomyTask);
+	const [primary, ...duplicates] = existing;
+	for (const duplicate of duplicates) {
+		if (duplicate.id) await runtime.deleteTask(duplicate.id).catch(() => {});
+	}
+	const metadata = buildXAutonomyMetadata(primary?.metadata, runtime);
+	if (primary?.id) {
+		await runtime.updateTask(primary.id, {
+			description: "Poll X notifications and discover algorithm-fit conversations",
+			metadata,
+		});
+		return primary.id;
+	}
+	return runtime.createTask({
+		name: X_AUTONOMY_TASK_NAME,
+		description: "Poll X notifications and discover algorithm-fit conversations",
+		tags: [...X_AUTONOMY_TASK_TAGS],
+		metadata,
+		dueAt: Date.now(),
+	});
+}
+
+function compactText(text: string | undefined, max = 900): string {
+	return (text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function readTimestamp(value: unknown): number {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string") {
+		const parsed = Date.parse(value);
+		return Number.isFinite(parsed) ? parsed : 0;
+	}
+	return 0;
+}
+
+function readModelBoolean(value: unknown): boolean {
+	if (value === true) return true;
+	if (typeof value !== "string") return false;
+	return ["true", "yes", "1", "post"].includes(value.trim().toLowerCase());
+}
+
+async function decideXAutonomyAction(
+	runtime: IAgentRuntime,
+	params: {
+		viewerScreenName: string;
+		fromUserScreenName?: string;
+		kind: string;
+		notificationMessage?: string;
+		tweetText: string;
+	},
+): Promise<XAutonomyDecision> {
+	const prompt = [
+		`You are autonomously managing the X account @${params.viewerScreenName}.`,
+		"Decide whether to reply, like, or ignore this notification.",
+		"Rules:",
+		"- Reply only when the tweet is directly addressed to the account or clearly invites a response.",
+		"- Ignore likes, follows, generic boosts, bait, spam, arguments, and anything unsafe.",
+		"- Keep replies warm, concise, specific, and under 240 characters.",
+		"- Do not mention being automated. Do not make promises. Do not give financial, legal, medical, or private advice.",
+		"",
+		"Notification:",
+		`kind: ${compactText(params.kind, 40)}`,
+		`from: ${params.fromUserScreenName ? `@${compactText(params.fromUserScreenName, 80)}` : "unknown"}`,
+		`message: ${compactText(params.notificationMessage, 300)}`,
+		"",
+		"Tweet:",
+		compactText(params.tweetText, 900),
+		"",
+		"Output TOON only:",
+		"action: reply | like | ignore",
+		"reply_text: <required only when action is reply>",
+		"reason: <brief>",
+	].join("\n");
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	return parseToonKeyValue<XAutonomyDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+}
+
+async function buildRecentAutonomyContext(runtime: IAgentRuntime, task: Task): Promise<string> {
+	const roomId = task.roomId ?? runtime.agentId;
+	const memories = await runtime.getMemories({
+		roomId,
+		tableName: "memories",
+		limit: 8,
+	}).catch(() => []);
+	return memories
+		.map((memory) => (typeof memory.content?.text === "string" ? memory.content.text : ""))
+		.filter((text) => text.trim().length > 0)
+		.slice(0, 5)
+		.map((text, i) => `context[${i}]: ${compactText(text, 240)}`)
+		.join("\n");
+}
+
+async function decideXStatusPost(
+	runtime: IAgentRuntime,
+	params: {
+		viewerScreenName: string;
+		context: string;
+	},
+): Promise<XStatusDecision> {
+	const prompt = [
+		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
+		"Write only if there is a useful, public-safe status update to share.",
+		"Rules:",
+		"- The status must be under 240 characters.",
+		"- Be concrete, warm, and agent-native.",
+		"- Do not include private names, message contents, secrets, tokens, file paths, screenshots, or internal logs.",
+		"- Do not claim launches, production readiness, financial results, or guarantees.",
+		"- No hashtags unless truly useful. No engagement bait.",
+		"",
+		params.context ? `Recent internal context:\n${params.context}` : "Recent internal context: (none)",
+		"",
+		"Output TOON only:",
+		"should_post: true | false",
+		"text: <status text, required when should_post is true>",
+		"reason: <brief>",
+	].join("\n");
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	return parseToonKeyValue<XStatusDecision>(String(raw)) ?? { should_post: false, reason: "unparseable model output" };
+}
+
+function modelErrorReason(err: unknown): string {
+	return `model unavailable: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+async function safeXAutonomyDecision(
+	runtime: IAgentRuntime,
+	params: Parameters<typeof decideXAutonomyAction>[1],
+): Promise<XAutonomyDecision> {
+	return decideXAutonomyAction(runtime, params).catch((err) => {
+		const reason = modelErrorReason(err);
+		logger.warn({ src: "x-autonomy", error: reason }, "notification decision failed; ignoring safely");
+		return { action: "ignore", reason };
+	});
+}
+
+async function safeXStatusDecision(
+	runtime: IAgentRuntime,
+	params: Parameters<typeof decideXStatusPost>[1],
+): Promise<XStatusDecision> {
+	return decideXStatusPost(runtime, params).catch((err) => {
+		const reason = modelErrorReason(err);
+		logger.warn({ src: "x-autonomy", error: reason }, "status decision failed; skipping safely");
+		return { should_post: false, reason };
+	});
+}
+
+async function safeXDiscoveryDecision(
+	runtime: IAgentRuntime,
+	params: Parameters<typeof decideXDiscoveryAction>[1],
+	proactiveEngagementEnabled: boolean,
+): Promise<XDiscoveryDecision> {
+	return decideXDiscoveryAction(runtime, params).catch((err) => {
+		const reason = modelErrorReason(err);
+		logger.warn({ src: "x-autonomy", error: reason }, "discovery decision failed; using safe fallback");
+		if (proactiveEngagementEnabled) return { action: "ignore", reason };
+		return { action: "like", reason: `${reason}; candidate surfaced as dry-run only` };
+	});
+}
+
+function tweetCreatedAtMs(tweet: XTweetSummary): number {
+	if (!tweet.createdAt) return 0;
+	const parsed = Date.parse(tweet.createdAt);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function tokenize(text: string): string[] {
+	const matches = text.toLowerCase().match(/[a-z0-9][a-z0-9_+-]{2,}/g);
+	return matches ? [...new Set(matches)] : [];
+}
+
+function textContainsBait(text: string): boolean {
+	const lower = text.toLowerCase();
+	return [
+		"giveaway",
+		"airdrop",
+		"like and retweet",
+		"like & retweet",
+		"follow me",
+		"tag someone",
+		"drop your",
+		"reply with",
+		"dm me for",
+	].some((phrase) => lower.includes(phrase));
+}
+
+function scoreDiscoveryTweet(tweet: XTweetSummary, query: string, now: number): XDiscoveryCandidate {
+	const createdAt = tweetCreatedAtMs(tweet);
+	const ageHours = createdAt > 0 ? Math.max(0, (now - createdAt) / 3_600_000) : 72;
+	const queryTerms = tokenize(query);
+	const tweetTerms = new Set(tokenize(tweet.text));
+	const overlap = queryTerms.filter((term) => tweetTerms.has(term)).length;
+	const favoriteCount = tweet.favoriteCount ?? 0;
+	const retweetCount = tweet.retweetCount ?? 0;
+	const replyCount = tweet.replyCount ?? 0;
+	const engagement = Math.log1p(replyCount * 4 + retweetCount * 2 + favoriteCount);
+	const recency = ageHours <= 3 ? 4 : ageHours <= 12 ? 2.5 : ageHours <= 24 ? 1 : ageHours <= 72 ? 0 : -3;
+	const relevance = queryTerms.length > 0 ? (overlap / queryTerms.length) * 5 : 1;
+	const lengthScore = tweet.text.length >= 45 && tweet.text.length <= 240 ? 1.5 : 0;
+	const baitPenalty = textContainsBait(tweet.text) ? 6 : 0;
+	const score = Math.max(0, engagement + recency + relevance + lengthScore - baitPenalty);
+	const reasonParts = [
+		`query "${query}"`,
+		ageHours <= 24 ? "recent" : "older",
+		replyCount > 0 ? `${replyCount} replies` : "low replies",
+		overlap > 0 ? `${overlap} keyword hits` : "semantic fit only",
+	];
+	if (baitPenalty > 0) reasonParts.push("bait penalty");
+	return { tweet, query, score: Number(score.toFixed(2)), reason: reasonParts.join(", ") };
+}
+
+async function discoverXCandidates(
+	client: XClient,
+	params: {
+		viewerScreenName: string;
+		queries: string[];
+		seen: Set<string>;
+		limit: number;
+	},
+): Promise<XDiscoveryCandidate[]> {
+	const byTweet = new Map<string, XDiscoveryCandidate>();
+	const now = Date.now();
+	for (const query of params.queries.slice(0, 8)) {
+		for (const product of ["Top", "Latest"] as const) {
+			let tweets: XTweetSummary[] = [];
+			try {
+				tweets = await client.search({ query, product, limit: 12 });
+			} catch (err) {
+				logger.warn(
+					{ src: "x-autonomy", query, product, error: err instanceof Error ? err.message : String(err) },
+					"X discovery search failed",
+				);
+				continue;
+			}
+			for (const tweet of tweets) {
+				const key = `discover:${tweet.tweetId}`;
+				if (params.seen.has(key)) continue;
+				if (tweet.authorScreenName?.toLowerCase() === params.viewerScreenName.toLowerCase()) continue;
+				if (tweet.text.trim().length < 20) continue;
+				const candidate = scoreDiscoveryTweet(tweet, query, now);
+				const existing = byTweet.get(tweet.tweetId);
+				if (!existing || candidate.score > existing.score) byTweet.set(tweet.tweetId, candidate);
+			}
+		}
+	}
+	const authorCounts = new Map<string, number>();
+	return [...byTweet.values()]
+		.sort((a, b) => b.score - a.score)
+		.filter((candidate) => {
+			const author = candidate.tweet.authorScreenName?.toLowerCase();
+			if (!author) return true;
+			const count = authorCounts.get(author) ?? 0;
+			if (count >= 1) return false;
+			authorCounts.set(author, count + 1);
+			return true;
+		})
+		.slice(0, params.limit);
+}
+
+async function decideXDiscoveryAction(
+	runtime: IAgentRuntime,
+	params: {
+		viewerScreenName: string;
+		candidate: XDiscoveryCandidate;
+	},
+): Promise<XDiscoveryDecision> {
+	const tweet = params.candidate.tweet;
+	const prompt = [
+		`You are autonomously growing the X account @${params.viewerScreenName}.`,
+		"Use this algorithm-aware strategy:",
+		X_ALGORITHM_PLAYBOOK,
+		"",
+		"Decide whether this discovered post deserves a reply, like, follow, or ignore.",
+		"Rules:",
+		"- Reply only if you can add specific, useful context in the account's voice.",
+		"- Like when the post is relevant but does not need a reply.",
+		"- Follow only if the author is clearly relevant to the account's long-term graph.",
+		"- Ignore bait, spam, culture-war traps, outrage, scams, and vague hype.",
+		"- Keep reply_text under 240 characters. No hashtags unless they are already central to the conversation.",
+		"- Do not mention the algorithm, automation, private context, cookies, tools, or internal settings.",
+		"",
+		"Candidate:",
+		`query: ${compactText(params.candidate.query, 120)}`,
+		`score: ${params.candidate.score}`,
+		`reason: ${params.candidate.reason}`,
+		`author: ${tweet.authorScreenName ? `@${compactText(tweet.authorScreenName, 80)}` : "unknown"}`,
+		`url: ${tweet.url}`,
+		`engagement: ${tweet.replyCount ?? 0} replies, ${tweet.retweetCount ?? 0} reposts, ${tweet.favoriteCount ?? 0} likes`,
+		"",
+		"Post:",
+		compactText(tweet.text, 900),
+		"",
+		"Output TOON only:",
+		"action: reply | like | follow | ignore",
+		"reply_text: <required only when action is reply>",
+		"reason: <brief>",
+	].join("\n");
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	return parseToonKeyValue<XDiscoveryDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+}
+
+async function logXAutonomy(
+	runtime: IAgentRuntime,
+	task: Task,
+	body: Record<string, unknown>,
+): Promise<void> {
+	await runtime.log({
+		entityId: runtime.agentId,
+		roomId: task.roomId ?? runtime.agentId,
+		type: "x_autonomy",
+		body,
+	}).catch(() => {});
+}
+
+async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise<void> {
+	if (!readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return;
+	const { client, error } = buildClient(runtime);
+	if (!client) {
+		logger.warn({ src: "x-autonomy", error }, "X autonomy skipped; auth unavailable");
+		return;
+	}
+
+	const writeEnabled = readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true);
+	const statusPostingEnabled = readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false);
+	const discoveryEnabled = readBooleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true);
+	const proactiveEngagementEnabled = readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false);
+	const followEnabled = readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false);
+	const discoveryQueries = readListSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES);
+	const statusIntervalMs = Math.max(
+		15 * 60_000,
+		Math.min(24 * 60 * 60_000, readNumberSetting(runtime, "X_AUTONOMY_STATUS_INTERVAL_MS", X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS)),
+	);
+	const discoveryIntervalMs = Math.max(
+		5 * 60_000,
+		Math.min(24 * 60 * 60_000, readNumberSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS)),
+	);
+	const maxReplies = Math.max(1, Math.min(5, readNumberSetting(runtime, "X_AUTONOMY_MAX_REPLIES_PER_TICK", 2)));
+	const maxDiscovery = Math.max(0, Math.min(8, readNumberSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 2)));
+	const metadata = isRecord(task.metadata) ? task.metadata : {};
+	const seen = new Set(readSeenIds(metadata));
+	const nextSeen = new Set(seen);
+	const handled: Array<Record<string, unknown>> = [];
+	let lastStatusAt = readTimestamp(metadata.xAutonomyLastStatusAt);
+	let lastDiscoveryAt = readTimestamp(metadata.xAutonomyLastDiscoveryAt);
+	let lastStatusTweetId = typeof metadata.xAutonomyLastStatusTweetId === "string" ? metadata.xAutonomyLastStatusTweetId : undefined;
+
+	let viewerScreenName = "unknown";
+	try {
+		const viewer = await client.viewer();
+		viewerScreenName = viewer.screenName;
+		const notifications = await client.getNotifications();
+		const candidates = notifications
+			.filter((n) => (n.kind === "mention" || n.kind === "reply") && n.tweetId && !seen.has(n.id))
+			.slice(0, maxReplies);
+
+		for (const notification of candidates) {
+			nextSeen.add(notification.id);
+			const tweet = notification.tweetId ? await client.getTweet(notification.tweetId) : null;
+			if (!tweet) {
+				handled.push({ id: notification.id, action: "ignore", reason: "tweet not found" });
+				continue;
+			}
+			if (tweet.authorScreenName?.toLowerCase() === viewer.screenName.toLowerCase()) {
+				handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "self-authored tweet" });
+				continue;
+			}
+			const decision = await safeXAutonomyDecision(runtime, {
+				viewerScreenName: viewer.screenName,
+				fromUserScreenName: notification.fromUserScreenName ?? tweet.authorScreenName,
+				kind: notification.kind,
+				notificationMessage: notification.message,
+				tweetText: tweet.text,
+			});
+			const action = String(decision.action ?? "ignore").trim().toLowerCase();
+			const replyText = compactText(decision.reply_text, 260);
+			if (action === "reply" && replyText.length > 0) {
+				if (writeEnabled) {
+					const result = await client.reply(replyText, tweet.tweetId);
+					handled.push({
+						id: notification.id,
+						tweetId: tweet.tweetId,
+						action,
+						success: result.success,
+						resultTweetId: result.tweetId,
+						error: result.error,
+					});
+				} else {
+					handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "reply_dry_run", text: replyText });
+				}
+				continue;
+			}
+			if (action === "like") {
+				if (writeEnabled) {
+					const result = await client.like(tweet.tweetId);
+					handled.push({ id: notification.id, tweetId: tweet.tweetId, action, success: result.success, error: result.error });
+				} else {
+					handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "like_dry_run" });
+				}
+				continue;
+			}
+			handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: decision.reason });
+		}
+
+		for (const notification of notifications.slice(0, 100)) {
+			if (notification.kind !== "mention" && notification.kind !== "reply") {
+				nextSeen.add(notification.id);
+			}
+		}
+
+		if (discoveryEnabled && maxDiscovery > 0 && Date.now() - lastDiscoveryAt >= discoveryIntervalMs) {
+			const candidates = await discoverXCandidates(client, {
+				viewerScreenName: viewer.screenName,
+				queries: discoveryQueries,
+				seen: nextSeen,
+				limit: maxDiscovery,
+			});
+			for (const candidate of candidates) {
+				const tweet = candidate.tweet;
+				nextSeen.add(`discover:${tweet.tweetId}`);
+				const decision = await safeXDiscoveryDecision(
+					runtime,
+					{
+						viewerScreenName: viewer.screenName,
+						candidate,
+					},
+					proactiveEngagementEnabled,
+				);
+				const action = String(decision.action ?? "ignore").trim().toLowerCase();
+				const replyText = compactText(decision.reply_text, 260);
+				const base = {
+					tweetId: tweet.tweetId,
+					authorScreenName: tweet.authorScreenName,
+					query: candidate.query,
+					score: candidate.score,
+					reason: decision.reason ?? candidate.reason,
+				};
+				if (action === "reply" && replyText.length > 0) {
+					if (writeEnabled && proactiveEngagementEnabled) {
+						const result = await client.reply(replyText, tweet.tweetId);
+						handled.push({
+							...base,
+							action: "discover_reply",
+							success: result.success,
+							resultTweetId: result.tweetId,
+							error: result.error,
+						});
+					} else {
+						handled.push({ ...base, action: "discover_reply_dry_run", text: replyText });
+					}
+					continue;
+				}
+				if (action === "like") {
+					if (writeEnabled && proactiveEngagementEnabled) {
+						const result = await client.like(tweet.tweetId);
+						handled.push({ ...base, action: "discover_like", success: result.success, error: result.error });
+					} else {
+						handled.push({ ...base, action: "discover_like_dry_run" });
+					}
+					continue;
+				}
+				if (action === "follow" && tweet.authorId) {
+					if (writeEnabled && proactiveEngagementEnabled && followEnabled) {
+						const result = await client.follow(tweet.authorId);
+						handled.push({ ...base, action: "discover_follow", success: result.success, error: result.error });
+					} else {
+						handled.push({ ...base, action: "discover_follow_dry_run" });
+					}
+					continue;
+				}
+				handled.push({ ...base, action: "discover_ignore" });
+			}
+			lastDiscoveryAt = Date.now();
+		}
+
+		if (statusPostingEnabled && Date.now() - lastStatusAt >= statusIntervalMs) {
+			const context = await buildRecentAutonomyContext(runtime, task);
+			const decision = await safeXStatusDecision(runtime, {
+				viewerScreenName: viewer.screenName,
+				context,
+			});
+			const text = compactText(decision.text, 260);
+			if (readModelBoolean(decision.should_post) && text.length > 0) {
+				if (writeEnabled) {
+					const result = await client.tweet(text);
+					handled.push({
+						action: "post_status",
+						success: result.success,
+						tweetId: result.tweetId,
+						error: result.error,
+					});
+					if (result.success) {
+						lastStatusAt = Date.now();
+						lastStatusTweetId = result.tweetId;
+					}
+				} else {
+					handled.push({ action: "post_status_dry_run", text });
+					lastStatusAt = Date.now();
+				}
+			} else {
+				handled.push({ action: "post_status_skip", reason: decision.reason ?? "model declined" });
+				lastStatusAt = Date.now();
+			}
+		}
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		logger.warn({ src: "x-autonomy", error: message }, "X autonomy tick failed");
+		await logXAutonomy(runtime, task, { ok: false, error: message, viewerScreenName });
+		throw err;
+	} finally {
+		if (task.id) {
+			const recentSeen = Array.from(nextSeen).slice(-X_AUTONOMY_SEEN_LIMIT);
+			await runtime.updateTask(task.id, {
+				metadata: {
+					...metadata,
+					xAutonomySeenIds: recentSeen,
+					xAutonomyLastRunAt: Date.now(),
+					xAutonomyLastStatusAt: lastStatusAt,
+					xAutonomyLastDiscoveryAt: lastDiscoveryAt,
+					...(lastStatusTweetId ? { xAutonomyLastStatusTweetId: lastStatusTweetId } : {}),
+					xAutonomyLastHandled: handled,
+				},
+			}).catch(() => {});
+		}
+	}
+
+	await logXAutonomy(runtime, task, {
+		ok: true,
+		viewerScreenName,
+		writeEnabled,
+		discoveryEnabled,
+		proactiveEngagementEnabled,
+		handledCount: handled.length,
+		handled,
+	});
+	logger.info(
+		{ src: "x-autonomy", handledCount: handled.length, writeEnabled, discoveryEnabled, proactiveEngagementEnabled },
+		"X autonomy tick complete",
+	);
+}
+
+export class XAutonomyService extends Service {
+	static serviceType = "x_autonomy";
+	static serviceName = "X Autonomy";
+
+	static async start(runtime: IAgentRuntime): Promise<XAutonomyService> {
+		const service = new XAutonomyService(runtime);
+		service.register(runtime);
+		await ensureXAutonomyTask(runtime);
+		return service;
+	}
+
+	private register(runtime: IAgentRuntime): void {
+		if (runtime.getTaskWorker(X_AUTONOMY_TASK_NAME)) return;
+		runtime.registerTaskWorker({
+			name: X_AUTONOMY_TASK_NAME,
+			execute: async (rt, _options, task) => {
+				await executeXAutonomyTask(rt, task);
+				return undefined;
+			},
+		});
+	}
+
+	async stop(): Promise<void> {}
+
+	get capabilityDescription(): string {
+		return "Autonomously handles X notifications and discovers algorithm-fit conversations";
+	}
 }
 
 // ── X_POST ──────────────────────────────────────────────────────────────────
@@ -157,9 +917,9 @@ export const xReplyAction: Action = {
 	name: "X_REPLY",
 	similes: ["REPLY_TO_TWEET", "REPLY_TO_X", "TWEET_REPLY"],
 	description:
-		"Reply to a tweet by its numeric ID. **Highest-leverage growth action**: in X's open-source " +
-		"ranker, AUTHOR_REPLIED ≈ 75× and engaging-reply ≈ 13.5× — fast replies on mentions and on " +
-		"replies to your own posts move reach more than any other engagement.",
+		"Reply to a tweet by its numeric ID. Use for specific, useful conversation, especially direct " +
+		"mentions and replies to your posts; X's open-source ranking pipeline predicts reply and downstream " +
+		"conversation probability as core engagement signals.",
 	validate: alwaysValid,
 	handler: replyHandler,
 	examples: [],
@@ -191,8 +951,7 @@ export const xLikeAction: Action = {
 	name: "X_LIKE",
 	similes: ["LIKE_TWEET", "FAVORITE_TWEET", "HEART_TWEET"],
 	description:
-		"Like a tweet by ID. Cheap engagement signal (≈0.5× weight) but easy to do in volume — " +
-		"liking @-mentions and replies to your own posts is good etiquette and a tiny ranker boost.",
+		"Like a tweet by ID. Use as lightweight acknowledgement for relevant posts when a reply would add noise.",
 	validate: alwaysValid,
 	handler: likeHandler,
 	examples: [],
@@ -243,8 +1002,7 @@ export const xRetweetAction: Action = {
 	name: "X_RETWEET",
 	similes: ["RETWEET", "RT", "AMPLIFY_TWEET"],
 	description:
-		"Retweet (boost) a tweet. RETWEETED ≈ 1× ranker weight — modest but visible to your followers " +
-		"and helps the original author. Use on @dEXploarer's posts and other accounts in our orbit.",
+		"Retweet a post. Use sparingly for strong in-orbit content because it broadcasts to followers.",
 	validate: alwaysValid,
 	handler: retweetHandler,
 	examples: [],
@@ -294,7 +1052,7 @@ const bookmarkHandler: Handler = async (runtime, _m, _s, options, callback) => {
 export const xBookmarkAction: Action = {
 	name: "X_BOOKMARK",
 	similes: ["BOOKMARK_TWEET", "SAVE_TWEET"],
-	description: "Bookmark a tweet (private save). BOOKMARKED ≈ 1× engagement signal in the ranker.",
+	description: "Bookmark a tweet for private saving and future context.",
 	validate: alwaysValid,
 	handler: bookmarkHandler,
 	examples: [],
@@ -538,11 +1296,100 @@ export const xNotificationsAction: Action = {
 	name: "X_NOTIFICATIONS",
 	similes: ["READ_NOTIFICATIONS", "CHECK_MENTIONS", "X_MENTIONS"],
 	description:
-		"Read recent notifications (mentions, replies, likes, follows). **Pair with X_REPLY** for the " +
-		"highest-leverage growth move: replying fast to mentions hits AUTHOR_REPLIED ≈ 75× weight in " +
-		"X's ranker. Poll often.",
+		"Read recent notifications (mentions, replies, likes, follows). Pair with X_REPLY when a direct " +
+		"mention or reply clearly deserves a useful response.",
 	validate: alwaysValid,
 	handler: notificationsHandler,
+	examples: [],
+	parameters: [],
+} as Action;
+
+// ── X_DISCOVER_PEOPLE ───────────────────────────────────────────────────────
+
+const discoverPeopleHandler: Handler = async (runtime, _m, _s, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const explicitQuery = pickString(opts, ["query", "q", "queries", "search"]);
+	const limit = Math.max(1, Math.min(20, pickNumber(opts, ["limit", "count"]) ?? 10));
+	const queries = explicitQuery
+		? splitList(explicitQuery)
+		: readListSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES);
+	return withClient(runtime, callback, "X_DISCOVER_PEOPLE", async (client) => {
+		const viewer = await client.viewer();
+		const candidates = await discoverXCandidates(client, {
+			viewerScreenName: viewer.screenName,
+			queries,
+			seen: new Set(),
+			limit,
+		});
+		const summary = candidates
+			.slice(0, 8)
+			.map((candidate) => {
+				const tweet = candidate.tweet;
+				const author = tweet.authorScreenName ? `@${tweet.authorScreenName}` : "@?";
+				return `• ${author} score ${candidate.score}: ${compactText(tweet.text, 120)} (${tweet.url})`;
+			})
+			.join("\n");
+		await emit(
+			callback,
+			candidates.length > 0
+				? `Algorithm-fit X candidates for ${queries.join(", ")}:\n${summary}`
+				: `No algorithm-fit X candidates found for ${queries.join(", ")}.`,
+			"X_DISCOVER_PEOPLE",
+		);
+		return { success: true, queries, candidates };
+	});
+};
+
+export const xDiscoverPeopleAction: Action = {
+	name: "X_DISCOVER_PEOPLE",
+	similes: ["FIND_X_PEOPLE", "DISCOVER_X_CONVERSATIONS", "FIND_X_THREADS", "X_GROWTH_DISCOVERY"],
+	description:
+		"Search X across configured topics, rank recent conversation candidates with the open-source X " +
+		"pipeline heuristics, and return authors/posts worth replying to, liking, or following. Read-only.",
+	validate: alwaysValid,
+	handler: discoverPeopleHandler,
+	examples: [],
+	parameters: [
+		{ name: "query", description: "Optional comma-separated X search queries. Defaults to X_AUTONOMY_DISCOVERY_QUERIES.", required: false, schema: { type: "string" as const } },
+		{ name: "limit", description: "Max candidates to return (default 10).", required: false, schema: { type: "number" as const } },
+	],
+} as Action;
+
+// ── X_ALGORITHM_PLAYBOOK ────────────────────────────────────────────────────
+
+const algorithmPlaybookHandler: Handler = async (runtime, _m, _s, _options, callback) => {
+	const settings = {
+		autonomyEnabled: readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true),
+		writeEnabled: readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true),
+		statusPostingEnabled: readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
+		discoveryEnabled: readBooleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true),
+		proactiveEngagementEnabled: readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
+		followEnabled: readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),
+		discoveryQueries: readListSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES),
+	};
+	const rendered = [
+		X_ALGORITHM_PLAYBOOK,
+		"",
+		"Current X autonomy settings:",
+		`autonomyEnabled: ${settings.autonomyEnabled}`,
+		`writeEnabled: ${settings.writeEnabled}`,
+		`statusPostingEnabled: ${settings.statusPostingEnabled}`,
+		`discoveryEnabled: ${settings.discoveryEnabled}`,
+		`proactiveEngagementEnabled: ${settings.proactiveEngagementEnabled}`,
+		`followEnabled: ${settings.followEnabled}`,
+		`discoveryQueries: ${settings.discoveryQueries.join(", ")}`,
+	].join("\n");
+	await emit(callback, rendered, "X_ALGORITHM_PLAYBOOK");
+	return { success: true, playbook: X_ALGORITHM_PLAYBOOK, settings };
+};
+
+export const xAlgorithmPlaybookAction: Action = {
+	name: "X_ALGORITHM_PLAYBOOK",
+	similes: ["X_GROWTH_PLAYBOOK", "X_ALGO_PLAYBOOK", "TWITTER_ALGORITHM_PLAYBOOK"],
+	description:
+		"Return the agent's algorithm-aware X strategy, source links, guardrails, and current autonomy flags.",
+	validate: alwaysValid,
+	handler: algorithmPlaybookHandler,
 	examples: [],
 	parameters: [],
 } as Action;
@@ -562,14 +1409,15 @@ export const xTweetsPlugin: Plugin = {
 	description:
 		"Full agent-callable surface on X (Twitter) via cookie auth. Includes post, reply, like, " +
 		"retweet, bookmark, delete, follow, search, get-user, get-tweet, user-tweets, home-timeline, " +
-		"notifications. Reads X_AUTH_TOKEN + X_CT0 from the vault. " +
-		"Action priorities follow X's open-source ranker: X_REPLY (especially fast on mentions) is " +
-		"the highest-leverage move (AUTHOR_REPLIED ≈ 75× weight); X_NOTIFICATIONS surfaces what to " +
-		"reply to; X_LIKE/X_RETWEET are good in volume but each is a small signal.",
+		"notifications, algorithm playbook, and algorithm-fit discovery. Reads X_AUTH_TOKEN + X_CT0 " +
+		"from the vault. Autonomy handles direct notifications by default and performs read-only " +
+		"discovery unless proactive public engagement is explicitly enabled.",
 	actions: [
 		xPostAction,
 		xReplyAction,
 		xNotificationsAction,
+		xAlgorithmPlaybookAction,
+		xDiscoverPeopleAction,
 		xLikeAction,
 		xUnlikeAction,
 		xRetweetAction,
@@ -582,6 +1430,7 @@ export const xTweetsPlugin: Plugin = {
 		xUserTweetsAction,
 		xHomeTimelineAction,
 	],
+	services: [XAutonomyService],
 };
 
 export default xTweetsPlugin;

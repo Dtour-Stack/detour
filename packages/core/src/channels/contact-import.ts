@@ -34,8 +34,50 @@ interface FullContact {
 interface RuntimeShape {
 	agentId?: string;
 	getService?: (t: string) => unknown;
+	upsertEntities?: (entities: Array<{ id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }>) => Promise<void>;
 	createEntity?: (entity: { id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }) => Promise<boolean>;
+	getRelationshipsByPairs?: (pairs: Array<{ sourceEntityId: string; targetEntityId: string }>) => Promise<Array<unknown | null>>;
 	createRelationships?: (rels: Array<{ sourceEntityId: string; targetEntityId: string; tags?: string[]; metadata?: Record<string, unknown> }>) => Promise<string[]>;
+}
+
+type CachedContacts = Map<string, { name?: string }> | Record<string, { name?: string } | string>;
+
+function isEmail(value: string): boolean {
+	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+	return Array.from(new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v)));
+}
+
+function contactsFromServiceCache(service: unknown): FullContact[] {
+	const getter = (service as { getContacts?: () => CachedContacts }).getContacts;
+	if (typeof getter !== "function") return [];
+	const raw = getter.call(service);
+	const entries = raw instanceof Map ? Array.from(raw.entries()) : Object.entries(raw ?? {});
+	const grouped = new Map<string, FullContact>();
+	for (const [handle, value] of entries) {
+		const normalizedHandle = handle.trim();
+		if (!normalizedHandle) continue;
+		const record = typeof value === "string" ? { name: value } : value;
+		const name = record?.name?.trim() || normalizedHandle;
+		const id = `cached:${name.toLowerCase()}`;
+		const existing = grouped.get(id) ?? {
+			id,
+			name,
+			firstName: name.split(/\s+/)[0] ?? null,
+			lastName: name.split(/\s+/).slice(1).join(" ") || null,
+			phones: [],
+			emails: [],
+		};
+		if (isEmail(normalizedHandle)) {
+			existing.emails.push({ label: null, value: normalizedHandle });
+		} else {
+			existing.phones.push({ label: null, value: normalizedHandle });
+		}
+		grouped.set(id, existing);
+	}
+	return Array.from(grouped.values());
 }
 
 /** Cheap deterministic UUID v5-ish derivation for stable entity IDs across runs. */
@@ -68,32 +110,26 @@ export async function importImessageContacts(runtime: IAgentRuntime): Promise<Co
 		return { available: false, contactsFound: 0, entitiesCreated: 0, relationshipsCreated: 0, skipped: 0, error: "iMessage service not yet registered" };
 	}
 
-	// listAllContacts is a standalone function in the plugin's
-	// contacts-reader, not a service method. Spawns osascript against
-	// Contacts.app — a few seconds on a populated address book.
-	let contacts: FullContact[] = [];
-	try {
-		// Sub-path import — package main exports the plugin only; we need
-		// the standalone contacts-reader helper. Cast at the import site.
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const mod: any = await import(
-			/* @ts-ignore subpath import — plugin-imessage doesn't declare exports */
-			"@elizaos/plugin-imessage/dist/contacts-reader.js"
-		);
-		const fn = (mod as { listAllContacts?: () => Promise<FullContact[]> }).listAllContacts;
-		if (!fn) {
-			return { available: true, contactsFound: 0, entitiesCreated: 0, relationshipsCreated: 0, skipped: 0, error: "listAllContacts not exported" };
+	let contacts = contactsFromServiceCache(svc);
+	if (contacts.length === 0) {
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const mod: any = await import("@elizaos/plugin-imessage");
+			const fn = (mod as { listAllContacts?: () => Promise<FullContact[]> }).listAllContacts;
+			if (!fn) {
+				return { available: true, contactsFound: 0, entitiesCreated: 0, relationshipsCreated: 0, skipped: 0, error: "listAllContacts not exported" };
+			}
+			contacts = await fn();
+		} catch (err) {
+			return {
+				available: true,
+				contactsFound: 0,
+				entitiesCreated: 0,
+				relationshipsCreated: 0,
+				skipped: 0,
+				error: err instanceof Error ? err.message : String(err),
+			};
 		}
-		contacts = await fn();
-	} catch (err) {
-		return {
-			available: true,
-			contactsFound: 0,
-			entitiesCreated: 0,
-			relationshipsCreated: 0,
-			skipped: 0,
-			error: err instanceof Error ? err.message : String(err),
-		};
 	}
 
 	const agentId = r.agentId;
@@ -115,10 +151,10 @@ export async function importImessageContacts(runtime: IAgentRuntime): Promise<Co
 		const phones = c.phones.map((p) => p.value).filter(Boolean);
 		const emails = c.emails.map((e) => e.value).filter(Boolean);
 		try {
-			const created = await r.createEntity?.({
+			const entity = {
 				id: entityId,
 				agentId,
-				names: [c.name, c.firstName, c.lastName].filter((n): n is string => !!n),
+				names: uniqueStrings([c.name, c.firstName, c.lastName, phones[0], emails[0]]),
 				metadata: {
 					source: "imessage",
 					contactId: c.id,
@@ -129,14 +165,20 @@ export async function importImessageContacts(runtime: IAgentRuntime): Promise<Co
 					handles: [...phones, ...emails],
 					importedAt: Date.now(),
 				},
-			});
-			if (created) entitiesCreated += 1;
+			};
+			if (typeof r.upsertEntities === "function") {
+				await r.upsertEntities([entity]);
+				entitiesCreated += 1;
+			} else {
+				const created = await r.createEntity?.(entity);
+				if (created) entitiesCreated += 1;
+			}
 			relsToCreate.push({
 				sourceEntityId: agentId,
 				targetEntityId: entityId,
 				tags: ["imessage", "contact", "user-acquaintance"],
 				metadata: {
-					source: "imessage:contacts.app",
+					source: c.id.startsWith("cached:") ? "imessage:contacts.cache" : "imessage:contacts.app",
 					primaryHandle: phones[0] ?? emails[0] ?? null,
 				},
 			});
@@ -147,8 +189,18 @@ export async function importImessageContacts(runtime: IAgentRuntime): Promise<Co
 
 	if (relsToCreate.length > 0 && r.createRelationships) {
 		try {
-			const ids = await r.createRelationships(relsToCreate);
-			relationshipsCreated = Array.isArray(ids) ? ids.length : relsToCreate.length;
+			let pending = relsToCreate;
+			if (typeof r.getRelationshipsByPairs === "function") {
+				const existing = await r.getRelationshipsByPairs(
+					relsToCreate.map((rel) => ({
+						sourceEntityId: rel.sourceEntityId,
+						targetEntityId: rel.targetEntityId,
+					})),
+				);
+				pending = relsToCreate.filter((_, index) => !existing[index]);
+			}
+			const ids = pending.length > 0 ? await r.createRelationships(pending) : [];
+			relationshipsCreated = Array.isArray(ids) ? ids.length : pending.length;
 		} catch (err) {
 			console.warn("[contacts] createRelationships failed:", err instanceof Error ? err.message : err);
 		}

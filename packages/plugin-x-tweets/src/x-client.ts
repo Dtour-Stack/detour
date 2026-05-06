@@ -5,19 +5,16 @@
  * official x.com web bundle uses. Auth = `auth_token` + `ct0` cookies that the
  * user exports from a logged-in browser session (Cookie-Editor extension).
  *
- * What this client gives the agent (matches X's open-source ranking weights —
- * see https://github.com/twitter/the-algorithm — so the actions are ordered by
- * which actually move profile reach):
+ * What this client gives the agent:
  *
- *   - tweet/reply           — REPLY weight ≈ 13.5×, AUTHOR_REPLIED ≈ 75×
- *   - like                  — FAVORITED ≈ 0.5× (cheap signal but high volume)
- *   - retweet               — RETWEETED ≈ 1×
- *   - bookmark              — BOOKMARKED ≈ 1× (engagement only, no broadcast)
+ *   - tweet/reply           — create original posts and useful conversation
+ *   - like                  — lightweight acknowledgement
+ *   - retweet               — public amplification
+ *   - bookmark              — private save
  *   - delete                — clean up own posts
  *   - search/getTweet       — find conversations to engage in
  *   - getUser/getUserTweets — read someone's recent activity to engage with
- *   - getNotifications      — fast-reply to mentions (fast engagement is the
- *                             biggest cold-start signal in the ranker)
+ *   - getNotifications      — handle mentions and replies
  *   - viewer                — confirm we're posting as the right account
  *
  * Heads-up: X rotates queryIds every few months. When something starts 404ing
@@ -292,12 +289,7 @@ export class XClient {
 		return collectTweets(data).slice(0, limit);
 	}
 
-	/**
-	 * Recent notifications (mentions, replies, likes, follows).
-	 * Replying fast to mentions is the highest-leverage cold-start signal in
-	 * X's ranker (`AUTHOR_REPLIED` ≈ 75× weight); polling this and reacting
-	 * promptly is the single most valuable thing the agent can do for reach.
-	 */
+	/** Recent notifications (mentions, replies, likes, follows). */
 	async getNotifications(): Promise<XNotification[]> {
 		const res = await this.fetchWithTimeout(NOTIFICATIONS_URL, {
 			method: "GET",

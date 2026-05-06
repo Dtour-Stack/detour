@@ -77,6 +77,23 @@ interface IdentityRecord {
 	messageCount: number;
 }
 
+interface RelationshipShape {
+	id?: string;
+	sourceEntityId: string;
+	targetEntityId: string;
+	tags?: string[];
+	metadata?: Record<string, unknown>;
+}
+
+interface RuntimeGraphShape {
+	agentId: string;
+	upsertEntities?: (entities: Array<{ id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }>) => Promise<void>;
+	createEntity?: (entity: { id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }) => Promise<boolean>;
+	getRelationshipsByPairs?: (pairs: Array<{ sourceEntityId: string; targetEntityId: string }>) => Promise<Array<RelationshipShape | null>>;
+	createRelationships?: (rels: Array<{ sourceEntityId: string; targetEntityId: string; tags?: string[]; metadata?: Record<string, unknown> }>) => Promise<string[]>;
+	updateRelationships?: (rels: RelationshipShape[]) => Promise<void>;
+}
+
 function resolveStateDir(): string {
 	return (
 		process.env.ELIZA_STATE_DIR?.trim() ||
@@ -84,10 +101,40 @@ function resolveStateDir(): string {
 	);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: undefined;
+}
+
+function textValue(value: unknown): string | undefined {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		return trimmed.length > 0 ? trimmed : undefined;
+	}
+	if (typeof value === "number" && Number.isFinite(value)) return String(value);
+	return undefined;
+}
+
+function uniqueTexts(values: unknown[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const value of values) {
+		const text = textValue(value);
+		if (!text || seen.has(text)) continue;
+		seen.add(text);
+		out.push(text);
+	}
+	return out;
+}
+
 function inferChannel(source: string | undefined, memory?: Memory): GatewayChannel {
 	const candidates: string[] = [];
 	if (typeof source === "string") candidates.push(source.toLowerCase());
 	if (memory?.content?.source) candidates.push(String(memory.content.source).toLowerCase());
+	const metadata = asRecord(memory?.metadata);
+	if (typeof metadata?.source === "string") candidates.push(metadata.source.toLowerCase());
+	if (typeof metadata?.provider === "string") candidates.push(metadata.provider.toLowerCase());
 	const text = candidates.join("|");
 	if (text.includes("discord")) return "discord";
 	if (text.includes("telegram")) return "telegram";
@@ -96,26 +143,121 @@ function inferChannel(source: string | undefined, memory?: Memory): GatewayChann
 	return "unknown";
 }
 
-function inferExternalHandle(memory: Memory | undefined): string | undefined {
+function inferExternalHandle(memory: Memory | undefined, channel: GatewayChannel): string | undefined {
 	if (!memory) return undefined;
-	const content = memory.content as Record<string, unknown> | undefined;
-	if (!content) return undefined;
-	const fromMeta = content.metadata as Record<string, unknown> | undefined;
-	const author = (fromMeta?.author as Record<string, unknown> | undefined);
-	const candidates: unknown[] = [
-		content.username,
-		content.handle,
-		content.userScreenName,
-		fromMeta?.username,
-		fromMeta?.handle,
-		fromMeta?.userScreenName,
+	const content = asRecord(memory.content);
+	const contentMeta = asRecord(content?.metadata);
+	const metadata = asRecord(memory.metadata);
+	const author = asRecord(contentMeta?.author);
+	const sender = asRecord(metadata?.sender) ?? asRecord(contentMeta?.sender);
+	const discord = asRecord(metadata?.discord) ?? asRecord(contentMeta?.discord);
+	const telegram = asRecord(metadata?.telegram) ?? asRecord(contentMeta?.telegram);
+	const imessage = asRecord(metadata?.imessage) ?? asRecord(contentMeta?.imessage);
+	const common: unknown[] = [
+		metadata?.fromId,
+		metadata?.entityUserName,
+		metadata?.imessageHandle,
+		metadata?.discordUserId,
+		metadata?.telegramUserId,
+		content?.username,
+		content?.handle,
+		content?.userScreenName,
+		contentMeta?.username,
+		contentMeta?.handle,
+		contentMeta?.userScreenName,
 		author?.username,
-		fromMeta?.from,
+		contentMeta?.from,
+		sender?.id,
+		sender?.username,
 	];
-	for (const c of candidates) {
-		if (typeof c === "string" && c.length > 0) return c;
+	const channelCandidates =
+		channel === "discord" ? [
+			discord?.userId,
+			discord?.id,
+			metadata?.originalId,
+			metadata?.fromId,
+			discord?.username,
+			...common,
+		] : channel === "telegram" ? [
+			metadata?.telegramUserId,
+			metadata?.fromId,
+			sender?.id,
+			telegram?.userId,
+			telegram?.id,
+			metadata?.entityUserName,
+			...common,
+		] : channel === "imessage" ? [
+			metadata?.imessageHandle,
+			imessage?.userId,
+			imessage?.id,
+			metadata?.fromId,
+			sender?.id,
+			...common,
+		] : common;
+	for (const c of channelCandidates) {
+		const text = textValue(c);
+		if (text) return text;
 	}
 	return undefined;
+}
+
+function inferNames(memory: Memory, fallback: string): string[] {
+	const content = asRecord(memory.content);
+	const contentMeta = asRecord(content?.metadata);
+	const metadata = asRecord(memory.metadata);
+	const sender = asRecord(metadata?.sender) ?? asRecord(contentMeta?.sender);
+	const discord = asRecord(metadata?.discord) ?? asRecord(contentMeta?.discord);
+	const telegram = asRecord(metadata?.telegram) ?? asRecord(contentMeta?.telegram);
+	const imessage = asRecord(metadata?.imessage) ?? asRecord(contentMeta?.imessage);
+	const names = uniqueTexts([
+		metadata?.entityName,
+		metadata?.imessageContactName,
+		sender?.name,
+		discord?.name,
+		telegram?.name,
+		imessage?.name,
+		content?.name,
+		content?.username,
+		metadata?.entityUserName,
+		sender?.username,
+		discord?.username,
+		telegram?.username,
+		imessage?.username,
+		fallback,
+	]);
+	return names.length > 0 ? names : [fallback];
+}
+
+function entityMetadata(entry: GatewayMessage, memory: Memory): Record<string, unknown> {
+	const metadata = asRecord(memory.metadata);
+	const sender = asRecord(metadata?.sender);
+	const discord = asRecord(metadata?.discord);
+	const telegram = asRecord(metadata?.telegram);
+	const imessage = asRecord(metadata?.imessage);
+	return {
+		source: "channels:gateway",
+		lastSeenAt: entry.time,
+		lastRoomId: entry.roomId,
+		handles: { [entry.channel]: entry.externalHandle },
+		channels: [entry.channel],
+		...(metadata?.entityAvatarUrl ? { avatarUrl: metadata.entityAvatarUrl } : {}),
+		...(sender ? { sender } : {}),
+		...(discord ? { discord } : {}),
+		...(telegram ? { telegram } : {}),
+		...(imessage ? { imessage } : {}),
+	};
+}
+
+function relationshipTags(channel: GatewayChannel): string[] {
+	const tags = ["channel-contact", "observed-sender"];
+	if (channel !== "unknown") {
+		tags.push(channel, `${channel}-user`);
+	}
+	return tags;
+}
+
+function mergeTags(a: string[] | undefined, b: string[]): string[] {
+	return Array.from(new Set([...(a ?? []), ...b]));
 }
 
 export class ChannelGatewayService {
@@ -153,21 +295,21 @@ export class ChannelGatewayService {
 			return;
 		}
 		r.registerEvent(EventType.MESSAGE_RECEIVED, async (payload: unknown) => {
-			this.record("in", payload);
+			await this.record("in", payload);
 		});
 		r.registerEvent(EventType.MESSAGE_SENT, async (payload: unknown) => {
-			this.record("out", payload);
+			await this.record("out", payload);
 		});
 		r.registerEvent(EventType.MESSAGE_DELETED, async (payload: unknown) => {
-			this.record("deleted", payload);
+			await this.record("deleted", payload);
 		});
 		r.registerEvent(EventType.INTERACTION_RECEIVED, async (payload: unknown) => {
-			this.record("interaction", payload);
+			await this.record("interaction", payload);
 		});
 		logger.info({ src: "channels:gateway" }, "attached to runtime — recording inbound + outbound across channels");
 	}
 
-	private record(direction: GatewayDirection, payload: unknown): void {
+	private async record(direction: GatewayDirection, payload: unknown): Promise<void> {
 		try {
 			const p = payload as { message?: Memory; source?: string; runtime?: IAgentRuntime };
 			const message = p.message;
@@ -175,7 +317,7 @@ export class ChannelGatewayService {
 			const channel = inferChannel(p.source, message);
 			const text = typeof message.content?.text === "string" ? message.content.text : "";
 			if (text.length === 0 && direction !== "deleted") return; // skip noisy non-text events
-			const externalHandle = inferExternalHandle(message);
+			const externalHandle = inferExternalHandle(message, channel);
 			const entry: GatewayMessage = {
 				id: typeof message.id === "string" ? message.id : `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 				time: typeof message.createdAt === "number" ? message.createdAt : Date.now(),
@@ -191,6 +333,7 @@ export class ChannelGatewayService {
 			this.append(entry);
 			if (externalHandle && entry.entityId) {
 				this.recordIdentity(channel, externalHandle, entry.entityId as UUID, entry.time);
+				if (direction === "in") await this.upsertObservedRelationship(entry, message);
 			}
 		} catch (err) {
 			logger.debug(
@@ -255,7 +398,82 @@ export class ChannelGatewayService {
 			existing.messageCount += 1;
 		}
 		// Throttle disk writes — only persist on every Nth update or after 30s.
-		if ((existing?.messageCount ?? 1) % 10 === 0) this.saveIdentities();
+		if (!existing || existing.messageCount % 10 === 0) this.saveIdentities();
+	}
+
+	private async upsertObservedRelationship(entry: GatewayMessage, memory: Memory): Promise<void> {
+		if (!entry.externalHandle || !entry.entityId) return;
+		const runtime = this.currentRuntime as unknown as RuntimeGraphShape | null;
+		const agentId = textValue(runtime?.agentId);
+		if (!runtime || !agentId || entry.entityId === agentId) return;
+		const entityId = entry.entityId;
+		try {
+			const entity = {
+				id: entityId,
+				agentId,
+				names: inferNames(memory, entry.externalHandle),
+				metadata: entityMetadata(entry, memory),
+			};
+			if (typeof runtime.upsertEntities === "function") {
+				await runtime.upsertEntities([entity]);
+			} else if (typeof runtime.createEntity === "function") {
+				await runtime.createEntity(entity);
+			}
+		} catch (err) {
+			logger.debug(
+				{ src: "channels:gateway", err: err instanceof Error ? err.message : err, channel: entry.channel },
+				"entity upsert failed",
+			);
+		}
+		try {
+			const pair = { sourceEntityId: agentId, targetEntityId: entityId };
+			const existing = typeof runtime.getRelationshipsByPairs === "function"
+				? (await runtime.getRelationshipsByPairs([pair]))[0] ?? null
+				: null;
+			const metadata = {
+				source: "channels:gateway",
+				channel: entry.channel,
+				externalHandle: entry.externalHandle,
+				lastSeenAt: entry.time,
+				lastRoomId: entry.roomId,
+			};
+			const tags = relationshipTags(entry.channel);
+			if (existing) {
+				if (typeof runtime.updateRelationships !== "function") return;
+				const currentMetadata = asRecord(existing.metadata) ?? {};
+				const currentCount =
+					typeof currentMetadata.messageCount === "number"
+						? currentMetadata.messageCount
+						: 0;
+				await runtime.updateRelationships([{
+					...existing,
+					tags: mergeTags(existing.tags, tags),
+					metadata: {
+						...currentMetadata,
+						...metadata,
+						firstSeenAt: currentMetadata.firstSeenAt ?? entry.time,
+						messageCount: currentCount + 1,
+					},
+				}]);
+				return;
+			}
+			if (typeof runtime.createRelationships === "function") {
+				await runtime.createRelationships([{
+					...pair,
+					tags,
+					metadata: {
+						...metadata,
+						firstSeenAt: entry.time,
+						messageCount: 1,
+					},
+				}]);
+			}
+		} catch (err) {
+			logger.debug(
+				{ src: "channels:gateway", err: err instanceof Error ? err.message : err, channel: entry.channel },
+				"relationship upsert failed",
+			);
+		}
 	}
 
 	list(opts: ListOptions = {}): { messages: GatewayMessage[]; total: number } {

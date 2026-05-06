@@ -34,6 +34,8 @@ export type PensieveAuditAction =
 	| "autonomy.enable"
 	| "autonomy.disable"
 	| "autonomy.interval"
+	| "chronicler.configure"
+	| "chronicler.sample"
 	| "knowledge.ingest"
 	| "knowledge.delete";
 

@@ -63,7 +63,8 @@ export class PensieveRelationshipService {
 		const a = adapter(runtime);
 		if (typeof a.getRelationships !== "function") return [];
 
-		const rels = await a.getRelationships({ limit });
+		const agentId = String(runtime.agentId);
+		const rels = await a.getRelationships({ entityIds: [runtime.agentId], limit: Math.max(limit * 10, 500) });
 		// Build entity-id → counts/tags
 		const counts = new Map<string, { rel: number; tags: Set<string>; lastSeen: number }>();
 		for (const r of rels) {
@@ -78,7 +79,7 @@ export class PensieveRelationshipService {
 			}
 		}
 
-		const ids = Array.from(counts.keys()) as UUID[];
+		const ids = Array.from(counts.keys()).filter((id) => id !== agentId) as UUID[];
 		const entities = typeof a.getEntitiesByIds === "function" ? await a.getEntitiesByIds(ids) : [];
 		const byId = new Map(entities.map((e) => [String(e.id), e]));
 
@@ -146,7 +147,7 @@ export class PensieveRelationshipService {
 		const a = adapter(runtime);
 		if (typeof a.getRelationships !== "function") return [];
 		const rels = await a.getRelationships({
-			...(entityIds.length > 0 ? { entityIds } : {}),
+			entityIds: entityIds.length > 0 ? entityIds : [runtime.agentId],
 			...(tags.length > 0 ? { tags } : {}),
 			limit,
 		});

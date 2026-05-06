@@ -5,6 +5,7 @@ const TOGGLE_CHAT = "CommandOrControl+Shift+Space";
 const OPEN_SETTINGS = "CommandOrControl+Shift+S";
 const OPEN_PENSIEVE = "CommandOrControl+Shift+P";
 const OPEN_ACTIVITY = "CommandOrControl+Shift+A";
+const OPEN_BROWSER = "CommandOrControl+Shift+B";
 
 export const shortcutsFeature: Feature = {
 	id: "shortcuts",
@@ -43,6 +44,15 @@ export const shortcutsFeature: Feature = {
 			console.warn(`[shortcuts] failed to register ${OPEN_ACTIVITY}`);
 		} else {
 			console.log(`[shortcuts] ${OPEN_ACTIVITY} → open activity`);
+		}
+
+		const okBrowser = GlobalShortcut.register(OPEN_BROWSER, () => {
+			deps.events.emit("ui:open-browser", {});
+		});
+		if (!okBrowser) {
+			console.warn(`[shortcuts] failed to register ${OPEN_BROWSER}`);
+		} else {
+			console.log(`[shortcuts] ${OPEN_BROWSER} → open browser`);
 		}
 	},
 };

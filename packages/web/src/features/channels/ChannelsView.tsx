@@ -19,6 +19,7 @@ import type {
 	ChannelsSnapshot,
 } from "@detour/shared";
 import { WebClient } from "../../api/client";
+import { useDetourTheme } from "../../useDetourTheme";
 
 const CHANNEL_ICONS: Record<string, string> = {
 	discord: "💬",
@@ -28,6 +29,7 @@ const CHANNEL_ICONS: Record<string, string> = {
 
 export function ChannelsView() {
 	const client = useMemo(() => new WebClient(), []);
+	useDetourTheme(client);
 	const [connected, setConnected] = useState(false);
 	const [snap, setSnap] = useState<ChannelsSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -281,6 +283,10 @@ function ChannelCard({
 
 					{channel.id === "imessage" && channel.pluginLoaded && (
 						<ImessageTccBanner client={client} />
+					)}
+
+					{(channel.id === "telegram" || channel.id === "discord") && channel.liveStatus === "online" && (
+						<OwnerPairingSection client={client} connector={channel.id} />
 					)}
 
 					{channel.id === "discord" && channel.liveStatus === "online" && (
@@ -545,5 +551,144 @@ function ChannelHistoryRow({ item }: { item: ActivityTrajectoryListItem }) {
 			</div>
 			<div className="channel-history-id">{item.id}</div>
 		</div>
+	);
+}
+
+/**
+ * Owner-binding section for Telegram + Discord cards.
+ * Issues a 6-digit pair code and walks the user through `/eliza_pair <code>`
+ * (Telegram) or `/eliza-pair <code>` (Discord) on their connector. Once the
+ * connector backend reports success, shows the bound owner identity and an
+ * Unbind button.
+ */
+function OwnerPairingSection({
+	client,
+	connector,
+}: {
+	client: WebClient;
+	connector: "telegram" | "discord";
+}) {
+	const [bound, setBound] = useState<{ externalId: string; displayHandle: string } | null>(null);
+	const [code, setCode] = useState<string | null>(null);
+	const [expiresAt, setExpiresAt] = useState<number | null>(null);
+	const [now, setNow] = useState(Date.now());
+	const [busy, setBusy] = useState(false);
+	const [err, setErr] = useState<string | null>(null);
+
+	const refresh = useCallback(async () => {
+		try {
+			const status = await client.ownerBindStatus(connector);
+			setBound(status.owner);
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : String(e));
+		}
+	}, [client, connector]);
+
+	useEffect(() => {
+		void refresh();
+		const t = setInterval(refresh, 5000);
+		return () => clearInterval(t);
+	}, [refresh]);
+
+	useEffect(() => {
+		if (!expiresAt) return;
+		const t = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(t);
+	}, [expiresAt]);
+
+	const generate = useCallback(async () => {
+		setBusy(true);
+		setErr(null);
+		try {
+			const r = await client.ownerBindGenerateCode(connector);
+			setCode(r.code);
+			setExpiresAt(r.expiresAt);
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	}, [client, connector]);
+
+	const unbind = useCallback(async () => {
+		if (!confirm(`Unbind ${connector} owner?`)) return;
+		setBusy(true);
+		setErr(null);
+		try {
+			await client.ownerBindUnbind(connector);
+			await refresh();
+			setCode(null);
+			setExpiresAt(null);
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	}, [client, connector, refresh]);
+
+	const slashCmd = connector === "telegram" ? "/eliza_pair" : "/eliza-pair";
+	const where = connector === "telegram"
+		? "Open Telegram, find @detour_squrriel_bot (or your bot), and send:"
+		: "Open Discord, DM the bot in any guild it's in, and send:";
+
+	const remaining = expiresAt ? Math.max(0, Math.floor((expiresAt - now) / 1000)) : 0;
+	const expired = expiresAt !== null && remaining === 0;
+
+	return (
+		<section className="channel-card-section">
+			<h4 className="channel-card-section-title">Owner pairing</h4>
+			{err && <div className="banner error" style={{ marginBottom: 8 }}>{err}</div>}
+			{bound ? (
+				<div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+					<span className="badge ok">paired</span>
+					<span className="hint" style={{ flex: 1 }}>
+						{bound.displayHandle} <span style={{ opacity: 0.6 }}>(id {bound.externalId})</span>
+					</span>
+					<button type="button" className="btn small ghost" disabled={busy} onClick={unbind}>
+						Unbind
+					</button>
+				</div>
+			) : (
+				<>
+					<div className="hint" style={{ marginBottom: 8, lineHeight: 1.5 }}>
+						Prove your {connector} account is the owner of this Detour install. Generate a one-time
+						code, then send <code>{slashCmd} &lt;code&gt;</code> from your account to the bot.
+					</div>
+					{code ? (
+						<div style={{ display: "grid", gap: 8 }}>
+							<div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+								<code style={{ fontSize: 22, letterSpacing: 4, padding: "6px 12px", background: "var(--bg-elevated)", borderRadius: 6 }}>
+									{code}
+								</code>
+								<button
+									type="button"
+									className="btn small ghost"
+									onClick={() => {
+										try { navigator.clipboard.writeText(code); } catch { /* noop */ }
+									}}
+								>
+									Copy
+								</button>
+								<span className={`hint ${expired ? "err" : ""}`} style={{ marginLeft: "auto" }}>
+									{expired ? "expired" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")} left`}
+								</span>
+							</div>
+							<div className="hint" style={{ lineHeight: 1.5 }}>
+								{where} <code>{slashCmd} {code}</code>
+							</div>
+							{expired && (
+								<button type="button" className="btn small" onClick={generate}>
+									Generate a new code
+								</button>
+							)}
+						</div>
+					) : (
+						<button type="button" className="btn small primary" disabled={busy} onClick={generate}>
+							{busy ? "Generating…" : `Generate ${connector} pair code`}
+						</button>
+					)}
+				</>
+			)}
+		</section>
 	);
 }

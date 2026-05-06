@@ -6,6 +6,7 @@ import { SavedLoginsTab } from "./SavedLoginsTab";
 import { BackendsTab } from "./BackendsTab";
 import { AppearanceTab } from "./AppearanceTab";
 import { AgentPermissionsTab } from "./AgentPermissionsTab";
+import { AgentCharacterTab } from "./AgentCharacterTab";
 import { ModelsTab } from "./ModelsTab";
 import { WindowTab } from "./WindowTab";
 import { OsPermissionsTab } from "./OsPermissionsTab";
@@ -13,7 +14,7 @@ import { LocalAITab } from "./LocalAITab";
 
 type Section = "configuration" | "vault";
 
-type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "agent" | "os" | "window";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "character" | "agent" | "os" | "window";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 
 const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
@@ -21,6 +22,7 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "providers", label: "Providers" },
 	{ id: "models", label: "Models & Routing" },
 	{ id: "local-ai", label: "Local AI" },
+	{ id: "character", label: "Agent Character" },
 	{ id: "agent", label: "Agent Permissions" },
 	{ id: "os", label: "OS Permissions" },
 	{ id: "window", label: "Window" },
@@ -96,6 +98,7 @@ export function SettingsView({ client }: { client: WebClient }) {
 						{configTab === "providers" && <ProvidersTab client={client} />}
 						{configTab === "models" && <ModelsTab client={client} />}
 						{configTab === "local-ai" && <LocalAITab client={client} />}
+						{configTab === "character" && <AgentCharacterTab client={client} />}
 						{configTab === "agent" && <AgentPermissionsTab client={client} />}
 						{configTab === "os" && <OsPermissionsTab client={client} />}
 						{configTab === "window" && <WindowTab client={client} />}
