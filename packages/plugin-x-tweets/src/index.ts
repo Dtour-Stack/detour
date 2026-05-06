@@ -13,6 +13,7 @@ import {
 	type Handler,
 	type HandlerCallback,
 	type IAgentRuntime,
+	getTrajectoryContext,
 	logger,
 	ModelType,
 	parseToonKeyValue,
@@ -21,6 +22,7 @@ import {
 	type Task,
 	type TaskMetadata,
 	type UUID,
+	withStandaloneTrajectory,
 } from "@elizaos/core";
 import { XClient, type XNotification, type XTweetSummary } from "./x-client";
 
@@ -801,6 +803,28 @@ type XAutonomyState = {
 	viewerScreenName: string;
 };
 
+type XTrajectoryAction = {
+	actionType: string;
+	actionName: string;
+	parameters: Record<string, unknown>;
+	success: boolean;
+	result?: Record<string, unknown>;
+	error?: string;
+};
+
+type XTrajectoryService = {
+	completeStep?: (
+		trajectoryId: string,
+		stepId: string,
+		action: XTrajectoryAction,
+		rewardInfo?: {
+			reward?: number;
+			components?: Record<string, number>;
+		},
+	) => void;
+	flushWriteQueue?: (trajectoryId: string) => Promise<void> | void;
+};
+
 function boundedSetting(runtime: IAgentRuntime, key: string, defaultValue: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, readNumberSetting(runtime, key, defaultValue)));
 }
@@ -1228,7 +1252,76 @@ async function updateXAutonomyTask(runtime: IAgentRuntime, task: Task, state: XA
 	}).catch(() => {});
 }
 
+function xTrajectoryService(runtime: IAgentRuntime): XTrajectoryService | null {
+	const service = runtime.getService("trajectories");
+	if (!service || typeof service !== "object") return null;
+	const candidate = service as XTrajectoryService;
+	return typeof candidate.completeStep === "function" ? candidate : null;
+}
+
+function xHandledSuccess(handled: Array<Record<string, unknown>>): boolean {
+	return handled.every((entry) => entry.success !== false);
+}
+
+async function completeXAutonomyTrajectoryStep(
+	runtime: IAgentRuntime,
+	settings: XAutonomySettings,
+	state: XAutonomyState,
+): Promise<void> {
+	const context = getTrajectoryContext();
+	if (!context?.trajectoryId || !context.trajectoryStepId) return;
+	const service = xTrajectoryService(runtime);
+	if (!service?.completeStep) return;
+	const success = xHandledSuccess(state.handled);
+	const failed = state.handled.filter((entry) => entry.success === false);
+	service.completeStep(
+		context.trajectoryId,
+		context.trajectoryStepId,
+		{
+			actionType: "x_autonomy",
+			actionName: X_AUTONOMY_TASK_NAME,
+			parameters: {
+				viewerScreenName: state.viewerScreenName,
+				writeEnabled: settings.writeEnabled,
+				statusPostingEnabled: settings.statusPostingEnabled,
+				discoveryEnabled: settings.discoveryEnabled,
+				proactiveEngagementEnabled: settings.proactiveEngagementEnabled,
+				maxReplies: settings.maxReplies,
+				maxDiscovery: settings.maxDiscovery,
+			},
+			success,
+			result: {
+				handledCount: state.handled.length,
+				handled: state.handled,
+			},
+			...(failed.length > 0 ? { error: JSON.stringify(failed.slice(0, 5)) } : {}),
+		},
+		{
+			reward: success ? 1 : 0,
+			components: {
+				xHandledCount: state.handled.length,
+				xSuccess: success ? 1 : 0,
+			},
+		},
+	);
+	await service.flushWriteQueue?.(context.trajectoryId);
+}
+
 async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise<void> {
+	await withStandaloneTrajectory(
+		runtime,
+		{
+			source: "x_autonomy",
+			metadata: {
+				taskId: task.id ?? "",
+				taskName: X_AUTONOMY_TASK_NAME,
+			},
+		},
+		() => executeXAutonomyTaskInner(runtime, task),
+	);
+}
+
+async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Promise<void> {
 	if (!readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return;
 	const { client, error } = buildClient(runtime);
 	if (!client) {
@@ -1246,6 +1339,7 @@ async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise
 		await processXMentionSearch(runtime, client, viewer.screenName, settings, state);
 		await processXDiscovery(runtime, client, viewer.screenName, settings, state);
 		await processXStatusPost(runtime, task, client, viewer.screenName, settings, state);
+		await completeXAutonomyTrajectoryStep(runtime, settings, state);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		logger.warn({ src: "x-autonomy", error: message }, "X autonomy tick failed");
