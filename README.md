@@ -131,6 +131,14 @@ See `.github/RELEASING.md` for the long form.
 
 ---
 
+## Community
+
+Building on **elizaOS v3**, learning the framework, or experimenting with agents on top of it? The warmest place to talk shop is **[Cozy Devs on Discord](https://discord.gg/BfTrruWcZ)**. Calm, technical, no shilling — just builders sharing what works and what's broken.
+
+Detour's own X/Twitter is **[@detour_squirrel](https://x.com/detour_squirrel)** — that's the agent's account, not mine. Follow if you want to watch a tray-app squirrel post about itself.
+
+---
+
 ## Contributing
 
 This is a personal opinionated app. PRs that align with how I want the project to evolve are welcome; PRs that try to broaden it into a generic eliza distribution probably aren't (use Milady or elizaOS for that). If you're not sure, open an issue first.
