@@ -19,8 +19,11 @@ const DETOUR_SQUIRREL_KNOWLEDGE_FACTS = [
 ];
 
 function detourSquirrelKnowledge(): CharacterInput["knowledge"] {
-	const directory = join(import.meta.dir, "knowledge", "detour-squirrel");
-	return existsSync(directory)
+	const directory = [
+		join(import.meta.dir, "knowledge", "detour-squirrel"),
+		join(import.meta.dir, "..", "knowledge", "detour-squirrel"),
+	].find((candidate) => existsSync(candidate));
+	return directory
 		? [...DETOUR_SQUIRREL_KNOWLEDGE_FACTS, { directory, shared: true }]
 		: [...DETOUR_SQUIRREL_KNOWLEDGE_FACTS];
 }
