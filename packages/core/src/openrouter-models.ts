@@ -51,8 +51,8 @@ async function fetchModelList(url: string, headers: HeadersInit): Promise<OpenRo
 
 function normalizeModel(raw: RawOpenRouterModel): OpenRouterModelInfo | null {
 	const id = stringValue(raw.id);
-	const name = stringValue(raw.name) ?? id;
 	if (!id) return null;
+	const name = stringValue(raw.name) ?? id;
 	const architecture = objectValue(raw.architecture);
 	const pricing = objectValue(raw.pricing);
 	const inputModalities = stringArray(architecture?.input_modalities);

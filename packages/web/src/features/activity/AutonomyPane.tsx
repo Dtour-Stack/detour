@@ -110,6 +110,212 @@ function HandledRow({ item }: { item: ActivityXAutonomyHandled }) {
 	);
 }
 
+function AutonomyToolbar({ data }: { data: ActivityAutonomySnapshot }) {
+	return (
+		<div className="pensieve-toolbar">
+			<span className={`badge ${data.enabled ? "ok" : "muted"}`}>{data.enabled ? "enabled" : "disabled"}</span>
+			<span className={`badge ${data.running ? "ok" : "muted"}`}>{data.running ? "running" : "idle"}</span>
+			<span className={`badge ${runnerTone(data.runner)}`}>{runnerLabel(data.runner)}</span>
+			{data.thinking && <span className="badge info">thinking</span>}
+			<span className={`badge ${data.x.available ? "ok" : "muted"}`}>X {data.x.available ? "ready" : "missing"}</span>
+			<span style={{ flex: 1 }} />
+			<span className="hint">polling 3s</span>
+		</div>
+	);
+}
+
+function ContinuousThinkingSection({
+	busy,
+	data,
+	onSetEnabled,
+}: {
+	busy: boolean;
+	data: ActivityAutonomySnapshot;
+	onSetEnabled: (on: boolean) => void;
+}) {
+	return (
+		<section className="autonomy-section">
+			<div className="autonomy-section-head">
+				<h3 className="autonomy-title">Continuous Thinking</h3>
+				<div className="row" style={{ gap: 8 }}>
+					<button type="button" className="btn small" disabled={busy || data.enabled} onClick={() => onSetEnabled(true)}>
+						Enable
+					</button>
+					<button type="button" className="btn small ghost" disabled={busy || !data.enabled} onClick={() => onSetEnabled(false)}>
+						Disable
+					</button>
+				</div>
+			</div>
+			<div className="autonomy-metrics">
+				<Metric label="Interval" value={fmtInterval(data.intervalMs)} />
+				<Metric label="Runner" value={runnerLabel(data.runner)} />
+				<Metric label="Room" value={data.autonomousRoomId ?? "-"} />
+			</div>
+		</section>
+	);
+}
+
+function LoopIntervalSection({
+	busy,
+	data,
+	draftInterval,
+	onApply,
+	onDraft,
+}: {
+	busy: boolean;
+	data: ActivityAutonomySnapshot;
+	draftInterval: number | null;
+	onApply: (ms: number) => void;
+	onDraft: (ms: number) => void;
+}) {
+	return (
+		<section className="autonomy-section">
+			<div className="autonomy-section-head">
+				<h3 className="autonomy-title">Loop Interval</h3>
+				<div className="row" style={{ gap: 4 }}>
+					{PRESETS.map((ms) => (
+						<button
+							key={ms}
+							type="button"
+							className={`btn small ${draftInterval === ms ? "" : "ghost"}`}
+							disabled={busy}
+							onClick={() => onDraft(ms)}
+						>
+							{fmtInterval(ms)}
+						</button>
+					))}
+				</div>
+			</div>
+			<div className="row" style={{ gap: 6 }}>
+				<input
+					type="number"
+					min={5}
+					max={600}
+					step={5}
+					value={Math.round((draftInterval ?? data.intervalMs) / 1000)}
+					onChange={(e) => {
+						const seconds = Number(e.target.value);
+						const clamped = Number.isFinite(seconds) ? Math.max(5, Math.min(600, seconds)) : 5;
+						onDraft(clamped * 1000);
+					}}
+					className="pensieve-input"
+					style={{ width: 100 }}
+				/>
+				<span className="hint">seconds</span>
+				<button
+					type="button"
+					className="btn small"
+					disabled={busy || draftInterval === null || draftInterval === data.intervalMs}
+					onClick={() => draftInterval !== null && onApply(draftInterval)}
+				>
+					Apply
+				</button>
+			</div>
+		</section>
+	);
+}
+
+function WorkersSection({ tasks }: { tasks: ActivityAutonomyTask[] }) {
+	return (
+		<section className="autonomy-section">
+			<div className="autonomy-section-head">
+				<h3 className="autonomy-title">Autonomous Workers</h3>
+				<span className="badge muted">{tasks.length} tasks</span>
+			</div>
+			{tasks.length === 0 ? (
+				<div className="empty">No autonomous workers are scheduled.</div>
+			) : (
+				<div className="pensieve-task-list">
+					{tasks.map((task) => <TaskRow key={task.id} task={task} />)}
+				</div>
+			)}
+		</section>
+	);
+}
+
+function XBadges({ x }: { x: ActivityAutonomySnapshot["x"] }) {
+	return (
+		<div className="row" style={{ gap: 4 }}>
+			<span className={`badge ${x.enabled ? "ok" : "muted"}`}>{x.enabled ? "enabled" : "disabled"}</span>
+			<span className={`badge ${x.writeEnabled ? "ok" : "warn"}`}>{x.writeEnabled ? "write on" : "dry run"}</span>
+			<span className={`badge ${x.statusPostingEnabled ? "ok" : "muted"}`}>status {x.statusPostingEnabled ? "on" : "off"}</span>
+			<span className={`badge ${x.discoveryEnabled ? "ok" : "muted"}`}>discovery {x.discoveryEnabled ? "on" : "off"}</span>
+			<span className={`badge ${x.proactiveEngagementEnabled ? "ok" : "muted"}`}>proactive {x.proactiveEngagementEnabled ? "on" : "dry"}</span>
+			<span className={`badge ${x.followEnabled ? "ok" : "muted"}`}>follow {x.followEnabled ? "on" : "off"}</span>
+		</div>
+	);
+}
+
+function XMetrics({ x }: { x: ActivityAutonomySnapshot["x"] }) {
+	return (
+		<div className="autonomy-metrics">
+			<Metric label="Notify loop" value={fmtInterval(x.intervalMs)} />
+			<Metric label="Status loop" value={fmtInterval(x.statusIntervalMs)} />
+			<Metric label="Discovery loop" value={fmtInterval(x.discoveryIntervalMs)} />
+			<Metric label="Last run" value={fmtTime(x.lastRunAt)} />
+			<Metric label="Last status" value={fmtTime(x.lastStatusAt)} />
+			<Metric label="Last discovery" value={fmtTime(x.lastDiscoveryAt)} />
+			<Metric label="Last tweet" value={x.lastStatusTweetId ?? "-"} />
+			<Metric label="Handled" value={String(x.lastHandledCount)} />
+			<Metric label="Discover max" value={String(x.maxDiscoveryPerTick)} />
+		</div>
+	);
+}
+
+function XAutonomySection({ data }: { data: ActivityAutonomySnapshot }) {
+	return (
+		<section className="autonomy-section">
+			<div className="autonomy-section-head">
+				<h3 className="autonomy-title">X Autonomy</h3>
+				<XBadges x={data.x} />
+			</div>
+			<XMetrics x={data.x} />
+			{data.x.discoveryQueries.length > 0 && (
+				<div className="hint autonomy-query-list">queries: {data.x.discoveryQueries.join(", ")}</div>
+			)}
+			{data.x.lastHandled.length > 0 ? (
+				<div className="autonomy-handled-list">
+					{data.x.lastHandled.map((item, i) => <HandledRow key={`${item.action}-${i}`} item={item} />)}
+				</div>
+			) : (
+				<div className="empty autonomy-empty-inline">No recent X actions.</div>
+			)}
+		</section>
+	);
+}
+
+function ImprovementSection({ data }: { data: ActivityAutonomySnapshot }) {
+	const improvement = data.improvement;
+	return (
+		<section className="autonomy-section">
+			<div className="autonomy-section-head">
+				<h3 className="autonomy-title">Continuous Improvement</h3>
+				<div className="row" style={{ gap: 4 }}>
+					<span className={`badge ${improvement.available ? "ok" : "muted"}`}>
+						{improvement.available ? "ready" : "missing"}
+					</span>
+					<span className={`badge ${improvement.enabled ? "ok" : "muted"}`}>
+						{improvement.enabled ? "enabled" : "disabled"}
+					</span>
+				</div>
+			</div>
+			<div className="autonomy-metrics">
+				<Metric label="Loop" value={fmtInterval(improvement.intervalMs)} />
+				<Metric label="Last run" value={fmtTime(improvement.lastRunAt)} />
+				<Metric label="Result" value={improvement.lastResult ?? "-"} />
+				<Metric label="Category" value={improvement.lastCategory ?? "-"} />
+				<Metric label="Memories" value={String(improvement.lastMemoryIds.length)} />
+				<Metric label="Error" value={improvement.lastError ?? "-"} />
+			</div>
+			{improvement.lastProposal ? (
+				<div className="hint autonomy-query-list">{improvement.lastProposal}</div>
+			) : (
+				<div className="empty autonomy-empty-inline">No improvement reflection yet.</div>
+			)}
+		</section>
+	);
+}
+
 export function AutonomyPane({ client }: { client: WebClient }) {
 	const fetcher = useCallback(() => client.activityAutonomy(), [client]);
 	const { data, error, refresh } = usePoller<ActivityAutonomySnapshot>(fetcher, 3000);
@@ -160,171 +366,20 @@ export function AutonomyPane({ client }: { client: WebClient }) {
 
 	return (
 		<div className="autonomy-pane">
-			<div className="pensieve-toolbar">
-				<span className={`badge ${data.enabled ? "ok" : "muted"}`}>{data.enabled ? "enabled" : "disabled"}</span>
-				<span className={`badge ${data.running ? "ok" : "muted"}`}>{data.running ? "running" : "idle"}</span>
-				<span className={`badge ${runnerTone(data.runner)}`}>{runnerLabel(data.runner)}</span>
-				{data.thinking && <span className="badge info">thinking</span>}
-				<span className={`badge ${data.x.available ? "ok" : "muted"}`}>X {data.x.available ? "ready" : "missing"}</span>
-				<span style={{ flex: 1 }} />
-				<span className="hint">polling 3s</span>
-			</div>
-
+			<AutonomyToolbar data={data} />
 			{actionError && <div className="banner error" style={{ margin: "8px 18px 0" }}>{actionError}</div>}
-
 			<div className="autonomy-body">
-				<section className="autonomy-section">
-					<div className="autonomy-section-head">
-						<h3 className="autonomy-title">Continuous Thinking</h3>
-						<div className="row" style={{ gap: 8 }}>
-							<button
-								type="button"
-								className="btn small"
-								disabled={busy || data.enabled}
-								onClick={() => setEnabled(true)}
-							>
-								Enable
-							</button>
-							<button
-								type="button"
-								className="btn small ghost"
-								disabled={busy || !data.enabled}
-								onClick={() => setEnabled(false)}
-							>
-								Disable
-							</button>
-						</div>
-					</div>
-					<div className="autonomy-metrics">
-						<Metric label="Interval" value={fmtInterval(data.intervalMs)} />
-						<Metric label="Runner" value={runnerLabel(data.runner)} />
-						<Metric label="Room" value={data.autonomousRoomId ?? "-"} />
-					</div>
-				</section>
-
-				<section className="autonomy-section">
-					<div className="autonomy-section-head">
-						<h3 className="autonomy-title">Loop Interval</h3>
-						<div className="row" style={{ gap: 4 }}>
-							{PRESETS.map((ms) => (
-								<button
-									key={ms}
-									type="button"
-									className={`btn small ${draftInterval === ms ? "" : "ghost"}`}
-									disabled={busy}
-									onClick={() => setDraftInterval(ms)}
-								>
-									{fmtInterval(ms)}
-								</button>
-							))}
-						</div>
-					</div>
-					<div className="row" style={{ gap: 6 }}>
-						<input
-							type="number"
-							min={5}
-							max={600}
-							step={5}
-							value={Math.round((draftInterval ?? data.intervalMs) / 1000)}
-							onChange={(e) => setDraftInterval(Number(e.target.value) * 1000)}
-							className="pensieve-input"
-							style={{ width: 100 }}
-						/>
-						<span className="hint">seconds</span>
-						<button
-							type="button"
-							className="btn small"
-							disabled={busy || draftInterval === null || draftInterval === data.intervalMs}
-							onClick={() => draftInterval !== null && applyInterval(draftInterval)}
-						>
-							Apply
-						</button>
-					</div>
-				</section>
-
-				<section className="autonomy-section">
-					<div className="autonomy-section-head">
-						<h3 className="autonomy-title">Autonomous Workers</h3>
-						<span className="badge muted">{data.tasks.length} tasks</span>
-					</div>
-					{data.tasks.length === 0 ? (
-						<div className="empty">No autonomous workers are scheduled.</div>
-					) : (
-						<div className="pensieve-task-list">
-							{data.tasks.map((task) => <TaskRow key={task.id} task={task} />)}
-						</div>
-					)}
-				</section>
-
-				<section className="autonomy-section">
-					<div className="autonomy-section-head">
-						<h3 className="autonomy-title">X Autonomy</h3>
-						<div className="row" style={{ gap: 4 }}>
-							<span className={`badge ${data.x.enabled ? "ok" : "muted"}`}>{data.x.enabled ? "enabled" : "disabled"}</span>
-							<span className={`badge ${data.x.writeEnabled ? "ok" : "warn"}`}>{data.x.writeEnabled ? "write on" : "dry run"}</span>
-							<span className={`badge ${data.x.statusPostingEnabled ? "ok" : "muted"}`}>
-								status {data.x.statusPostingEnabled ? "on" : "off"}
-							</span>
-							<span className={`badge ${data.x.discoveryEnabled ? "ok" : "muted"}`}>
-								discovery {data.x.discoveryEnabled ? "on" : "off"}
-							</span>
-							<span className={`badge ${data.x.proactiveEngagementEnabled ? "ok" : "muted"}`}>
-								proactive {data.x.proactiveEngagementEnabled ? "on" : "dry"}
-							</span>
-							<span className={`badge ${data.x.followEnabled ? "ok" : "muted"}`}>
-								follow {data.x.followEnabled ? "on" : "off"}
-							</span>
-						</div>
-					</div>
-					<div className="autonomy-metrics">
-						<Metric label="Notify loop" value={fmtInterval(data.x.intervalMs)} />
-						<Metric label="Status loop" value={fmtInterval(data.x.statusIntervalMs)} />
-						<Metric label="Discovery loop" value={fmtInterval(data.x.discoveryIntervalMs)} />
-						<Metric label="Last run" value={fmtTime(data.x.lastRunAt)} />
-						<Metric label="Last status" value={fmtTime(data.x.lastStatusAt)} />
-						<Metric label="Last discovery" value={fmtTime(data.x.lastDiscoveryAt)} />
-						<Metric label="Last tweet" value={data.x.lastStatusTweetId ?? "-"} />
-						<Metric label="Handled" value={String(data.x.lastHandledCount)} />
-						<Metric label="Discover max" value={String(data.x.maxDiscoveryPerTick)} />
-					</div>
-					{data.x.discoveryQueries.length > 0 && (
-						<div className="hint autonomy-query-list">queries: {data.x.discoveryQueries.join(", ")}</div>
-					)}
-					{data.x.lastHandled.length > 0 ? (
-						<div className="autonomy-handled-list">
-							{data.x.lastHandled.map((item, i) => <HandledRow key={`${item.action}-${i}`} item={item} />)}
-						</div>
-					) : (
-						<div className="empty autonomy-empty-inline">No recent X actions.</div>
-					)}
-				</section>
-
-				<section className="autonomy-section">
-					<div className="autonomy-section-head">
-						<h3 className="autonomy-title">Continuous Improvement</h3>
-						<div className="row" style={{ gap: 4 }}>
-							<span className={`badge ${data.improvement.available ? "ok" : "muted"}`}>
-								{data.improvement.available ? "ready" : "missing"}
-							</span>
-							<span className={`badge ${data.improvement.enabled ? "ok" : "muted"}`}>
-								{data.improvement.enabled ? "enabled" : "disabled"}
-							</span>
-						</div>
-					</div>
-					<div className="autonomy-metrics">
-						<Metric label="Loop" value={fmtInterval(data.improvement.intervalMs)} />
-						<Metric label="Last run" value={fmtTime(data.improvement.lastRunAt)} />
-						<Metric label="Result" value={data.improvement.lastResult ?? "-"} />
-						<Metric label="Category" value={data.improvement.lastCategory ?? "-"} />
-						<Metric label="Memories" value={String(data.improvement.lastMemoryIds.length)} />
-						<Metric label="Error" value={data.improvement.lastError ?? "-"} />
-					</div>
-					{data.improvement.lastProposal ? (
-						<div className="hint autonomy-query-list">{data.improvement.lastProposal}</div>
-					) : (
-						<div className="empty autonomy-empty-inline">No improvement reflection yet.</div>
-					)}
-				</section>
+				<ContinuousThinkingSection busy={busy} data={data} onSetEnabled={(on) => void setEnabled(on)} />
+				<LoopIntervalSection
+					busy={busy}
+					data={data}
+					draftInterval={draftInterval}
+					onApply={(ms) => void applyInterval(ms)}
+					onDraft={setDraftInterval}
+				/>
+				<WorkersSection tasks={data.tasks} />
+				<XAutonomySection data={data} />
+				<ImprovementSection data={data} />
 			</div>
 		</div>
 	);

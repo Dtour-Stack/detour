@@ -104,72 +104,100 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 	const space = trimmed.search(/\s/);
 	const command = (space < 0 ? trimmed : trimmed.slice(0, space)).toLowerCase();
 	const tail = space < 0 ? "" : trimmed.slice(space + 1).trim();
-	if (command === "/help" || command === "/commands") {
-		return {
-			kind: "reply",
-			text: [
-				"Native commands:",
-				"/browser <url or search>",
-				"/open <url or search>",
-				"/inspect",
-				"/script <javascript>",
-				"/logins [domain]",
-				"/login <source> <identifier> [url]",
-				"/1password <identifier> [url]",
-				"/pet [name]",
-				"/hatch <concept>",
-			].join("\n"),
-		};
+	switch (command) {
+		case "/help":
+		case "/commands":
+			return slashHelp();
+		case "/browser":
+		case "/open":
+		case "/web":
+		case "/internet":
+			return slashBrowser(tail);
+		case "/logins":
+		case "/passwords":
+			return { kind: "action", action: loginListAction, options: tail ? { domain: tail } : {} };
+		case "/inspect":
+		case "/read-page":
+			return { kind: "action", action: browserInspectAction, options: {} };
+		case "/script":
+		case "/js":
+			return slashScript(tail);
+		case "/login":
+		case "/fill-login":
+			return slashLogin(tail);
+		case "/1password":
+		case "/op":
+			return slashOnePassword(tail);
+		case "/pet":
+			return { kind: "action", action: codexPetAction, options: {} };
+		case "/hatch":
+			return { kind: "action", action: codexHatchAction, options: {} };
+		default:
+			return null;
 	}
-	if (command === "/browser" || command === "/open" || command === "/web" || command === "/internet") {
-		if (!tail) return { kind: "reply", text: "Usage: /browser <url or search>" };
-		return { kind: "action", action: browserOpenAction, options: { url: tail, newTab: true } };
+}
+
+function slashHelp(): NativeSlashDispatch {
+	return {
+		kind: "reply",
+		text: [
+			"Native commands:",
+			"/browser <url or search>",
+			"/open <url or search>",
+			"/inspect",
+			"/script <javascript>",
+			"/logins [domain]",
+			"/login <source> <identifier> [url]",
+			"/1password <identifier> [url]",
+			"/pet [name]",
+			"/hatch <concept>",
+		].join("\n"),
+	};
+}
+
+function slashBrowser(tail: string): NativeSlashDispatch {
+	if (!tail) return { kind: "reply", text: "Usage: /browser <url or search>" };
+	return { kind: "action", action: browserOpenAction, options: { url: tail, newTab: true } };
+}
+
+function slashScript(tail: string): NativeSlashDispatch {
+	if (!tail) return { kind: "reply", text: "Usage: /script <javascript>" };
+	return { kind: "action", action: browserScriptAction, options: { script: tail } };
+}
+
+function slashLogin(tail: string): NativeSlashDispatch {
+	const parts = tail.split(/\s+/).filter(Boolean);
+	const source = parts[0];
+	const identifier = parts[1];
+	if (source !== "in-house" && source !== "1password" && source !== "bitwarden") {
+		return { kind: "reply", text: "Usage: /login <in-house|1password|bitwarden> <identifier> [url]" };
 	}
-	if (command === "/logins" || command === "/passwords") {
-		return { kind: "action", action: loginListAction, options: tail ? { domain: tail } : {} };
-	}
-	if (command === "/inspect" || command === "/read-page") {
-		return { kind: "action", action: browserInspectAction, options: {} };
-	}
-	if (command === "/script" || command === "/js") {
-		if (!tail) return { kind: "reply", text: "Usage: /script <javascript>" };
-		return { kind: "action", action: browserScriptAction, options: { script: tail } };
-	}
-	if (command === "/login" || command === "/fill-login") {
-		const parts = tail.split(/\s+/).filter(Boolean);
-		const source = parts[0];
-		const identifier = parts[1];
-		if (source !== "in-house" && source !== "1password" && source !== "bitwarden") {
-			return { kind: "reply", text: "Usage: /login <in-house|1password|bitwarden> <identifier> [url]" };
-		}
-		if (!identifier) return { kind: "reply", text: "Usage: /login <source> <identifier> [url]" };
-		const targetUrl = parts.slice(2).join(" ");
-		return {
-			kind: "action",
-			action: browserFillLoginAction,
-			options: { source, identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
-		};
-	}
-	if (command === "/1password" || command === "/op") {
-		const parts = tail.split(/\s+/).filter(Boolean);
-		const identifier = parts[0];
-		if (!identifier) return { kind: "reply", text: "Usage: /1password <identifier> [url]" };
-		const targetUrl = parts.slice(1).join(" ");
-		return {
-			kind: "action",
-			action: browserFillLoginAction,
-			options: { source: "1password", identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
-		};
-	}
-	if (command === "/pet") return { kind: "action", action: codexPetAction, options: {} };
-	if (command === "/hatch") return { kind: "action", action: codexHatchAction, options: {} };
-	return null;
+	if (!identifier) return { kind: "reply", text: "Usage: /login <source> <identifier> [url]" };
+	const targetUrl = parts.slice(2).join(" ");
+	return {
+		kind: "action",
+		action: browserFillLoginAction,
+		options: { source, identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
+	};
+}
+
+function slashOnePassword(tail: string): NativeSlashDispatch {
+	const parts = tail.split(/\s+/).filter(Boolean);
+	const identifier = parts[0];
+	if (!identifier) return { kind: "reply", text: "Usage: /1password <identifier> [url]" };
+	const targetUrl = parts.slice(1).join(" ");
+	return {
+		kind: "action",
+		action: browserFillLoginAction,
+		options: { source: "1password", identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
+	};
 }
 
 type RuntimeState = {
 	runtime: AgentRuntime;
 	provider: ProviderId | "codex-chatgpt";
 };
+type RuntimeProvider = RuntimeState["provider"];
 
 const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugin>> = {
 	anthropic: async () => (await import("@elizaos/plugin-anthropic")).default,
@@ -183,6 +211,7 @@ type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
 export class RuntimeService {
 	private current: RuntimeState | null = null;
 	private buildPromise: Promise<RuntimeState | null> | null = null;
+	private providerPickPromise: Promise<RuntimeProvider | null> | null = null;
 	private afterBuildHooks: AfterBuildHook[] = [];
 
 	/**
@@ -419,7 +448,8 @@ export class RuntimeService {
 				type: "DM",
 			});
 		} catch (err) {
-			console.warn("[runtime] ensureConnection failed:", err instanceof Error ? err.message : err);
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to prepare chat connection: ${msg}`);
 		}
 		// Build Memory directly instead of via createMessageMemory(). The
 		// helper adds `metadata.scope: "private"` whenever agentId is set,
@@ -502,15 +532,42 @@ export class RuntimeService {
 
 	private async build(): Promise<RuntimeState | null> {
 		await this.vault.loadKeysIntoEnv();
-		const activeProvider = await this.vault.getActiveProvider();
-		const provider =
-			(activeProvider ? await this.resolveActiveProvider(activeProvider) : null)
-			?? await this.pickFromPriority();
+		const provider = await this.pickProvider();
 		if (!provider) return null;
 
 		const llmPlugin = await PROVIDER_PLUGINS[provider]();
+		const character = await this.buildCharacter();
+		const channelResolved = await this.resolveChannelPlugins();
+		const settings = await this.buildRuntimeSettings(channelResolved.settings);
+
+		const runtime = new AgentRuntime({
+			character,
+			plugins: this.basePlugins(llmPlugin),
+			enableAutonomy: true,
+			settings,
+		});
+		await runtime.initialize();
+		await this.waitForOwnerBind(runtime);
+		await this.registerChannelPlugins(runtime, channelResolved.plugins);
+		this.wirePairingCommands(runtime);
+		await this.provisionRuntime(runtime);
+		this.startTaskServiceTimer(runtime);
+		await runtime.ensureConnection({
+			entityId: USER_ID,
+			roomId: ROOM_ID,
+			worldId: WORLD_ID,
+			userName: "User",
+			source: "tray-app",
+			channelId: "chat",
+			type: ChannelType.DM,
+		});
+
+		return { runtime, provider };
+	}
+
+	private async buildCharacter(): Promise<Character> {
 		const characterConfig = this.config ? await this.config.getCharacter() : undefined;
-		const character: Character = createCharacter(toElizaCharacter(characterConfig ?? {
+		return createCharacter(toElizaCharacter(characterConfig ?? {
 			name: "Detour Squirrel",
 			username: "detour_squirrel",
 			system: "You are Detour Squirrel, Dexploarer's sidequest agent.",
@@ -522,34 +579,33 @@ export class RuntimeService {
 			postExamples: [],
 			messageExamples: [],
 		}));
+	}
 
-		// Channel plugins load conditionally based on vault credentials —
-		// no Discord bot in memory unless DISCORD_API_TOKEN is set, etc.
-		// Channel credentials also need to flow into AgentRuntime.settings
-		// so plugins' `runtime.getSetting("DISCORD_API_TOKEN")` finds them.
-		// (eliza's getSetting checks character.secrets/settings + opts.settings,
-		// NOT process.env.)
-		const channelResolved = this.channels
+	private async resolveChannelPlugins(): Promise<{ plugins: Plugin[]; settings: Record<string, string> }> {
+		const resolved = this.channels
 			? await this.channels.resolvePlugins()
 			: { plugins: [], settings: {} as Record<string, string> };
-		if (channelResolved.plugins.length > 0) {
-			console.log(`[runtime] loading ${channelResolved.plugins.length} channel plugin(s): ${channelResolved.plugins.map((p) => p.name).join(", ")}`);
+		if (resolved.plugins.length > 0) {
+			console.log(`[runtime] loading ${resolved.plugins.length} channel plugin(s): ${resolved.plugins.map((p) => p.name).join(", ")}`);
 		}
+		return resolved;
+	}
 
-		// Build the consolidated settings map that AgentRuntime sees via
-		// `runtime.getSetting()`. This is the only place eliza's `provisionAgent`
-		// looks for EMBEDDING_DIMENSION (which routes vectors to the right
-		// dim_N column in the embeddings table). Our local llama-server ships
-		// bge-small-en-v1.5 (384-dim) so we pin the dimension here. The
-		// OPENAI_EMBEDDING_URL/KEY are also threaded so the embedding plugin
-		// finds the local server even when process.env hasn't propagated yet.
+	private async buildRuntimeSettings(channelSettings: Record<string, string>): Promise<Record<string, string>> {
 		const settings: Record<string, string> = {
-			...channelResolved.settings,
+			...channelSettings,
 			EMBEDDING_DIMENSION: "384",
+			OPENAI_EMBEDDING_DIMENSIONS: "384",
 		};
 		settings.TELEGRAM_AUTO_REPLY ??= "true";
 		settings.DISCORD_AUTO_REPLY ??= "true";
 		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "true";
+		this.loadEmbeddingSettings(settings);
+		await this.loadXSettings(settings);
+		return settings;
+	}
+
+	private loadEmbeddingSettings(settings: Record<string, string>): void {
 		const llamaUrl = process.env.OPENAI_EMBEDDING_URL;
 		if (typeof llamaUrl === "string" && llamaUrl.length > 0 && !settings.OPENAI_EMBEDDING_URL) {
 			settings.OPENAI_EMBEDDING_URL = llamaUrl;
@@ -557,13 +613,9 @@ export class RuntimeService {
 		if (process.env.OPENAI_EMBEDDING_API_KEY && !settings.OPENAI_EMBEDDING_API_KEY) {
 			settings.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY;
 		}
-		settings.OPENAI_EMBEDDING_DIMENSIONS = "384";
+	}
 
-		// X (Twitter) credentials — read directly from vault and thread into
-		// runtime settings so the @detour/plugin-x-tweets actions can find
-		// them via runtime.getSetting(). These aren't a "channel" in the
-		// messaging-service sense (X is an outbound action surface, no
-		// inbound subscription), so they bypass channelResolved.settings.
+	private async loadXSettings(settings: Record<string, string>): Promise<void> {
 		try {
 			const v = await this.vault.vault();
 			for (const key of ["X_AUTH_TOKEN", "X_CT0", "X_USER_AGENT"]) {
@@ -578,53 +630,37 @@ export class RuntimeService {
 		} catch (err) {
 			console.warn("[runtime] x-creds load failed:", err instanceof Error ? err.message : err);
 		}
+	}
 
-		const runtime = new AgentRuntime({
-			character,
-			// embeddingOpenAIPlugin first so it wins TEXT_EMBEDDING registration
-			// (eliza picks first-registered for equal priority). It internally
-			// falls back to zero vectors when OPENAI_EMBEDDING_API_KEY is unset,
-			// so embeddingStubPlugin is now redundant — kept as final safety net.
-			// Channel plugins are registered SEPARATELY after runtime.initialize()
-			// so we can guarantee OWNER_BIND_VERIFY is fully started BEFORE the
-			// telegram/discord pairing services run their start-time check
-			// (they use sync getService("OWNER_BIND_VERIFY") which returns null
-			// until OUR service is in runtime.services).
-			plugins: [
-				sqlPlugin,
-				llmPlugin,
-				embeddingOpenAIPlugin,
-				embeddingStubPlugin,
-				vaultToolsPlugin,
-				pensieveToolsPlugin,
-				codexPetsPlugin,
-				xTweetsPlugin,
-				cronToolsPlugin,
-				...(this.ownerBind ? [makeOwnerBindPlugin(this.ownerBind)] : []),
-			],
-			enableAutonomy: true,
-			settings,
-		});
-		await runtime.initialize();
+	private basePlugins(llmPlugin: Plugin): Plugin[] {
+		return [
+			sqlPlugin,
+			llmPlugin,
+			embeddingOpenAIPlugin,
+			embeddingStubPlugin,
+			vaultToolsPlugin,
+			pensieveToolsPlugin,
+			codexPetsPlugin,
+			xTweetsPlugin,
+			cronToolsPlugin,
+			...(this.ownerBind ? [makeOwnerBindPlugin(this.ownerBind)] : []),
+		];
+	}
 
-		// Wait until OWNER_BIND_VERIFY is actually started before letting any
-		// channel plugin register. After this resolves, runtime.getService(
-		// "OWNER_BIND_VERIFY") returns truthy, so telegram + discord pairing
-		// services see it during their own start() and register the slash commands.
-		if (this.ownerBind) {
-			try {
-				await (runtime as unknown as {
-					getServiceLoadPromise?: (t: string) => Promise<unknown>;
-				}).getServiceLoadPromise?.("OWNER_BIND_VERIFY");
-				console.log("[runtime] OWNER_BIND_VERIFY started — channel plugins safe to load");
-			} catch (err) {
-				console.warn("[runtime] OWNER_BIND_VERIFY start failed:", err instanceof Error ? err.message : err);
-			}
+	private async waitForOwnerBind(runtime: AgentRuntime): Promise<void> {
+		if (!this.ownerBind) return;
+		try {
+			await (runtime as unknown as {
+				getServiceLoadPromise?: (t: string) => Promise<unknown>;
+			}).getServiceLoadPromise?.("OWNER_BIND_VERIFY");
+			console.log("[runtime] OWNER_BIND_VERIFY started — channel plugins safe to load");
+		} catch (err) {
+			console.warn("[runtime] OWNER_BIND_VERIFY start failed:", err instanceof Error ? err.message : err);
 		}
+	}
 
-		// Now register channel plugins. Their pairing services will find
-		// OWNER_BIND_VERIFY at start() time and wire /eliza_pair + /eliza-pair.
-		for (const channelPlugin of channelResolved.plugins) {
+	private async registerChannelPlugins(runtime: AgentRuntime, plugins: Plugin[]): Promise<void> {
+		for (const channelPlugin of plugins) {
 			try {
 				await (runtime as unknown as {
 					registerPlugin: (p: import("@elizaos/core").Plugin) => Promise<void>;
@@ -633,45 +669,26 @@ export class RuntimeService {
 				console.warn(`[runtime] failed to register channel plugin ${channelPlugin.name}:`, err instanceof Error ? err.message : err);
 			}
 		}
+	}
 
-		// Even after the above, eliza's TelegramOwnerPairingService races
-		// against TelegramService's start (`bot.launch`). When pairing fires
-		// before TelegramService.bot is ready, registerPairCommand silently
-		// no-ops yet logs "started; /eliza_pair command registered" (the
-		// success log fires regardless of actual wiring — eliza bug). We
-		// force-wire the command ourselves AFTER both services are loaded.
-		// Fire-and-forget so chat / cron don't block on telegram coming up.
+	private wirePairingCommands(runtime: AgentRuntime): void {
 		void this.wireTelegramPairCommand(runtime).catch((err) =>
 			console.warn("[runtime] /eliza_pair wire failed:", err instanceof Error ? err.message : err),
 		);
 		void this.wireDiscordPairCommand(runtime).catch((err) =>
 			console.warn("[runtime] /eliza-pair wire failed:", err instanceof Error ? err.message : err),
 		);
+	}
 
-		// provisionAgent runs migrations + ensures the database adapter knows
-		// which dim_N column to use for embeddings (reads EMBEDDING_DIMENSION
-		// from settings — we set it to 384 above for bge-small-en-v1.5).
-		// Without this call the adapter falls back to its default dim and
-		// our 384-dim vectors get truncated/padded into the wrong column.
-		// runMigrations:false because plugin-sql already migrated during init.
+	private async provisionRuntime(runtime: AgentRuntime): Promise<void> {
 		try {
 			await provisionAgent(runtime, { runMigrations: false });
 		} catch (err) {
 			console.warn("[runtime] provisionAgent failed:", err instanceof Error ? err.message : err);
 		}
-		// Eliza's TaskService timer is opt-in — comment in services/task.ts:
-		//   "Start the task poll timer. Call explicitly in daemon mode; not
-		//    started automatically. Daemon entry points that need scheduled
-		//    tasks call getService('task') then startTimer()."
-		// We're a long-lived tray daemon, so we start it. Without this,
-		// repeat tasks (EMBEDDING_DRAIN, IMESSAGE_HEARTBEAT, follow-ups) never
-		// fire — the embedding queue accumulates items forever.
-		//
-		// Second gotcha: TaskService.checkTasks() guards on `tasksDirty` and
-		// only flips it true on `markDirty()` — which eliza doesn't call from
-		// createTask/updateTask in non-companion mode. So after the first
-		// tick the queue stays "clean" and EMBEDDING_DRAIN never re-fires.
-		// We force a periodic markDirty so repeat tasks always get a chance.
+	}
+
+	private startTaskServiceTimer(runtime: AgentRuntime): void {
 		try {
 			const taskSvc = (runtime as unknown as {
 				getService?: (t: string) => {
@@ -688,18 +705,6 @@ export class RuntimeService {
 		} catch (err) {
 			console.warn("[runtime] task timer start failed:", err instanceof Error ? err.message : err);
 		}
-
-		await runtime.ensureConnection({
-			entityId: USER_ID,
-			roomId: ROOM_ID,
-			worldId: WORLD_ID,
-			userName: "User",
-			source: "tray-app",
-			channelId: "chat",
-			type: ChannelType.DM,
-		});
-
-		return { runtime, provider };
 	}
 
 	/**
@@ -750,6 +755,22 @@ export class RuntimeService {
 	private hasEnvKey(key: string): boolean {
 		const value = process.env[key];
 		return typeof value === "string" && value.length > 0;
+	}
+
+	private async pickProvider(): Promise<RuntimeProvider | null> {
+		if (!this.providerPickPromise) {
+			this.providerPickPromise = this.pickProviderUnlocked()
+				.finally(() => {
+					this.providerPickPromise = null;
+				});
+		}
+		return this.providerPickPromise;
+	}
+
+	private async pickProviderUnlocked(): Promise<RuntimeProvider | null> {
+		const activeProvider = await this.vault.getActiveProvider();
+		return (activeProvider ? await this.resolveActiveProvider(activeProvider) : null)
+			?? await this.pickFromPriority();
 	}
 
 	private async pickOpenAiOAuth(): Promise<"codex-chatgpt" | null> {

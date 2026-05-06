@@ -13,6 +13,7 @@
 
 import type { IAgentRuntime, Memory, MemoryMetadata, UUID, Content } from "@elizaos/core";
 import { ModelType } from "@elizaos/core";
+import { logger } from "@elizaos/core";
 
 const DEFAULT_TABLE = "memories";
 
@@ -79,6 +80,16 @@ export interface PensieveMemoryTreeNode {
 	totalCount: number;
 	children: PensieveMemoryTreeNode[];
 }
+
+type MemoryWriteRuntime = {
+	agentId?: string;
+	createMemory?: (m: Memory, table?: string) => Promise<UUID>;
+	addEmbeddingToMemory?: (m: Memory) => Promise<Memory>;
+	getRoomsForParticipant?: (entityId: string) => Promise<string[]>;
+};
+type MemoryCreateRuntime = MemoryWriteRuntime & {
+	createMemory: (m: Memory, table?: string) => Promise<UUID>;
+};
 
 export interface PensieveMemoryTree {
 	root: PensieveMemoryTreeNode;
@@ -149,6 +160,34 @@ function summarise(m: Memory, tableName: string): PensieveMemorySummary {
 
 export class PensieveMemoryService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
+
+	private async resolveWriteRoom(inputRoomId: string | undefined, runtime: MemoryWriteRuntime): Promise<string | null> {
+		if (inputRoomId) return inputRoomId;
+		if (typeof runtime.getRoomsForParticipant !== "function" || !runtime.agentId) return null;
+		try {
+			const rooms = await runtime.getRoomsForParticipant(runtime.agentId);
+			return rooms[0] ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	private async writeMemory(runtime: MemoryCreateRuntime, memory: Memory, tableName: string): Promise<{ id: string }> {
+		if (typeof runtime.addEmbeddingToMemory === "function") {
+			try {
+				const enriched = await runtime.addEmbeddingToMemory(memory);
+				const id = await runtime.createMemory(enriched, tableName);
+				return { id: String(id) };
+			} catch (err) {
+				logger.warn(
+					{ src: "pensieve:memory", err: err instanceof Error ? err.message : err, tableName },
+					"[PensieveMemoryService] embedding enrichment failed; writing memory without embedding",
+				);
+			}
+		}
+		const id = await runtime.createMemory(memory, tableName);
+		return { id: String(id) };
+	}
 
 	/**
 	 * Fetch from one table. Best-effort — adapters that don't recognise a
@@ -289,31 +328,21 @@ export class PensieveMemoryService {
 	}): Promise<{ id: string } | null> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return null;
-		const r = runtime as unknown as {
-			agentId?: string;
-			createMemory?: (m: Memory, table?: string) => Promise<UUID>;
-			addEmbeddingToMemory?: (m: Memory) => Promise<Memory>;
-			getRoomsForParticipant?: (entityId: string) => Promise<string[]>;
-		};
+		const r = runtime as unknown as MemoryWriteRuntime;
 		if (typeof r.createMemory !== "function") return null;
+		const writer = r as MemoryCreateRuntime;
 		const type = input.type ?? "custom";
 		const path = normalisePath(input.path, type);
 		const meta = {
 			type,
 			path,
 			...(Array.isArray(input.tags) ? { tags: input.tags } : {}),
-			...(input.extraMetadata ?? {}),
+			...input.extraMetadata,
 		} as unknown as MemoryMetadata;
 
 		// Pick a real room: caller-provided > agent's first known room > fail.
 		// Zero-UUID would fail FK constraint on the memories.room_id column.
-		let roomId = input.roomId;
-		if (!roomId && typeof r.getRoomsForParticipant === "function" && r.agentId) {
-			try {
-				const rooms = await r.getRoomsForParticipant(r.agentId);
-				if (rooms.length > 0) roomId = rooms[0];
-			} catch { /* fall through */ }
-		}
+		const roomId = await this.resolveWriteRoom(input.roomId, writer);
 		if (!roomId) {
 			console.warn("[pensieve.memory.create] no room available for write — agent has no rooms yet");
 			return null;
@@ -329,18 +358,7 @@ export class PensieveMemoryService {
 			createdAt: Date.now(),
 			metadata: meta,
 		};
-		// Best-effort embedding so the new memory shows up in vector search.
-		try {
-			if (typeof r.addEmbeddingToMemory === "function") {
-				const enriched = await r.addEmbeddingToMemory(memory);
-				const id = await r.createMemory(enriched, input.tableName ?? DEFAULT_TABLE);
-				return { id: String(id) };
-			}
-		} catch {
-			// fall back to write without embedding
-		}
-		const id = await r.createMemory(memory, input.tableName ?? DEFAULT_TABLE);
-		return { id: String(id) };
+		return this.writeMemory(writer, memory, input.tableName ?? DEFAULT_TABLE);
 	}
 
 	async get(id: UUID): Promise<PensieveMemoryDetail | null> {
@@ -434,7 +452,7 @@ export class PensieveMemoryService {
 		if (!existing) return false;
 		const next: Partial<Memory> & { id: UUID } = { id };
 		if (typeof patch.contentText === "string") {
-			next.content = { ...(existing.content ?? {}), text: patch.contentText } as Content;
+			next.content = { ...existing.content, text: patch.contentText } as Content;
 		}
 		const md = ((existing.metadata ?? {}) as Record<string, unknown>);
 		const nextMd: Record<string, unknown> = { ...md };

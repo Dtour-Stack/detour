@@ -57,9 +57,19 @@ interface CronServiceShape {
 
 const CRON_SERVICE_GLOBAL = Symbol.for("detour.cron.service");
 
+function isCronServiceShape(value: unknown): value is CronServiceShape {
+	if (!value || typeof value !== "object") return false;
+	const svc = value as Partial<CronServiceShape>;
+	return typeof svc.listJobs === "function"
+		&& typeof svc.getJob === "function"
+		&& typeof svc.createJob === "function"
+		&& typeof svc.updateJob === "function"
+		&& typeof svc.deleteJob === "function";
+}
+
 function getService(): CronServiceShape | null {
-	const g = globalThis as unknown as Record<symbol, unknown>;
-	return (g[CRON_SERVICE_GLOBAL] as CronServiceShape) ?? null;
+	const service = Reflect.get(globalThis, CRON_SERVICE_GLOBAL);
+	return isCronServiceShape(service) ? service : null;
 }
 
 async function emit(callback: HandlerCallback | undefined, text: string, action: string): Promise<void> {
@@ -82,66 +92,54 @@ function paramsBag(opts: Record<string, unknown> | undefined): Record<string, un
 	return {};
 }
 
-function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
-	if (!opts) return undefined;
-	const params = paramsBag(opts);
+type OptionReader<T> = (value: unknown) => T | undefined;
+
+function readOptionKeys<T>(source: Record<string, unknown>, keys: string[], reader: OptionReader<T>): T | undefined {
 	for (const k of keys) {
-		const v = params[k];
-		if (typeof v === "string" && v.length > 0) return v;
-	}
-	for (const k of keys) {
-		const v = opts[k];
-		if (typeof v === "string" && v.length > 0) return v;
-	}
-	const queue: Record<string, unknown>[] = [opts];
-	const seen = new Set<unknown>();
-	while (queue.length > 0) {
-		const cur = queue.shift()!;
-		if (seen.has(cur)) continue;
-		seen.add(cur);
-		for (const k of keys) {
-			const v = cur[k];
-			if (typeof v === "string" && v.length > 0) return v;
-		}
-		for (const v of Object.values(cur)) {
-			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
-		}
+		const parsed = reader(source[k]);
+		if (parsed !== undefined) return parsed;
 	}
 	return undefined;
 }
 
-function pickBool(opts: Record<string, unknown> | undefined, keys: string[]): boolean | undefined {
-	if (!opts) return undefined;
-	const params = paramsBag(opts);
-	for (const k of keys) {
-		const v = params[k];
-		if (typeof v === "boolean") return v;
-		if (v === "true") return true;
-		if (v === "false") return false;
-	}
-	for (const k of keys) {
-		const v = opts[k];
-		if (typeof v === "boolean") return v;
-		if (v === "true") return true;
-		if (v === "false") return false;
-	}
-	const queue: Record<string, unknown>[] = [opts];
+function deepOptionRecords(opts: Record<string, unknown>): Record<string, unknown>[] {
+	const out: Record<string, unknown>[] = [];
+	const queue = [opts];
 	const seen = new Set<unknown>();
 	while (queue.length > 0) {
 		const cur = queue.shift()!;
 		if (seen.has(cur)) continue;
 		seen.add(cur);
-		for (const k of keys) {
-			const v = cur[k];
-			if (typeof v === "boolean") return v;
-			if (v === "true") return true;
-			if (v === "false") return false;
-		}
+		out.push(cur);
 		for (const v of Object.values(cur)) {
 			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
 		}
 	}
-	return undefined;
+	return out;
+}
+
+function pickValue<T>(opts: Record<string, unknown> | undefined, keys: string[], reader: OptionReader<T>): T | undefined {
+	if (!opts) return undefined;
+	const direct = readOptionKeys(paramsBag(opts), keys, reader) ?? readOptionKeys(opts, keys, reader);
+	return direct ?? deepOptionRecords(opts).map((entry) => readOptionKeys(entry, keys, reader)).find((value) => value !== undefined);
+}
+
+function stringOption(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function boolOption(value: unknown): boolean | undefined {
+	if (typeof value === "boolean") return value;
+	if (value === "true") return true;
+	return value === "false" ? false : undefined;
+}
+
+function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+	return pickValue(opts, keys, stringOption);
+}
+
+function pickBool(opts: Record<string, unknown> | undefined, keys: string[]): boolean | undefined {
+	return pickValue(opts, keys, boolOption);
 }
 
 function fmtJob(job: CronJob): string {
@@ -150,12 +148,36 @@ function fmtJob(job: CronJob): string {
 	return `[${job.id}] "${job.name}" — schedule=${job.schedule} enabled=${job.enabled} runs=${job.runCount} next=${next} last=${last}`;
 }
 
-function ensureService(callback: HandlerCallback | undefined, action: string) {
+async function ensureService(callback: HandlerCallback | undefined, action: string): Promise<CronServiceShape | null> {
 	const svc = getService();
 	if (!svc) {
-		void emit(callback, `${action}: cron service not registered`, action);
+		await emit(callback, `${action}: cron service not registered`, action);
 	}
 	return svc;
+}
+
+type CronPatch = { name?: string; schedule?: string; prompt?: string; enabled?: boolean };
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function firstString(opts: Record<string, unknown> | undefined, params: Record<string, unknown>, keys: string[]): string | undefined {
+	return pickString(opts, keys) ?? pickString(params, keys);
+}
+
+function buildCronPatch(opts: Record<string, unknown> | undefined): CronPatch {
+	const params = recordFromUnknown(opts?.params);
+	const patch: CronPatch = {};
+	const name = firstString(opts, params, ["name", "title"]);
+	const schedule = firstString(opts, params, ["schedule", "when", "interval", "cron"]);
+	const prompt = firstString(opts, params, ["prompt", "task", "instructions", "text"]);
+	const enabled = pickBool(opts, ["enabled", "active"]) ?? pickBool(params, ["enabled", "active"]);
+	if (name !== undefined) patch.name = name;
+	if (schedule !== undefined) patch.schedule = schedule;
+	if (prompt !== undefined) patch.prompt = prompt;
+	if (enabled !== undefined) patch.enabled = enabled;
+	return patch;
 }
 
 // ── CRON_CREATE ─────────────────────────────────────────────────────────────
@@ -173,7 +195,7 @@ const createHandler: Handler = async (_r: IAgentRuntime, _m, _s, options, callba
 	}
 	if (!schedule) return missing("CRON_CREATE", "schedule", callback);
 	if (!prompt) return missing("CRON_CREATE", "prompt", callback);
-	const svc = ensureService(callback, "CRON_CREATE");
+	const svc = await ensureService(callback, "CRON_CREATE");
 	if (!svc) return { success: false, error: "no cron service" };
 	try {
 		const job = svc.createJob({ schedule, prompt, ...(name ? { name } : {}), enabled, createdBy: "agent" });
@@ -208,7 +230,7 @@ export const cronCreateAction: Action = {
 // ── CRON_LIST ───────────────────────────────────────────────────────────────
 
 const listHandler: Handler = async (_r, _m, _s, _options, callback) => {
-	const svc = ensureService(callback, "CRON_LIST");
+	const svc = await ensureService(callback, "CRON_LIST");
 	if (!svc) return { success: false, error: "no cron service" };
 	const jobs = svc.listJobs();
 	const summary = jobs.length === 0 ? "No cron jobs." : jobs.map(fmtJob).join("\n");
@@ -232,7 +254,7 @@ const readHandler: Handler = async (_r, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const id = pickString(opts, ["id", "jobId"]) ?? pickString((opts?.params ?? {}) as Record<string, unknown>, ["id", "jobId"]);
 	if (!id) return missing("CRON_READ", "id", callback);
-	const svc = ensureService(callback, "CRON_READ");
+	const svc = await ensureService(callback, "CRON_READ");
 	if (!svc) return { success: false, error: "no cron service" };
 	const job = svc.getJob(id);
 	if (!job) {
@@ -259,20 +281,12 @@ export const cronReadAction: Action = {
 
 const updateHandler: Handler = async (_r, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
-	const params = (opts?.params ?? {}) as Record<string, unknown>;
+	const params = recordFromUnknown(opts?.params);
 	const id = pickString(opts, ["id", "jobId"]) ?? pickString(params, ["id", "jobId"]);
 	if (!id) return missing("CRON_UPDATE", "id", callback);
-	const svc = ensureService(callback, "CRON_UPDATE");
+	const svc = await ensureService(callback, "CRON_UPDATE");
 	if (!svc) return { success: false, error: "no cron service" };
-	const patch: { name?: string; schedule?: string; prompt?: string; enabled?: boolean } = {};
-	const name = pickString(opts, ["name", "title"]) ?? pickString(params, ["name", "title"]);
-	const schedule = pickString(opts, ["schedule", "when", "interval", "cron"]) ?? pickString(params, ["schedule", "when", "interval", "cron"]);
-	const prompt = pickString(opts, ["prompt", "task", "instructions", "text"]) ?? pickString(params, ["prompt", "task", "instructions", "text"]);
-	const enabled = pickBool(opts, ["enabled", "active"]) ?? pickBool(params, ["enabled", "active"]);
-	if (name !== undefined) patch.name = name;
-	if (schedule !== undefined) patch.schedule = schedule;
-	if (prompt !== undefined) patch.prompt = prompt;
-	if (enabled !== undefined) patch.enabled = enabled;
+	const patch = buildCronPatch(opts);
 	if (Object.keys(patch).length === 0) {
 		await emit(callback, "CRON_UPDATE: nothing to update — provide at least one of name, schedule, prompt, enabled.", "CRON_UPDATE");
 		return { success: false, error: "no patch fields" };
@@ -314,7 +328,7 @@ const deleteHandler: Handler = async (_r, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const id = pickString(opts, ["id", "jobId"]) ?? pickString((opts?.params ?? {}) as Record<string, unknown>, ["id", "jobId"]);
 	if (!id) return missing("CRON_DELETE", "id", callback);
-	const svc = ensureService(callback, "CRON_DELETE");
+	const svc = await ensureService(callback, "CRON_DELETE");
 	if (!svc) return { success: false, error: "no cron service" };
 	const removed = svc.deleteJob(id);
 	if (!removed) {

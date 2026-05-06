@@ -22,7 +22,7 @@ import {
 	type TaskMetadata,
 	type UUID,
 } from "@elizaos/core";
-import { XClient, type XTweetSummary } from "./x-client";
+import { XClient, type XNotification, type XTweetSummary } from "./x-client";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -83,67 +83,55 @@ function paramsBag(opts: Record<string, unknown> | undefined): Record<string, un
 	return {};
 }
 
-function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
-	if (!opts) return undefined;
-	// 1. canonical eliza contract
-	const params = paramsBag(opts);
+type OptionReader<T> = (value: unknown) => T | undefined;
+
+function readOptionKeys<T>(source: Record<string, unknown>, keys: string[], reader: OptionReader<T>): T | undefined {
 	for (const k of keys) {
-		const v = params[k];
-		if (typeof v === "string" && v.length > 0) return v;
-	}
-	// 2. top-level (imperative callers / direct invocations)
-	for (const k of keys) {
-		const v = opts[k];
-		if (typeof v === "string" && v.length > 0) return v;
-	}
-	// 3. defensive deep walk — handles eliza versions that nest params
-	// under `options.<ACTION>`, `options.arguments`, etc.
-	const queue: Record<string, unknown>[] = [opts];
-	const seen = new Set<unknown>();
-	while (queue.length > 0) {
-		const cur = queue.shift()!;
-		if (seen.has(cur)) continue;
-		seen.add(cur);
-		for (const k of keys) {
-			const v = cur[k];
-			if (typeof v === "string" && v.length > 0) return v;
-		}
-		for (const v of Object.values(cur)) {
-			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
-		}
+		const parsed = reader(source[k]);
+		if (parsed !== undefined) return parsed;
 	}
 	return undefined;
 }
 
-function pickNumber(opts: Record<string, unknown> | undefined, keys: string[]): number | undefined {
-	if (!opts) return undefined;
-	const params = paramsBag(opts);
-	for (const k of keys) {
-		const v = params[k];
-		if (typeof v === "number" && Number.isFinite(v)) return v;
-		if (typeof v === "string" && v.length > 0 && Number.isFinite(Number(v))) return Number(v);
-	}
-	for (const k of keys) {
-		const v = opts[k];
-		if (typeof v === "number" && Number.isFinite(v)) return v;
-		if (typeof v === "string" && v.length > 0 && Number.isFinite(Number(v))) return Number(v);
-	}
+function deepOptionRecords(opts: Record<string, unknown>): Record<string, unknown>[] {
+	const out: Record<string, unknown>[] = [];
 	const queue: Record<string, unknown>[] = [opts];
 	const seen = new Set<unknown>();
 	while (queue.length > 0) {
 		const cur = queue.shift()!;
 		if (seen.has(cur)) continue;
 		seen.add(cur);
-		for (const k of keys) {
-			const v = cur[k];
-			if (typeof v === "number" && Number.isFinite(v)) return v;
-			if (typeof v === "string" && v.length > 0 && Number.isFinite(Number(v))) return Number(v);
-		}
+		out.push(cur);
 		for (const v of Object.values(cur)) {
 			if (v && typeof v === "object" && !Array.isArray(v)) queue.push(v as Record<string, unknown>);
 		}
 	}
-	return undefined;
+	return out;
+}
+
+function pickValue<T>(opts: Record<string, unknown> | undefined, keys: string[], reader: OptionReader<T>): T | undefined {
+	if (!opts) return undefined;
+	const direct = readOptionKeys(paramsBag(opts), keys, reader) ?? readOptionKeys(opts, keys, reader);
+	return direct ?? deepOptionRecords(opts).map((entry) => readOptionKeys(entry, keys, reader)).find((value) => value !== undefined);
+}
+
+function stringOption(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberOption(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value !== "string" || value.length === 0) return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+	return pickValue(opts, keys, stringOption);
+}
+
+function pickNumber(opts: Record<string, unknown> | undefined, keys: string[]): number | undefined {
+	return pickValue(opts, keys, numberOption);
 }
 
 function withClient<T>(
@@ -469,29 +457,52 @@ function textContainsBait(text: string): boolean {
 	].some((phrase) => lower.includes(phrase));
 }
 
+function discoveryEngagement(tweet: XTweetSummary): number {
+	return Math.log1p((tweet.replyCount ?? 0) * 4 + (tweet.retweetCount ?? 0) * 2 + (tweet.favoriteCount ?? 0));
+}
+
+function discoveryRecency(ageHours: number): number {
+	if (ageHours <= 3) return 4;
+	if (ageHours <= 12) return 2.5;
+	if (ageHours <= 24) return 1;
+	return ageHours <= 72 ? 0 : -3;
+}
+
+function discoveryRelevance(queryTerms: string[], overlap: number): number {
+	return queryTerms.length > 0 ? (overlap / queryTerms.length) * 5 : 1;
+}
+
+function discoveryLengthScore(text: string): number {
+	return text.length >= 45 && text.length <= 240 ? 1.5 : 0;
+}
+
+function discoveryReason(query: string, ageHours: number, replyCount: number, overlap: number, baitPenalty: number): string {
+	return [
+		`query "${query}"`,
+		ageHours <= 24 ? "recent" : "older",
+		replyCount > 0 ? `${replyCount} replies` : "low replies",
+		overlap > 0 ? `${overlap} keyword hits` : "semantic fit only",
+		...(baitPenalty > 0 ? ["bait penalty"] : []),
+	].join(", ");
+}
+
 function scoreDiscoveryTweet(tweet: XTweetSummary, query: string, now: number): XDiscoveryCandidate {
 	const createdAt = tweetCreatedAtMs(tweet);
 	const ageHours = createdAt > 0 ? Math.max(0, (now - createdAt) / 3_600_000) : 72;
 	const queryTerms = tokenize(query);
 	const tweetTerms = new Set(tokenize(tweet.text));
 	const overlap = queryTerms.filter((term) => tweetTerms.has(term)).length;
-	const favoriteCount = tweet.favoriteCount ?? 0;
-	const retweetCount = tweet.retweetCount ?? 0;
 	const replyCount = tweet.replyCount ?? 0;
-	const engagement = Math.log1p(replyCount * 4 + retweetCount * 2 + favoriteCount);
-	const recency = ageHours <= 3 ? 4 : ageHours <= 12 ? 2.5 : ageHours <= 24 ? 1 : ageHours <= 72 ? 0 : -3;
-	const relevance = queryTerms.length > 0 ? (overlap / queryTerms.length) * 5 : 1;
-	const lengthScore = tweet.text.length >= 45 && tweet.text.length <= 240 ? 1.5 : 0;
 	const baitPenalty = textContainsBait(tweet.text) ? 6 : 0;
-	const score = Math.max(0, engagement + recency + relevance + lengthScore - baitPenalty);
-	const reasonParts = [
-		`query "${query}"`,
-		ageHours <= 24 ? "recent" : "older",
-		replyCount > 0 ? `${replyCount} replies` : "low replies",
-		overlap > 0 ? `${overlap} keyword hits` : "semantic fit only",
-	];
-	if (baitPenalty > 0) reasonParts.push("bait penalty");
-	return { tweet, query, score: Number(score.toFixed(2)), reason: reasonParts.join(", ") };
+	const score = Math.max(
+		0,
+		discoveryEngagement(tweet)
+			+ discoveryRecency(ageHours)
+			+ discoveryRelevance(queryTerms, overlap)
+			+ discoveryLengthScore(tweet.text)
+			- baitPenalty,
+	);
+	return { tweet, query, score: Number(score.toFixed(2)), reason: discoveryReason(query, ageHours, replyCount, overlap, baitPenalty) };
 }
 
 async function discoverXCandidates(
@@ -597,6 +608,287 @@ async function logXAutonomy(
 	}).catch(() => {});
 }
 
+type XAutonomySettings = {
+	writeEnabled: boolean;
+	statusPostingEnabled: boolean;
+	discoveryEnabled: boolean;
+	proactiveEngagementEnabled: boolean;
+	followEnabled: boolean;
+	discoveryQueries: string[];
+	statusIntervalMs: number;
+	discoveryIntervalMs: number;
+	maxReplies: number;
+	maxDiscovery: number;
+};
+
+type XAutonomyState = {
+	metadata: Record<string, unknown>;
+	nextSeen: Set<string>;
+	handled: Array<Record<string, unknown>>;
+	lastStatusAt: number;
+	lastDiscoveryAt: number;
+	lastStatusTweetId?: string;
+	viewerScreenName: string;
+};
+
+function boundedSetting(runtime: IAgentRuntime, key: string, defaultValue: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, readNumberSetting(runtime, key, defaultValue)));
+}
+
+function readXAutonomySettings(runtime: IAgentRuntime): XAutonomySettings {
+	return {
+		writeEnabled: readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true),
+		statusPostingEnabled: readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
+		discoveryEnabled: readBooleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true),
+		proactiveEngagementEnabled: readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
+		followEnabled: readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),
+		discoveryQueries: readListSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES),
+		statusIntervalMs: boundedSetting(runtime, "X_AUTONOMY_STATUS_INTERVAL_MS", X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS, 15 * 60_000, 24 * 60 * 60_000),
+		discoveryIntervalMs: boundedSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS, 5 * 60_000, 24 * 60 * 60_000),
+		maxReplies: boundedSetting(runtime, "X_AUTONOMY_MAX_REPLIES_PER_TICK", 2, 1, 5),
+		maxDiscovery: boundedSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 2, 0, 8),
+	};
+}
+
+function initialXAutonomyState(task: Task): XAutonomyState {
+	const metadata = isRecord(task.metadata) ? task.metadata : {};
+	return {
+		metadata,
+		nextSeen: new Set(readSeenIds(metadata)),
+		handled: [],
+		lastStatusAt: readTimestamp(metadata.xAutonomyLastStatusAt),
+		lastDiscoveryAt: readTimestamp(metadata.xAutonomyLastDiscoveryAt),
+		...(typeof metadata.xAutonomyLastStatusTweetId === "string" ? { lastStatusTweetId: metadata.xAutonomyLastStatusTweetId } : {}),
+		viewerScreenName: "unknown",
+	};
+}
+
+function replyableNotifications(notifications: XNotification[], seen: Set<string>, maxReplies: number): XNotification[] {
+	return notifications
+		.filter((n) => (n.kind === "mention" || n.kind === "reply") && n.tweetId && !seen.has(n.id))
+		.slice(0, maxReplies);
+}
+
+function markPassiveNotificationsSeen(notifications: XNotification[], state: XAutonomyState): void {
+	for (const notification of notifications.slice(0, 100)) {
+		if (notification.kind !== "mention" && notification.kind !== "reply") state.nextSeen.add(notification.id);
+	}
+}
+
+async function processXNotifications(
+	runtime: IAgentRuntime,
+	client: XClient,
+	viewerScreenName: string,
+	notifications: XNotification[],
+	settings: XAutonomySettings,
+	state: XAutonomyState,
+): Promise<void> {
+	for (const notification of replyableNotifications(notifications, state.nextSeen, settings.maxReplies)) {
+		state.nextSeen.add(notification.id);
+		state.handled.push(await handleXNotification(runtime, client, viewerScreenName, notification, settings.writeEnabled));
+	}
+	markPassiveNotificationsSeen(notifications, state);
+}
+
+async function handleXNotification(
+	runtime: IAgentRuntime,
+	client: XClient,
+	viewerScreenName: string,
+	notification: XNotification,
+	writeEnabled: boolean,
+): Promise<Record<string, unknown>> {
+	const tweet = notification.tweetId ? await client.getTweet(notification.tweetId) : null;
+	if (!tweet) return { id: notification.id, action: "ignore", reason: "tweet not found" };
+	if (tweet.authorScreenName?.toLowerCase() === viewerScreenName.toLowerCase()) {
+		return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "self-authored tweet" };
+	}
+	const decision = await safeXAutonomyDecision(runtime, {
+		viewerScreenName,
+		fromUserScreenName: notification.fromUserScreenName ?? tweet.authorScreenName,
+		kind: notification.kind,
+		notificationMessage: notification.message,
+		tweetText: tweet.text,
+	});
+	return executeNotificationDecision(client, notification, tweet, decision, writeEnabled);
+}
+
+async function executeNotificationDecision(
+	client: XClient,
+	notification: XNotification,
+	tweet: XTweetSummary,
+	decision: XAutonomyDecision,
+	writeEnabled: boolean,
+): Promise<Record<string, unknown>> {
+	const action = String(decision.action ?? "ignore").trim().toLowerCase();
+	const replyText = compactText(decision.reply_text, 260);
+	if (action === "reply" && replyText.length > 0) {
+		return writeEnabled
+			? notificationReply(client, notification, tweet, replyText)
+			: { id: notification.id, tweetId: tweet.tweetId, action: "reply_dry_run", text: replyText };
+	}
+	if (action === "like") {
+		return writeEnabled
+			? notificationLike(client, notification, tweet)
+			: { id: notification.id, tweetId: tweet.tweetId, action: "like_dry_run" };
+	}
+	return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: decision.reason };
+}
+
+async function notificationReply(client: XClient, notification: XNotification, tweet: XTweetSummary, text: string): Promise<Record<string, unknown>> {
+	const result = await client.reply(text, tweet.tweetId);
+	return {
+		id: notification.id,
+		tweetId: tweet.tweetId,
+		action: "reply",
+		success: result.success,
+		resultTweetId: result.tweetId,
+		error: result.error,
+	};
+}
+
+async function notificationLike(client: XClient, notification: XNotification, tweet: XTweetSummary): Promise<Record<string, unknown>> {
+	const result = await client.like(tweet.tweetId);
+	return { id: notification.id, tweetId: tweet.tweetId, action: "like", success: result.success, error: result.error };
+}
+
+function shouldRunDiscovery(settings: XAutonomySettings, state: XAutonomyState, now: number): boolean {
+	return settings.discoveryEnabled
+		&& settings.maxDiscovery > 0
+		&& now - state.lastDiscoveryAt >= settings.discoveryIntervalMs;
+}
+
+async function processXDiscovery(
+	runtime: IAgentRuntime,
+	client: XClient,
+	viewerScreenName: string,
+	settings: XAutonomySettings,
+	state: XAutonomyState,
+): Promise<void> {
+	if (!shouldRunDiscovery(settings, state, Date.now())) return;
+	const candidates = await discoverXCandidates(client, {
+		viewerScreenName,
+		queries: settings.discoveryQueries,
+		seen: state.nextSeen,
+		limit: settings.maxDiscovery,
+	});
+	for (const candidate of candidates) {
+		state.nextSeen.add(`discover:${candidate.tweet.tweetId}`);
+		state.handled.push(await handleXDiscoveryCandidate(runtime, client, viewerScreenName, candidate, settings));
+	}
+	state.lastDiscoveryAt = Date.now();
+}
+
+async function handleXDiscoveryCandidate(
+	runtime: IAgentRuntime,
+	client: XClient,
+	viewerScreenName: string,
+	candidate: XDiscoveryCandidate,
+	settings: XAutonomySettings,
+): Promise<Record<string, unknown>> {
+	const tweet = candidate.tweet;
+	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate }, settings.proactiveEngagementEnabled);
+	const action = String(decision.action ?? "ignore").trim().toLowerCase();
+	const replyText = compactText(decision.reply_text, 260);
+	const base = discoveryHandledBase(tweet, candidate, decision);
+	if (action === "reply" && replyText.length > 0) return discoveryReply(client, tweet, base, replyText, settings);
+	if (action === "like") return discoveryLike(client, tweet, base, settings);
+	if (action === "follow" && tweet.authorId) return discoveryFollow(client, tweet.authorId, base, settings);
+	return { ...base, action: "discover_ignore" };
+}
+
+function discoveryHandledBase(tweet: XTweetSummary, candidate: XDiscoveryCandidate, decision: XDiscoveryDecision): Record<string, unknown> {
+	return {
+		tweetId: tweet.tweetId,
+		authorScreenName: tweet.authorScreenName,
+		query: candidate.query,
+		score: candidate.score,
+		reason: decision.reason ?? candidate.reason,
+	};
+}
+
+async function discoveryReply(
+	client: XClient,
+	tweet: XTweetSummary,
+	base: Record<string, unknown>,
+	text: string,
+	settings: XAutonomySettings,
+): Promise<Record<string, unknown>> {
+	if (!settings.writeEnabled || !settings.proactiveEngagementEnabled) return { ...base, action: "discover_reply_dry_run", text };
+	const result = await client.reply(text, tweet.tweetId);
+	return { ...base, action: "discover_reply", success: result.success, resultTweetId: result.tweetId, error: result.error };
+}
+
+async function discoveryLike(
+	client: XClient,
+	tweet: XTweetSummary,
+	base: Record<string, unknown>,
+	settings: XAutonomySettings,
+): Promise<Record<string, unknown>> {
+	if (!settings.writeEnabled || !settings.proactiveEngagementEnabled) return { ...base, action: "discover_like_dry_run" };
+	const result = await client.like(tweet.tweetId);
+	return { ...base, action: "discover_like", success: result.success, error: result.error };
+}
+
+async function discoveryFollow(
+	client: XClient,
+	authorId: string,
+	base: Record<string, unknown>,
+	settings: XAutonomySettings,
+): Promise<Record<string, unknown>> {
+	if (!settings.writeEnabled || !settings.proactiveEngagementEnabled || !settings.followEnabled) return { ...base, action: "discover_follow_dry_run" };
+	const result = await client.follow(authorId);
+	return { ...base, action: "discover_follow", success: result.success, error: result.error };
+}
+
+function shouldRunStatus(settings: XAutonomySettings, state: XAutonomyState, now: number): boolean {
+	return settings.statusPostingEnabled && now - state.lastStatusAt >= settings.statusIntervalMs;
+}
+
+async function processXStatusPost(
+	runtime: IAgentRuntime,
+	task: Task,
+	client: XClient,
+	viewerScreenName: string,
+	settings: XAutonomySettings,
+	state: XAutonomyState,
+): Promise<void> {
+	if (!shouldRunStatus(settings, state, Date.now())) return;
+	const context = await buildRecentAutonomyContext(runtime, task);
+	const decision = await safeXStatusDecision(runtime, { viewerScreenName, context });
+	const text = compactText(decision.text, 260);
+	if (!readModelBoolean(decision.should_post) || text.length === 0) {
+		state.handled.push({ action: "post_status_skip", reason: decision.reason ?? "model declined" });
+		state.lastStatusAt = Date.now();
+		return;
+	}
+	if (!settings.writeEnabled) {
+		state.handled.push({ action: "post_status_dry_run", text });
+		state.lastStatusAt = Date.now();
+		return;
+	}
+	const result = await client.tweet(text);
+	state.handled.push({ action: "post_status", success: result.success, tweetId: result.tweetId, error: result.error });
+	if (result.success) {
+		state.lastStatusAt = Date.now();
+		state.lastStatusTweetId = result.tweetId;
+	}
+}
+
+async function updateXAutonomyTask(runtime: IAgentRuntime, task: Task, state: XAutonomyState): Promise<void> {
+	if (!task.id) return;
+	await runtime.updateTask(task.id, {
+		metadata: {
+			...state.metadata,
+			xAutonomySeenIds: Array.from(state.nextSeen).slice(-X_AUTONOMY_SEEN_LIMIT),
+			xAutonomyLastRunAt: Date.now(),
+			xAutonomyLastStatusAt: state.lastStatusAt,
+			xAutonomyLastDiscoveryAt: state.lastDiscoveryAt,
+			...(state.lastStatusTweetId ? { xAutonomyLastStatusTweetId: state.lastStatusTweetId } : {}),
+			xAutonomyLastHandled: state.handled,
+		},
+	}).catch(() => {});
+}
+
 async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise<void> {
 	if (!readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return;
 	const { client, error } = buildClient(runtime);
@@ -605,220 +897,41 @@ async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise
 		return;
 	}
 
-	const writeEnabled = readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true);
-	const statusPostingEnabled = readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false);
-	const discoveryEnabled = readBooleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true);
-	const proactiveEngagementEnabled = readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false);
-	const followEnabled = readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false);
-	const discoveryQueries = readListSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES);
-	const statusIntervalMs = Math.max(
-		15 * 60_000,
-		Math.min(24 * 60 * 60_000, readNumberSetting(runtime, "X_AUTONOMY_STATUS_INTERVAL_MS", X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS)),
-	);
-	const discoveryIntervalMs = Math.max(
-		5 * 60_000,
-		Math.min(24 * 60 * 60_000, readNumberSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS)),
-	);
-	const maxReplies = Math.max(1, Math.min(5, readNumberSetting(runtime, "X_AUTONOMY_MAX_REPLIES_PER_TICK", 2)));
-	const maxDiscovery = Math.max(0, Math.min(8, readNumberSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 2)));
-	const metadata = isRecord(task.metadata) ? task.metadata : {};
-	const seen = new Set(readSeenIds(metadata));
-	const nextSeen = new Set(seen);
-	const handled: Array<Record<string, unknown>> = [];
-	let lastStatusAt = readTimestamp(metadata.xAutonomyLastStatusAt);
-	let lastDiscoveryAt = readTimestamp(metadata.xAutonomyLastDiscoveryAt);
-	let lastStatusTweetId = typeof metadata.xAutonomyLastStatusTweetId === "string" ? metadata.xAutonomyLastStatusTweetId : undefined;
-
-	let viewerScreenName = "unknown";
+	const settings = readXAutonomySettings(runtime);
+	const state = initialXAutonomyState(task);
 	try {
 		const viewer = await client.viewer();
-		viewerScreenName = viewer.screenName;
+		state.viewerScreenName = viewer.screenName;
 		const notifications = await client.getNotifications();
-		const candidates = notifications
-			.filter((n) => (n.kind === "mention" || n.kind === "reply") && n.tweetId && !seen.has(n.id))
-			.slice(0, maxReplies);
-
-		for (const notification of candidates) {
-			nextSeen.add(notification.id);
-			const tweet = notification.tweetId ? await client.getTweet(notification.tweetId) : null;
-			if (!tweet) {
-				handled.push({ id: notification.id, action: "ignore", reason: "tweet not found" });
-				continue;
-			}
-			if (tweet.authorScreenName?.toLowerCase() === viewer.screenName.toLowerCase()) {
-				handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "self-authored tweet" });
-				continue;
-			}
-			const decision = await safeXAutonomyDecision(runtime, {
-				viewerScreenName: viewer.screenName,
-				fromUserScreenName: notification.fromUserScreenName ?? tweet.authorScreenName,
-				kind: notification.kind,
-				notificationMessage: notification.message,
-				tweetText: tweet.text,
-			});
-			const action = String(decision.action ?? "ignore").trim().toLowerCase();
-			const replyText = compactText(decision.reply_text, 260);
-			if (action === "reply" && replyText.length > 0) {
-				if (writeEnabled) {
-					const result = await client.reply(replyText, tweet.tweetId);
-					handled.push({
-						id: notification.id,
-						tweetId: tweet.tweetId,
-						action,
-						success: result.success,
-						resultTweetId: result.tweetId,
-						error: result.error,
-					});
-				} else {
-					handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "reply_dry_run", text: replyText });
-				}
-				continue;
-			}
-			if (action === "like") {
-				if (writeEnabled) {
-					const result = await client.like(tweet.tweetId);
-					handled.push({ id: notification.id, tweetId: tweet.tweetId, action, success: result.success, error: result.error });
-				} else {
-					handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "like_dry_run" });
-				}
-				continue;
-			}
-			handled.push({ id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: decision.reason });
-		}
-
-		for (const notification of notifications.slice(0, 100)) {
-			if (notification.kind !== "mention" && notification.kind !== "reply") {
-				nextSeen.add(notification.id);
-			}
-		}
-
-		if (discoveryEnabled && maxDiscovery > 0 && Date.now() - lastDiscoveryAt >= discoveryIntervalMs) {
-			const candidates = await discoverXCandidates(client, {
-				viewerScreenName: viewer.screenName,
-				queries: discoveryQueries,
-				seen: nextSeen,
-				limit: maxDiscovery,
-			});
-			for (const candidate of candidates) {
-				const tweet = candidate.tweet;
-				nextSeen.add(`discover:${tweet.tweetId}`);
-				const decision = await safeXDiscoveryDecision(
-					runtime,
-					{
-						viewerScreenName: viewer.screenName,
-						candidate,
-					},
-					proactiveEngagementEnabled,
-				);
-				const action = String(decision.action ?? "ignore").trim().toLowerCase();
-				const replyText = compactText(decision.reply_text, 260);
-				const base = {
-					tweetId: tweet.tweetId,
-					authorScreenName: tweet.authorScreenName,
-					query: candidate.query,
-					score: candidate.score,
-					reason: decision.reason ?? candidate.reason,
-				};
-				if (action === "reply" && replyText.length > 0) {
-					if (writeEnabled && proactiveEngagementEnabled) {
-						const result = await client.reply(replyText, tweet.tweetId);
-						handled.push({
-							...base,
-							action: "discover_reply",
-							success: result.success,
-							resultTweetId: result.tweetId,
-							error: result.error,
-						});
-					} else {
-						handled.push({ ...base, action: "discover_reply_dry_run", text: replyText });
-					}
-					continue;
-				}
-				if (action === "like") {
-					if (writeEnabled && proactiveEngagementEnabled) {
-						const result = await client.like(tweet.tweetId);
-						handled.push({ ...base, action: "discover_like", success: result.success, error: result.error });
-					} else {
-						handled.push({ ...base, action: "discover_like_dry_run" });
-					}
-					continue;
-				}
-				if (action === "follow" && tweet.authorId) {
-					if (writeEnabled && proactiveEngagementEnabled && followEnabled) {
-						const result = await client.follow(tweet.authorId);
-						handled.push({ ...base, action: "discover_follow", success: result.success, error: result.error });
-					} else {
-						handled.push({ ...base, action: "discover_follow_dry_run" });
-					}
-					continue;
-				}
-				handled.push({ ...base, action: "discover_ignore" });
-			}
-			lastDiscoveryAt = Date.now();
-		}
-
-		if (statusPostingEnabled && Date.now() - lastStatusAt >= statusIntervalMs) {
-			const context = await buildRecentAutonomyContext(runtime, task);
-			const decision = await safeXStatusDecision(runtime, {
-				viewerScreenName: viewer.screenName,
-				context,
-			});
-			const text = compactText(decision.text, 260);
-			if (readModelBoolean(decision.should_post) && text.length > 0) {
-				if (writeEnabled) {
-					const result = await client.tweet(text);
-					handled.push({
-						action: "post_status",
-						success: result.success,
-						tweetId: result.tweetId,
-						error: result.error,
-					});
-					if (result.success) {
-						lastStatusAt = Date.now();
-						lastStatusTweetId = result.tweetId;
-					}
-				} else {
-					handled.push({ action: "post_status_dry_run", text });
-					lastStatusAt = Date.now();
-				}
-			} else {
-				handled.push({ action: "post_status_skip", reason: decision.reason ?? "model declined" });
-				lastStatusAt = Date.now();
-			}
-		}
+		await processXNotifications(runtime, client, viewer.screenName, notifications, settings, state);
+		await processXDiscovery(runtime, client, viewer.screenName, settings, state);
+		await processXStatusPost(runtime, task, client, viewer.screenName, settings, state);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		logger.warn({ src: "x-autonomy", error: message }, "X autonomy tick failed");
-		await logXAutonomy(runtime, task, { ok: false, error: message, viewerScreenName });
+		await logXAutonomy(runtime, task, { ok: false, error: message, viewerScreenName: state.viewerScreenName });
 		throw err;
 	} finally {
-		if (task.id) {
-			const recentSeen = Array.from(nextSeen).slice(-X_AUTONOMY_SEEN_LIMIT);
-			await runtime.updateTask(task.id, {
-				metadata: {
-					...metadata,
-					xAutonomySeenIds: recentSeen,
-					xAutonomyLastRunAt: Date.now(),
-					xAutonomyLastStatusAt: lastStatusAt,
-					xAutonomyLastDiscoveryAt: lastDiscoveryAt,
-					...(lastStatusTweetId ? { xAutonomyLastStatusTweetId: lastStatusTweetId } : {}),
-					xAutonomyLastHandled: handled,
-				},
-			}).catch(() => {});
-		}
+		await updateXAutonomyTask(runtime, task, state);
 	}
 
 	await logXAutonomy(runtime, task, {
 		ok: true,
-		viewerScreenName,
-		writeEnabled,
-		discoveryEnabled,
-		proactiveEngagementEnabled,
-		handledCount: handled.length,
-		handled,
+		viewerScreenName: state.viewerScreenName,
+		writeEnabled: settings.writeEnabled,
+		discoveryEnabled: settings.discoveryEnabled,
+		proactiveEngagementEnabled: settings.proactiveEngagementEnabled,
+		handledCount: state.handled.length,
+		handled: state.handled,
 	});
 	logger.info(
-		{ src: "x-autonomy", handledCount: handled.length, writeEnabled, discoveryEnabled, proactiveEngagementEnabled },
+		{
+			src: "x-autonomy",
+			handledCount: state.handled.length,
+			writeEnabled: settings.writeEnabled,
+			discoveryEnabled: settings.discoveryEnabled,
+			proactiveEngagementEnabled: settings.proactiveEngagementEnabled,
+		},
 		"X autonomy tick complete",
 	);
 }

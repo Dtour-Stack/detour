@@ -267,6 +267,7 @@ export class ChannelGatewayService {
 	private readonly buffer: GatewayMessage[] = [];
 	private identities = new Map<string, IdentityRecord>();
 	private currentRuntime: IAgentRuntime | null = null;
+	private relationshipLocks = new Map<string, Promise<void>>();
 
 	constructor() {
 		this.stateDir = join(resolveStateDir(), "gateway");
@@ -311,28 +312,12 @@ export class ChannelGatewayService {
 
 	private async record(direction: GatewayDirection, payload: unknown): Promise<void> {
 		try {
-			const p = payload as { message?: Memory; source?: string; runtime?: IAgentRuntime };
-			const message = p.message;
-			if (!message) return;
-			const channel = inferChannel(p.source, message);
-			const text = typeof message.content?.text === "string" ? message.content.text : "";
-			if (text.length === 0 && direction !== "deleted") return; // skip noisy non-text events
-			const externalHandle = inferExternalHandle(message, channel);
-			const entry: GatewayMessage = {
-				id: typeof message.id === "string" ? message.id : `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-				time: typeof message.createdAt === "number" ? message.createdAt : Date.now(),
-				direction,
-				channel,
-				source: typeof p.source === "string" ? p.source : message.content?.source ?? "unknown",
-				roomId: String(message.roomId ?? ""),
-				entityId: String(message.entityId ?? ""),
-				...(externalHandle ? { externalHandle } : {}),
-				text,
-				...(message.content?.action ? { meta: { action: message.content.action } } : {}),
-			};
+			const parsed = this.recordPayload(direction, payload);
+			if (!parsed) return;
+			const { entry, message } = parsed;
 			this.append(entry);
-			if (externalHandle && entry.entityId) {
-				this.recordIdentity(channel, externalHandle, entry.entityId as UUID, entry.time);
+			if (entry.externalHandle && entry.entityId) {
+				this.recordIdentity(entry.channel, entry.externalHandle, entry.entityId as UUID, entry.time);
 				if (direction === "in") await this.upsertObservedRelationship(entry, message);
 			}
 		} catch (err) {
@@ -341,6 +326,38 @@ export class ChannelGatewayService {
 				"record failed",
 			);
 		}
+	}
+
+	private recordPayload(direction: GatewayDirection, payload: unknown): { entry: GatewayMessage; message: Memory } | null {
+		const p = payload as { message?: Memory; source?: string };
+		const message = p.message;
+		if (!message) return null;
+		const channel = inferChannel(p.source, message);
+		const text = typeof message.content?.text === "string" ? message.content.text : "";
+		if (text.length === 0 && direction !== "deleted") return null;
+		return { entry: this.gatewayEntry(direction, message, channel, p.source, text), message };
+	}
+
+	private gatewayEntry(
+		direction: GatewayDirection,
+		message: Memory,
+		channel: GatewayChannel,
+		source: string | undefined,
+		text: string,
+	): GatewayMessage {
+		const externalHandle = inferExternalHandle(message, channel);
+		return {
+			id: typeof message.id === "string" ? message.id : `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			time: typeof message.createdAt === "number" ? message.createdAt : Date.now(),
+			direction,
+			channel,
+			source: typeof source === "string" ? source : message.content?.source ?? "unknown",
+			roomId: String(message.roomId ?? ""),
+			entityId: String(message.entityId ?? ""),
+			...(externalHandle ? { externalHandle } : {}),
+			text,
+			...(message.content?.action ? { meta: { action: message.content.action } } : {}),
+		};
 	}
 
 	private append(entry: GatewayMessage): void {
@@ -407,11 +424,35 @@ export class ChannelGatewayService {
 		const agentId = textValue(runtime?.agentId);
 		if (!runtime || !agentId || entry.entityId === agentId) return;
 		const entityId = entry.entityId;
+		await this.upsertObservedEntity(runtime, agentId, entityId, entry.externalHandle, entry, memory);
+		await this.withRelationshipLock(agentId, entityId, () =>
+			this.upsertObservedRelationshipRecord(runtime, agentId, entityId, entry),
+		);
+	}
+
+	private async withRelationshipLock(agentId: string, entityId: string, fn: () => Promise<void>): Promise<void> {
+		const key = `${agentId}:${entityId}`;
+		const previous = this.relationshipLocks.get(key) ?? Promise.resolve();
+		const next = previous.then(fn, fn).finally(() => {
+			if (this.relationshipLocks.get(key) === next) this.relationshipLocks.delete(key);
+		});
+		this.relationshipLocks.set(key, next);
+		await next;
+	}
+
+	private async upsertObservedEntity(
+		runtime: RuntimeGraphShape,
+		agentId: string,
+		entityId: string,
+		externalHandle: string,
+		entry: GatewayMessage,
+		memory: Memory,
+	): Promise<void> {
 		try {
 			const entity = {
-				id: entityId,
-				agentId,
-				names: inferNames(memory, entry.externalHandle),
+					id: entityId,
+					agentId,
+					names: inferNames(memory, externalHandle),
 				metadata: entityMetadata(entry, memory),
 			};
 			if (typeof runtime.upsertEntities === "function") {
@@ -425,6 +466,14 @@ export class ChannelGatewayService {
 				"entity upsert failed",
 			);
 		}
+	}
+
+	private async upsertObservedRelationshipRecord(
+		runtime: RuntimeGraphShape,
+		agentId: string,
+		entityId: string,
+		entry: GatewayMessage,
+	): Promise<void> {
 		try {
 			const pair = { sourceEntityId: agentId, targetEntityId: entityId };
 			const existing = typeof runtime.getRelationshipsByPairs === "function"

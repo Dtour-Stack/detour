@@ -127,9 +127,9 @@ export interface ActivityTrajectoryDetail {
 	providerAccesses: ActivityProviderAccess[];
 	actions: ActivityActionAttempt[];
 	steps: ActivityTrajectoryStepSummary[];
-	metadata: Record<string, unknown> | null;
+	metadata: Record<string, unknown>;
 	rewardComponents: Record<string, unknown> | null;
-	metrics: Record<string, unknown> | null;
+	metrics: Record<string, unknown>;
 	/** Full untransformed trajectory record — used by the export button. */
 	raw: Record<string, unknown> | null;
 }
@@ -149,16 +149,20 @@ interface TrajectoriesServiceShape {
 		limit?: number;
 		offset?: number;
 	}>;
-	// Real method on TrajectoriesService is `getTrajectoryDetail`, not
-	// `getTrajectory` — confirmed against eliza/packages/core/src/features/
-	// trajectories/TrajectoriesService.ts:1590.
 	getTrajectoryDetail?: (id: string) => Promise<Record<string, unknown> | null>;
-	startTrajectory?: unknown;
 	endTrajectory?: (
 		id: string,
 		status?: "active" | "completed" | "error" | "timeout",
 		metrics?: Record<string, unknown>,
 	) => Promise<void>;
+}
+
+function isTrajectoriesService(value: unknown): value is TrajectoriesServiceShape {
+	if (!value || typeof value !== "object") return false;
+	const svc = value as TrajectoriesServiceShape;
+	return typeof svc.getTrajectoryDetail === "function"
+		|| typeof svc.listTrajectories === "function"
+		|| typeof svc.endTrajectory === "function";
 }
 
 function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | null {
@@ -167,14 +171,10 @@ function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | nul
 		getServicesByType?: (t: string) => unknown[];
 	};
 	const first = r.getService?.(SERVICE_TYPE);
-	if (first && typeof (first as TrajectoriesServiceShape).startTrajectory !== "undefined") {
-		return first as TrajectoriesServiceShape;
-	}
+	if (isTrajectoriesService(first)) return first;
 	const all = r.getServicesByType?.(SERVICE_TYPE) ?? [];
 	for (const svc of all) {
-		if (svc && typeof (svc as TrajectoriesServiceShape).startTrajectory !== "undefined") {
-			return svc as TrajectoriesServiceShape;
-		}
+		if (isTrajectoriesService(svc)) return svc;
 	}
 	return null;
 }
@@ -195,9 +195,9 @@ const EMPTY_DETAIL: ActivityTrajectoryDetail = {
 	providerAccesses: [],
 	actions: [],
 	steps: [],
-	metadata: null,
+	metadata: {},
 	rewardComponents: null,
-	metrics: null,
+	metrics: {},
 	raw: null,
 };
 
@@ -217,124 +217,217 @@ function asBoolean(v: unknown): boolean | undefined {
 	return typeof v === "boolean" ? v : undefined;
 }
 
-function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail {
-	const steps = asArray(traj.steps);
-	const llmCalls: ActivityLlmCall[] = [];
-	const providerAccesses: ActivityProviderAccess[] = [];
-	const actions: ActivityActionAttempt[] = [];
-	const stepSummaries: ActivityTrajectoryStepSummary[] = [];
-	let totalPromptTokens = 0;
-	let totalCompletionTokens = 0;
-	let totalLatencyMs = 0;
+type FlattenAccumulator = {
+	llmCalls: ActivityLlmCall[];
+	providerAccesses: ActivityProviderAccess[];
+	actions: ActivityActionAttempt[];
+	steps: ActivityTrajectoryStepSummary[];
+	totalPromptTokens: number;
+	totalCompletionTokens: number;
+	totalLatencyMs: number;
+};
 
-	for (const stepRaw of steps) {
-		const step = asObject(stepRaw);
-		if (!step) continue;
-		const stepNumber = asNumber(step.stepNumber) ?? 0;
-		const stepCalls: ActivityLlmCall[] = [];
-		for (const callRaw of asArray(step.llmCalls)) {
-			const call = asObject(callRaw);
-			if (!call) continue;
-			const promptTokens = asNumber(call.promptTokens) ?? 0;
-			const completionTokens = asNumber(call.completionTokens) ?? 0;
-			const latencyMs = asNumber(call.latencyMs);
-			totalPromptTokens += promptTokens;
-			totalCompletionTokens += completionTokens;
-			if (typeof latencyMs === "number") totalLatencyMs += latencyMs;
-			const normalized: ActivityLlmCall = {
-				callId: asString(call.callId) ?? `${stepNumber}-${llmCalls.length}`,
-				stepNumber,
-				timestamp: asNumber(call.timestamp) ?? 0,
-				model: asString(call.model) ?? "?",
-				...(asString(call.systemPrompt) !== undefined && { systemPrompt: asString(call.systemPrompt)! }),
-				...(asString(call.userPrompt) !== undefined && { userPrompt: asString(call.userPrompt)! }),
-				...(asString(call.response) !== undefined && { response: asString(call.response)! }),
-				...(asString(call.reasoning) !== undefined && { reasoning: asString(call.reasoning)! }),
-				...(asNumber(call.temperature) !== undefined && { temperature: asNumber(call.temperature)! }),
-				...(asNumber(call.maxTokens) !== undefined && { maxTokens: asNumber(call.maxTokens)! }),
-				promptTokens,
-				completionTokens,
-				...(latencyMs !== undefined && { latencyMs }),
-				...(asString(call.purpose) !== undefined && { purpose: asString(call.purpose)! }),
-				...(asString(call.stepType) !== undefined && { stepType: asString(call.stepType)! }),
-				...(asString(call.actionType) !== undefined && { actionType: asString(call.actionType)! }),
-				...(Array.isArray(call.tags) && { tags: (call.tags as unknown[]).map(String) }),
-			};
-			llmCalls.push(normalized);
-			stepCalls.push(normalized);
-		}
-		const stepProviders: ActivityProviderAccess[] = [];
-		for (const accRaw of asArray(step.providerAccesses)) {
-			const acc = asObject(accRaw);
-			if (!acc) continue;
-			const normalized: ActivityProviderAccess = {
-				providerId: asString(acc.providerId) ?? "",
-				providerName: asString(acc.providerName) ?? "unknown",
-				stepNumber,
-				timestamp: asNumber(acc.timestamp) ?? 0,
-				...(asString(acc.purpose) !== undefined && { purpose: asString(acc.purpose)! }),
-				...(acc.query !== undefined && { query: acc.query }),
-				...(acc.data !== undefined && { data: acc.data }),
-			};
-			providerAccesses.push(normalized);
-			stepProviders.push(normalized);
-		}
-		const actionRaw = asObject(step.action);
-		let stepAction: ActivityActionAttempt | null = null;
-		if (actionRaw && Object.keys(actionRaw).length > 0) {
-			stepAction = {
-				attemptId: asString(actionRaw.attemptId) ?? `${stepNumber}-action`,
-				stepNumber,
-				timestamp: asNumber(actionRaw.timestamp) ?? 0,
-				...(asString(actionRaw.actionType) !== undefined && { actionType: asString(actionRaw.actionType)! }),
-				...(asString(actionRaw.actionName) !== undefined && { actionName: asString(actionRaw.actionName)! }),
-				...(actionRaw.parameters !== undefined && { parameters: actionRaw.parameters }),
-				...(asString(actionRaw.reasoning) !== undefined && { reasoning: asString(actionRaw.reasoning)! }),
-				...(asBoolean(actionRaw.success) !== undefined && { success: asBoolean(actionRaw.success)! }),
-				...(actionRaw.result !== undefined && { result: actionRaw.result }),
-				...(asString(actionRaw.error) !== undefined && { error: asString(actionRaw.error)! }),
-				...(asNumber(actionRaw.immediateReward) !== undefined && { immediateReward: asNumber(actionRaw.immediateReward)! }),
-			};
-			actions.push(stepAction);
-		}
-		const stepEnv = asObject(step.environmentState);
-		const stepMeta = asObject(step.metadata);
-		stepSummaries.push({
-			stepNumber,
-			timestamp: asNumber(step.timestamp) ?? 0,
-			...(asString(step.reasoning) !== undefined && { reasoning: asString(step.reasoning)! }),
-			...(asNumber(step.reward) !== undefined && { reward: asNumber(step.reward)! }),
-			...(asBoolean(step.done) !== undefined && { done: asBoolean(step.done)! }),
-			llmCallCount: stepCalls.length,
-			providerAccessCount: stepProviders.length,
-			hasAction: !!stepAction,
-			...(stepAction?.actionName !== undefined && { actionName: stepAction.actionName }),
-			...(stepAction?.success !== undefined && { actionSuccess: stepAction.success }),
-			...(step.observation !== undefined && { observation: step.observation }),
-			...(stepEnv && Object.keys(stepEnv).length > 0 && { environmentState: stepEnv }),
-			...(stepMeta && Object.keys(stepMeta).length > 0 && { metadata: stepMeta }),
-		});
+function flattenAccumulator(): FlattenAccumulator {
+	return {
+		llmCalls: [],
+		providerAccesses: [],
+		actions: [],
+		steps: [],
+		totalPromptTokens: 0,
+		totalCompletionTokens: 0,
+		totalLatencyMs: 0,
+	};
+}
+
+const LLM_STRING_FIELDS = [
+	"systemPrompt",
+	"userPrompt",
+	"response",
+	"reasoning",
+	"purpose",
+	"stepType",
+	"actionType",
+] as const;
+
+const LLM_NUMBER_FIELDS = ["temperature", "maxTokens"] as const;
+
+function llmStringFields(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+	const fields: Partial<ActivityLlmCall> = {};
+	for (const key of LLM_STRING_FIELDS) {
+		const value = asString(call[key]);
+		if (value !== undefined) fields[key] = value;
 	}
+	return fields;
+}
 
-	const meta = asObject(traj.metadata);
-	const metrics = asObject(traj.metrics);
-	const status = asString(metrics?.finalStatus);
-	const trajId = asString(traj.trajectoryId) ?? asString(traj.id) ?? "";
+function llmNumberFields(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+	const fields: Partial<ActivityLlmCall> = {};
+	for (const key of LLM_NUMBER_FIELDS) {
+		const value = asNumber(call[key]);
+		if (value !== undefined) fields[key] = value;
+	}
+	return fields;
+}
 
-	const trajectorySummary: ActivityTrajectoryListItem = {
-		id: trajId,
+function llmTags(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+	return Array.isArray(call.tags) ? { tags: call.tags.map(String) } : {};
+}
+
+function fallbackLlmCallId(call: Record<string, unknown>, stepNumber: number, fallbackIndex: number): string {
+	const timestamp = asNumber(call.timestamp) ?? 0;
+	const model = (asString(call.model) ?? "unknown").replace(/[^\w.-]+/g, "_");
+	return `${stepNumber}-${fallbackIndex}-${timestamp}-${model}`;
+}
+
+function normalizeLlmCall(
+	call: Record<string, unknown>,
+	stepNumber: number,
+	fallbackIndex: number,
+): { call: ActivityLlmCall; promptTokens: number; completionTokens: number; latencyMs?: number } {
+	const promptTokens = asNumber(call.promptTokens) ?? 0;
+	const completionTokens = asNumber(call.completionTokens) ?? 0;
+	const latencyMs = asNumber(call.latencyMs);
+	return {
+		promptTokens,
+		completionTokens,
+		...(latencyMs !== undefined ? { latencyMs } : {}),
+		call: {
+			callId: asString(call.callId) ?? fallbackLlmCallId(call, stepNumber, fallbackIndex),
+			stepNumber,
+			timestamp: asNumber(call.timestamp) ?? 0,
+			model: asString(call.model) ?? "?",
+			...llmStringFields(call),
+			...llmNumberFields(call),
+			promptTokens,
+			completionTokens,
+			...(latencyMs !== undefined && { latencyMs }),
+			...llmTags(call),
+		},
+	};
+}
+
+function collectLlmCalls(step: Record<string, unknown>, stepNumber: number, acc: FlattenAccumulator): ActivityLlmCall[] {
+	const stepCalls: ActivityLlmCall[] = [];
+	for (const callRaw of asArray(step.llmCalls)) {
+		const call = asObject(callRaw);
+		if (!call) continue;
+		const normalized = normalizeLlmCall(call, stepNumber, acc.llmCalls.length);
+		acc.totalPromptTokens += normalized.promptTokens;
+		acc.totalCompletionTokens += normalized.completionTokens;
+		if (normalized.latencyMs !== undefined) acc.totalLatencyMs += normalized.latencyMs;
+		acc.llmCalls.push(normalized.call);
+		stepCalls.push(normalized.call);
+	}
+	return stepCalls;
+}
+
+function normalizeProviderAccess(acc: Record<string, unknown>, stepNumber: number): ActivityProviderAccess {
+	return {
+		providerId: asString(acc.providerId) ?? "",
+		providerName: asString(acc.providerName) ?? "unknown",
+		stepNumber,
+		timestamp: asNumber(acc.timestamp) ?? 0,
+		...(asString(acc.purpose) !== undefined && { purpose: asString(acc.purpose)! }),
+		...(acc.query !== undefined && { query: acc.query }),
+		...(acc.data !== undefined && { data: acc.data }),
+	};
+}
+
+function collectProviderAccesses(step: Record<string, unknown>, stepNumber: number, acc: FlattenAccumulator): ActivityProviderAccess[] {
+	const stepProviders: ActivityProviderAccess[] = [];
+	for (const accRaw of asArray(step.providerAccesses)) {
+		const provider = asObject(accRaw);
+		if (!provider) continue;
+		const normalized = normalizeProviderAccess(provider, stepNumber);
+		acc.providerAccesses.push(normalized);
+		stepProviders.push(normalized);
+	}
+	return stepProviders;
+}
+
+function normalizeActionAttempt(action: Record<string, unknown>, stepNumber: number): ActivityActionAttempt {
+	return {
+		attemptId: asString(action.attemptId) ?? `${stepNumber}-action`,
+		stepNumber,
+		timestamp: asNumber(action.timestamp) ?? 0,
+		...(asString(action.actionType) !== undefined && { actionType: asString(action.actionType)! }),
+		...(asString(action.actionName) !== undefined && { actionName: asString(action.actionName)! }),
+		...(action.parameters !== undefined && { parameters: action.parameters }),
+		...(asString(action.reasoning) !== undefined && { reasoning: asString(action.reasoning)! }),
+		...(asBoolean(action.success) !== undefined && { success: asBoolean(action.success)! }),
+		...(action.result !== undefined && { result: action.result }),
+		...(asString(action.error) !== undefined && { error: asString(action.error)! }),
+		...(asNumber(action.immediateReward) !== undefined && { immediateReward: asNumber(action.immediateReward)! }),
+	};
+}
+
+function collectAction(step: Record<string, unknown>, stepNumber: number, acc: FlattenAccumulator): ActivityActionAttempt | null {
+	const actionRaw = asObject(step.action);
+	if (!actionRaw || Object.keys(actionRaw).length === 0) return null;
+	const action = normalizeActionAttempt(actionRaw, stepNumber);
+	acc.actions.push(action);
+	return action;
+}
+
+function stepSummary(
+	step: Record<string, unknown>,
+	stepNumber: number,
+	stepCalls: ActivityLlmCall[],
+	stepProviders: ActivityProviderAccess[],
+	stepAction: ActivityActionAttempt | null,
+): ActivityTrajectoryStepSummary {
+	const stepEnv = asObject(step.environmentState);
+	const stepMeta = asObject(step.metadata);
+	return {
+		stepNumber,
+		timestamp: asNumber(step.timestamp) ?? 0,
+		...(asString(step.reasoning) !== undefined && { reasoning: asString(step.reasoning)! }),
+		...(asNumber(step.reward) !== undefined && { reward: asNumber(step.reward)! }),
+		...(asBoolean(step.done) !== undefined && { done: asBoolean(step.done)! }),
+		llmCallCount: stepCalls.length,
+		providerAccessCount: stepProviders.length,
+		hasAction: !!stepAction,
+		...(stepAction?.actionName !== undefined && { actionName: stepAction.actionName }),
+		...(stepAction?.success !== undefined && { actionSuccess: stepAction.success }),
+		...(step.observation !== undefined && { observation: step.observation }),
+		...(stepEnv && Object.keys(stepEnv).length > 0 && { environmentState: stepEnv }),
+		...(stepMeta && Object.keys(stepMeta).length > 0 && { metadata: stepMeta }),
+	};
+}
+
+function collectStep(stepRaw: unknown, acc: FlattenAccumulator): void {
+	const step = asObject(stepRaw);
+	if (!step) return;
+	const stepNumber = asNumber(step.stepNumber) ?? 0;
+	const stepCalls = collectLlmCalls(step, stepNumber, acc);
+	const stepProviders = collectProviderAccesses(step, stepNumber, acc);
+	const stepAction = collectAction(step, stepNumber, acc);
+	acc.steps.push(stepSummary(step, stepNumber, stepCalls, stepProviders, stepAction));
+}
+
+function trajectoryStatus(traj: Record<string, unknown>): string | undefined {
+	return asString(asObject(traj.metrics)?.finalStatus);
+}
+
+function trajectorySummary(traj: Record<string, unknown>, acc: FlattenAccumulator, status: string | undefined): ActivityTrajectoryListItem {
+	const id = asString(traj.trajectoryId) ?? asString(traj.id) ?? "";
+	return {
+		id,
 		...(asString(traj.source) !== undefined && { source: asString(traj.source)! }),
 		...(status !== undefined && { status }),
 		...(asNumber(traj.startTime) !== undefined && { startTime: asNumber(traj.startTime)! }),
 		...(asNumber(traj.endTime) !== undefined && { endTime: asNumber(traj.endTime)! }),
 		...(asNumber(traj.durationMs) !== undefined && { durationMs: asNumber(traj.durationMs)! }),
-		llmCallCount: llmCalls.length,
-		totalPromptTokens,
-		totalCompletionTokens,
+		llmCallCount: acc.llmCalls.length,
+		totalPromptTokens: acc.totalPromptTokens,
+		totalCompletionTokens: acc.totalCompletionTokens,
 	};
+}
 
-	const identity: ActivityTrajectoryIdentity = {
-		id: trajId,
+function trajectoryIdentity(traj: Record<string, unknown>, meta: Record<string, unknown> | null, status: string | undefined): ActivityTrajectoryIdentity {
+	const id = asString(traj.trajectoryId) ?? asString(traj.id) ?? "";
+	return {
+		id,
 		...(asString(traj.agentId) !== undefined && { agentId: asString(traj.agentId)! }),
 		...(asString(meta?.agentName) !== undefined && { agentName: asString(meta?.agentName)! }),
 		...(asString(meta?.agentModel) !== undefined && { agentModel: asString(meta?.agentModel)! }),
@@ -349,26 +442,37 @@ function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail 
 		...(asNumber(traj.durationMs) !== undefined && { durationMs: asNumber(traj.durationMs)! }),
 		...(asNumber(traj.totalReward) !== undefined && { totalReward: asNumber(traj.totalReward)! }),
 	};
+}
+
+function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail {
+	const steps = asArray(traj.steps);
+	const acc = flattenAccumulator();
+
+	for (const stepRaw of steps) collectStep(stepRaw, acc);
+
+	const meta = asObject(traj.metadata);
+	const metrics = asObject(traj.metrics);
+	const status = trajectoryStatus(traj);
 
 	return {
-		trajectory: trajectorySummary,
-		identity,
+		trajectory: trajectorySummary(traj, acc, status),
+		identity: trajectoryIdentity(traj, meta, status),
 		totals: {
 			stepCount: steps.length,
-			llmCallCount: llmCalls.length,
-			providerAccessCount: providerAccesses.length,
-			actionCount: actions.length,
-			totalPromptTokens,
-			totalCompletionTokens,
-			totalLatencyMs,
+			llmCallCount: acc.llmCalls.length,
+			providerAccessCount: acc.providerAccesses.length,
+			actionCount: acc.actions.length,
+			totalPromptTokens: acc.totalPromptTokens,
+			totalCompletionTokens: acc.totalCompletionTokens,
+			totalLatencyMs: acc.totalLatencyMs,
 		},
-		llmCalls,
-		providerAccesses,
-		actions,
-		steps: stepSummaries,
-		metadata: meta && Object.keys(meta).length > 0 ? meta : null,
+		llmCalls: acc.llmCalls,
+		providerAccesses: acc.providerAccesses,
+		actions: acc.actions,
+		steps: acc.steps,
+		metadata: meta ?? {},
 		rewardComponents: asObject(traj.rewardComponents),
-		metrics: metrics && Object.keys(metrics).length > 0 ? metrics : null,
+		metrics: metrics ?? {},
 		raw: traj,
 	};
 }
@@ -435,10 +539,6 @@ export class ActivityTrajectoryService {
 
 	/** For the bulk-export button — fetches detail for every trajectory in `ids`. */
 	async getMany(ids: string[]): Promise<ActivityTrajectoryDetail[]> {
-		const out: ActivityTrajectoryDetail[] = [];
-		for (const id of ids) {
-			out.push(await this.get(id));
-		}
-		return out;
+		return Promise.all(ids.map((id) => this.get(id)));
 	}
 }
