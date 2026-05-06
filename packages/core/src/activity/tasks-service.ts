@@ -102,12 +102,20 @@ function asObject(v: unknown): Record<string, unknown> {
 	return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityTaskRecord | null {
-	const t = asObject(raw);
-	const id = asString(t.id);
-	if (!id) return null;
-	const meta = asObject(t.metadata);
-	const tags = Array.isArray(t.tags) ? (t.tags as unknown[]).map(String) : [];
+function optionalStringField(source: Record<string, unknown>, key: string): Record<string, string> {
+	const value = asString(source[key]);
+	return value === undefined ? {} : { [key]: value };
+}
+
+function optionalNumberField(source: Record<string, unknown>, key: string): Record<string, number> {
+	const value = asNumber(source[key]);
+	return value === undefined ? {} : { [key]: value };
+}
+
+function taskTiming(t: Record<string, unknown>, meta: Record<string, unknown>): Pick<
+	ActivityTaskRecord,
+	"updateInterval" | "nextRunAt" | "lastExecuted"
+> {
 	const updateInterval = asNumber(meta.updateInterval);
 	const lastExecuted = asNumber(
 		typeof meta.lastExecuted === "string"
@@ -117,22 +125,33 @@ function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityTas
 	const nextRunAt =
 		updateInterval && lastExecuted ? lastExecuted + updateInterval : asNumber(t.dueAt);
 	return {
-		id,
-		name: asString(t.name) ?? "(unnamed)",
-		...(asString(t.description) !== undefined && { description: asString(t.description)! }),
-		tags,
-		...(asString(t.roomId) !== undefined && { roomId: asString(t.roomId)! }),
-		...(asString(t.worldId) !== undefined && { worldId: asString(t.worldId)! }),
-		...(asString(t.entityId) !== undefined && { entityId: asString(t.entityId)! }),
-		...(asNumber(t.createdAt) !== undefined && { createdAt: asNumber(t.createdAt)! }),
-		...(asNumber(t.updatedAt) !== undefined && { updatedAt: asNumber(t.updatedAt)! }),
-		...(asNumber(t.dueAt) !== undefined && { dueAt: asNumber(t.dueAt)! }),
 		...(updateInterval !== undefined && { updateInterval }),
 		...(nextRunAt !== undefined && { nextRunAt }),
 		...(lastExecuted !== undefined && { lastExecuted }),
-		...(asString(meta.lastError) !== undefined && { lastError: asString(meta.lastError)! }),
+	};
+}
+
+function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityTaskRecord | null {
+	const t = asObject(raw);
+	const id = asString(t.id);
+	if (!id) return null;
+	const meta = asObject(t.metadata);
+	const tags = Array.isArray(t.tags) ? (t.tags as unknown[]).map(String) : [];
+	return {
+		id,
+		name: asString(t.name) ?? "(unnamed)",
+		...optionalStringField(t, "description"),
+		tags,
+		...optionalStringField(t, "roomId"),
+		...optionalStringField(t, "worldId"),
+		...optionalStringField(t, "entityId"),
+		...optionalNumberField(t, "createdAt"),
+		...optionalNumberField(t, "updatedAt"),
+		...optionalNumberField(t, "dueAt"),
+		...taskTiming(t, meta),
+		...optionalStringField(meta, "lastError"),
 		failureCount: asNumber(meta.failureCount) ?? 0,
-		...(asNumber(meta.maxFailures) !== undefined && { maxFailures: asNumber(meta.maxFailures)! }),
+		...optionalNumberField(meta, "maxFailures"),
 		paused: asBool(meta.paused),
 		hasWorker: knownWorkerNames.has(asString(t.name) ?? ""),
 		metadata: meta,

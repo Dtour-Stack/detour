@@ -225,6 +225,20 @@ function imageDescriptionInput(params: ImageDescriptionParams | string): { url: 
 	};
 }
 
+function imageDescriptionResult(text: string): { title: string; description: string } {
+	const fenced = text.match(/```(?:json)?\s*([\s\S]+?)```/);
+	const raw = fenced?.[1] ?? text;
+	try {
+		const parsed = JSON.parse(raw) as { title?: unknown; description?: unknown };
+		return {
+			title: typeof parsed.title === "string" && parsed.title.length > 0 ? parsed.title : "Image",
+			description: typeof parsed.description === "string" && parsed.description.length > 0 ? parsed.description : text,
+		};
+	} catch {
+		return { title: "Image", description: text };
+	}
+}
+
 function normalizeAspectRatio(size: string | undefined): string | undefined {
 	if (!size) return undefined;
 	const trimmed = size.trim();
@@ -305,44 +319,44 @@ const generateImageHandler: Handler = async (runtime, message, _state, options, 
 			await emit(callback, text);
 			return fail(text);
 		}
-		const attachmentUrl = materializeGeneratedImage(image.url);
-		const text = "Generated image.";
-		if (callback) {
-			await callback(
-				{
-					text,
-					source: "openrouter",
-					actions: ["GENERATE_IMAGE"],
-					attachments: [
-						{
-							id: `generated-image-${randomUUID()}`,
-							url: attachmentUrl,
-							title: "Generated image",
-							source: "openrouter",
-							description: text,
-							contentType: ContentType.IMAGE,
-						},
-					],
-				},
-				"GENERATE_IMAGE",
-			);
-		}
-		return {
-			success: true,
-			text,
-			values: { generatedImage: true, imageUrl: attachmentUrl },
-			data: {
-				actionName: "GENERATE_IMAGE",
-				imageUrl: attachmentUrl,
-				...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
-			},
-		};
+		return sendOpenRouterImage(callback, image);
 	} catch (error) {
 		const reason = `Image generation failed: ${error instanceof Error ? error.message : String(error)}`;
 		await emit(callback, reason);
 		return fail(reason);
 	}
 };
+
+async function sendOpenRouterImage(
+	callback: HandlerCallback | undefined,
+	image: OpenRouterImageGenerationResult,
+): Promise<ActionResult> {
+	const imageUrl = materializeGeneratedImage(image.url);
+	const text = "Generated image.";
+	await callback?.({
+		text,
+		source: "openrouter",
+		actions: ["GENERATE_IMAGE"],
+		attachments: [{
+			id: `generated-image-${randomUUID()}`,
+			url: imageUrl,
+			title: "Generated image",
+			source: "openrouter",
+			description: text,
+			contentType: ContentType.IMAGE,
+		}],
+	}, "GENERATE_IMAGE");
+	return {
+		success: true,
+		text,
+		values: { generatedImage: true, imageUrl },
+		data: {
+			actionName: "GENERATE_IMAGE",
+			imageUrl,
+			...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
+		},
+	};
+}
 
 export const generateImageAction: Action = {
 	name: "GENERATE_IMAGE",
@@ -450,13 +464,7 @@ export const openRouterPlugin: Plugin = {
 				stream: false,
 			});
 			const text = extractText(response);
-			try {
-				const fenced = text.match(/```(?:json)?\s*([\s\S]+?)```/);
-				const parsed = JSON.parse(fenced ? fenced[1]! : text) as { title?: string; description?: string };
-				return { title: parsed.title ?? "Image", description: parsed.description ?? text };
-			} catch {
-				return { title: "Image", description: text };
-			}
+			return imageDescriptionResult(text);
 		},
 	},
 };

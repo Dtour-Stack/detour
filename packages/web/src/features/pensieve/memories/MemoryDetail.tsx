@@ -90,85 +90,144 @@ export function MemoryDetail({
 				</div>
 			</div>
 
-			<section className="pensieve-detail-section">
-				<label>Content</label>
-				{editing ? (
-					<textarea
-						value={draftText}
-						onChange={(e) => setDraftText(e.target.value)}
-						rows={8}
-						className="pensieve-textarea"
-					/>
-				) : (
-					<div className="pensieve-detail-content">{detail.content?.text ?? "(no text)"}</div>
-				)}
-			</section>
-
-			<section className="pensieve-detail-section">
-				<label>Path</label>
-				{editing ? (
-					<input
-						type="text"
-						value={draftPath}
-						onChange={(e) => setDraftPath(e.target.value)}
-						placeholder="/notes/projects"
-						className="pensieve-input"
-					/>
-				) : (
-					<div className="pensieve-detail-content" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
-						{detail.path}
-					</div>
-				)}
-			</section>
-
-			<section className="pensieve-detail-section">
-				<label>Tags</label>
-				{editing ? (
-					<input
-						type="text"
-						value={draftTags}
-						onChange={(e) => setDraftTags(e.target.value)}
-						placeholder="comma, separated, tags"
-						className="pensieve-input"
-					/>
-				) : (
-					<div className="row" style={{ flexWrap: "wrap", gap: 4 }}>
-						{(detail.tags ?? []).length === 0
-							? <span className="hint">no tags</span>
-							: (detail.tags ?? []).map((t) => <span key={t} className="badge info">{t}</span>)}
-					</div>
-				)}
-			</section>
-
-			<section className="pensieve-detail-section">
-				<label>Provenance</label>
-				<div className="pensieve-detail-meta">
-					{detail.entityId && <div><strong>entity</strong> {detail.entityId}</div>}
-					{detail.roomId && <div><strong>room</strong> {detail.roomId}</div>}
-					{detail.worldId && <div><strong>world</strong> {detail.worldId}</div>}
-					{detail.createdAt && <div><strong>created</strong> {new Date(detail.createdAt).toLocaleString()}</div>}
-					<div><strong>embedding</strong> {detail.hasEmbedding ? "✓ stored" : "—"}</div>
-				</div>
-			</section>
-
-			{detail.backlinks && detail.backlinks.nodes.length > 1 && (
-				<section className="pensieve-detail-section">
-					<label>Backlinks</label>
-					<div className="hint" style={{ marginBottom: 6 }}>
-						{detail.backlinks.edges.length} link(s) to {detail.backlinks.nodes.length - 1} other node(s)
-					</div>
-					<div className="row" style={{ flexWrap: "wrap", gap: 4 }}>
-						{detail.backlinks.nodes
-							.filter((n) => n.id !== `memory:${memoryId}`)
-							.slice(0, 30)
-							.map((n) => (
-								<span key={n.id} className="badge muted" title={n.id}>
-									{n.kind}: {n.label.slice(0, 40)}
-								</span>
-							))}
-					</div>
-				</section>
-			)}
+			<ContentSection
+				detail={detail}
+				draftText={draftText}
+				editing={editing}
+				onDraftText={setDraftText}
+			/>
+			<PathSection
+				detail={detail}
+				draftPath={draftPath}
+				editing={editing}
+				onDraftPath={setDraftPath}
+			/>
+			<TagsSection
+				detail={detail}
+				draftTags={draftTags}
+				editing={editing}
+				onDraftTags={setDraftTags}
+			/>
+			<ProvenanceSection detail={detail} />
+			<BacklinksSection detail={detail} memoryId={memoryId} />
 		</div>
+	);
+}
+
+function ContentSection({
+	detail,
+	draftText,
+	editing,
+	onDraftText,
+}: {
+	detail: PensieveMemoryDetail;
+	draftText: string;
+	editing: boolean;
+	onDraftText: (value: string) => void;
+}) {
+	return (
+		<section className="pensieve-detail-section">
+			<label>Content</label>
+			{editing ? (
+				<textarea value={draftText} onChange={(e) => onDraftText(e.target.value)} rows={8} className="pensieve-textarea" />
+			) : (
+				<div className="pensieve-detail-content">{detail.content?.text ?? "(no text)"}</div>
+			)}
+		</section>
+	);
+}
+
+function PathSection({
+	detail,
+	draftPath,
+	editing,
+	onDraftPath,
+}: {
+	detail: PensieveMemoryDetail;
+	draftPath: string;
+	editing: boolean;
+	onDraftPath: (value: string) => void;
+}) {
+	return (
+		<section className="pensieve-detail-section">
+			<label>Path</label>
+			{editing ? (
+				<input type="text" value={draftPath} onChange={(e) => onDraftPath(e.target.value)} placeholder="/notes/projects" className="pensieve-input" />
+			) : (
+				<div className="pensieve-detail-content" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+					{detail.path}
+				</div>
+			)}
+		</section>
+	);
+}
+
+function TagsSection({
+	detail,
+	draftTags,
+	editing,
+	onDraftTags,
+}: {
+	detail: PensieveMemoryDetail;
+	draftTags: string;
+	editing: boolean;
+	onDraftTags: (value: string) => void;
+}) {
+	return (
+		<section className="pensieve-detail-section">
+			<label>Tags</label>
+			{editing ? (
+				<input type="text" value={draftTags} onChange={(e) => onDraftTags(e.target.value)} placeholder="comma, separated, tags" className="pensieve-input" />
+			) : (
+				<TagBadges tags={detail.tags ?? []} />
+			)}
+		</section>
+	);
+}
+
+function TagBadges({ tags }: { tags: string[] }) {
+	return (
+		<div className="row" style={{ flexWrap: "wrap", gap: 4 }}>
+			{tags.length === 0
+				? <span className="hint">no tags</span>
+				: tags.map((tag) => <span key={tag} className="badge info">{tag}</span>)}
+		</div>
+	);
+}
+
+function ProvenanceSection({ detail }: { detail: PensieveMemoryDetail }) {
+	return (
+		<section className="pensieve-detail-section">
+			<label>Provenance</label>
+			<div className="pensieve-detail-meta">
+				{detail.entityId && <div><strong>entity</strong> {detail.entityId}</div>}
+				{detail.roomId && <div><strong>room</strong> {detail.roomId}</div>}
+				{detail.worldId && <div><strong>world</strong> {detail.worldId}</div>}
+				{detail.createdAt && <div><strong>created</strong> {new Date(detail.createdAt).toLocaleString()}</div>}
+				<div><strong>embedding</strong> {detail.hasEmbedding ? "✓ stored" : "—"}</div>
+			</div>
+		</section>
+	);
+}
+
+function BacklinksSection({ detail, memoryId }: { detail: PensieveMemoryDetail; memoryId: string }) {
+	if (!detail.backlinks || detail.backlinks.nodes.length <= 1) return null;
+	return (
+		<section className="pensieve-detail-section">
+			<label>Backlinks</label>
+			<div className="hint" style={{ marginBottom: 6 }}>
+				{detail.backlinks.edges.length} link(s) to {detail.backlinks.nodes.length - 1} other node(s)
+			</div>
+			<div className="row" style={{ flexWrap: "wrap", gap: 4 }}>
+				{detail.backlinks.nodes
+					.filter((node) => node.id !== `memory:${memoryId}`)
+					.slice(0, 30)
+					.map((node) => (
+						<span key={node.id} className="badge muted" title={node.id}>
+							{node.kind}: {node.label.slice(0, 40)}
+						</span>
+					))}
+			</div>
+		</section>
 	);
 }

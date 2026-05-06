@@ -22,6 +22,8 @@ interface DebugProbe {
 	queueSize: number | null;
 }
 
+type BusyState = "" | "save" | "test" | "clear";
+
 function fmtBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
 	if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -41,7 +43,7 @@ export function LocalAITab({ client }: { client: WebClient }) {
 	const [status, setStatus] = useState<LlamaServerStatus | null>(null);
 	const [openaiKey, setOpenaiKey] = useState("");
 	const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
-	const [busy, setBusy] = useState<"" | "save" | "test" | "clear">("");
+	const [busy, setBusy] = useState<BusyState>("");
 	const [probe, setProbe] = useState<DebugProbe | null>(null);
 	const [probeError, setProbeError] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -131,148 +133,237 @@ export function LocalAITab({ client }: { client: WebClient }) {
 	}, []);
 
 	const running = status?.running ?? false;
-	const dl = status?.downloadProgress;
-	const upMs = status?.startedAt ? Date.now() - status.startedAt : null;
 
 	return (
 		<div className="settings-pane" style={{ padding: 16 }}>
-			<header style={{ marginBottom: 16 }}>
-				<h2 style={{ margin: 0 }}>Local AI</h2>
-				<div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-					Detour ships a bundled llama.cpp server for free, on-device embeddings.
-					No API key, no daemon, no network after first model download.
-				</div>
-			</header>
+			<LocalAIHeader />
+			<ServerStatusCard status={status} running={running} />
+			<PipelineCheckCard
+				busy={busy}
+				probe={probe}
+				probeError={probeError}
+				running={running}
+				onProbe={runProbe}
+			/>
+			<CloudFallbackCard
+				busy={busy}
+				hasOpenaiKey={hasOpenaiKey}
+				openaiKey={openaiKey}
+				saveError={saveError}
+				onClear={clearOpenaiKey}
+				onKeyChange={setOpenaiKey}
+				onSave={saveOpenaiKey}
+			/>
+		</div>
+	);
+}
 
-			{/* Server status card */}
-			<section style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
-				<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-					<strong>Embedding server</strong>
-					<span style={{
-						display: "inline-flex", alignItems: "center", gap: 6,
-						padding: "2px 8px", borderRadius: 999, fontSize: 11,
-						background: running ? "rgba(48,209,88,0.15)" : "rgba(255,69,58,0.15)",
-						color: running ? "#30d158" : "#ff453a",
-					}}>
-						<span style={{ width: 6, height: 6, borderRadius: 999, background: running ? "#30d158" : "#ff453a" }} />
-						{running ? "running" : status?.lastError ? "error" : "starting"}
-					</span>
-				</div>
+function LocalAIHeader() {
+	return (
+		<header style={{ marginBottom: 16 }}>
+			<h2 style={{ margin: 0 }}>Local AI</h2>
+			<div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+				Detour ships a bundled llama.cpp server for free, on-device embeddings.
+				No API key, no daemon, no network after first model download.
+			</div>
+		</header>
+	);
+}
 
-				{dl && dl.percent < 100 && (
-					<div style={{ marginBottom: 10 }}>
-						<div style={{ fontSize: 12, marginBottom: 4 }}>
-							Downloading model — {dl.percent}% ({fmtBytes(dl.downloadedBytes)}/{fmtBytes(dl.totalBytes)})
-						</div>
-						<div style={{ height: 4, background: "rgba(128,128,128,0.2)", borderRadius: 2, overflow: "hidden" }}>
-							<div style={{ width: `${dl.percent}%`, height: "100%", background: "var(--accent, #0a84ff)" }} />
-						</div>
-					</div>
-				)}
-
-				{status?.lastError && (
-					<div className="banner error" style={{ marginBottom: 10, padding: 8, fontSize: 12, borderRadius: 4, background: "rgba(255,69,58,0.1)", color: "#ff453a" }}>
-						{status.lastError}
-					</div>
-				)}
-
-				<dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", margin: 0, fontSize: 12 }}>
-					<dt style={{ opacity: 0.6 }}>Model</dt>
-					<dd style={{ margin: 0, fontFamily: "monospace" }}>
-						{status?.modelPath ? status.modelPath.split("/").pop() : "—"}
-					</dd>
-					<dt style={{ opacity: 0.6 }}>Endpoint</dt>
-					<dd style={{ margin: 0, fontFamily: "monospace" }}>{status?.url ?? "—"}</dd>
-					<dt style={{ opacity: 0.6 }}>Process</dt>
-					<dd style={{ margin: 0, fontFamily: "monospace" }}>{status?.pid ? `pid ${status.pid}` : "—"}</dd>
-					{upMs !== null && (
-						<>
-							<dt style={{ opacity: 0.6 }}>Uptime</dt>
-							<dd style={{ margin: 0 }}>{fmtDuration(upMs)}</dd>
-						</>
-					)}
-				</dl>
-			</section>
-
-			{/* Test embedding card */}
-			<section style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
-				<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-					<strong>Pipeline check</strong>
-					<button type="button" onClick={() => void runProbe()} disabled={!running || busy === "test"} className="btn">
-						{busy === "test" ? "Running…" : "Test embedding"}
-					</button>
+function ServerStatusCard({ status, running }: { status: LlamaServerStatus | null; running: boolean }) {
+	const dl = status?.downloadProgress;
+	const upMs = status?.startedAt ? Date.now() - status.startedAt : null;
+	return (
+		<section style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+			<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+				<strong>Embedding server</strong>
+				<span style={{
+					display: "inline-flex", alignItems: "center", gap: 6,
+					padding: "2px 8px", borderRadius: 999, fontSize: 11,
+					background: running ? "rgba(48,209,88,0.15)" : "rgba(255,69,58,0.15)",
+					color: running ? "#30d158" : "#ff453a",
+				}}>
+					<span style={{ width: 6, height: 6, borderRadius: 999, background: running ? "#30d158" : "#ff453a" }} />
+					{running ? "running" : status?.lastError ? "error" : "starting"}
+				</span>
+			</div>
+			{dl && dl.percent < 100 && <DownloadProgress dl={dl} />}
+			{status?.lastError && (
+				<div className="banner error" style={{ marginBottom: 10, padding: 8, fontSize: 12, borderRadius: 4, background: "rgba(255,69,58,0.1)", color: "#ff453a" }}>
+					{status.lastError}
 				</div>
-				<div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>
-					Sends a real semantic-embedding request through the agent's plugin chain → local
-					llama-server. Confirms vectors are non-zero and stored in the right column.
-				</div>
-				{probeError && (
-					<div className="banner error" style={{ marginBottom: 8, padding: 8, fontSize: 12, borderRadius: 4, background: "rgba(255,69,58,0.1)", color: "#ff453a" }}>
-						{probeError}
-					</div>
-				)}
-				{probe && (
-					<dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", margin: 0, fontSize: 12 }}>
-						<dt style={{ opacity: 0.6 }}>Result</dt>
-						<dd style={{ margin: 0, color: probe.nonZero > 0 ? "#30d158" : "#ff9f0a" }}>
-							{probe.nonZero > 0 ? "✓ real vectors" : "⚠ zero vectors (fallback)"}
-						</dd>
-						<dt style={{ opacity: 0.6 }}>Dimension</dt>
-						<dd style={{ margin: 0, fontFamily: "monospace" }}>
-							{probe.dim} ({probe.nonZero}/{probe.dim} non-zero)
-						</dd>
-						<dt style={{ opacity: 0.6 }}>Latency</dt>
-						<dd style={{ margin: 0 }}>{probe.durationMs} ms</dd>
-						<dt style={{ opacity: 0.6 }}>DB column</dt>
-						<dd style={{ margin: 0, fontFamily: "monospace" }}>
-							{probe.adapterEmbeddingDimension ?? "—"}
-						</dd>
-						<dt style={{ opacity: 0.6 }}>Drain queue</dt>
-						<dd style={{ margin: 0 }}>{probe.queueSize ?? "—"}</dd>
-					</dl>
-				)}
-			</section>
-
-			{/* Cloud fallback card */}
-			<section style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 14 }}>
-				<div style={{ marginBottom: 8 }}>
-					<strong>Cloud fallback</strong>
-				</div>
-				<div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10 }}>
-					Optional. If you'd rather use OpenAI's embeddings (text-embedding-3-small) instead of
-					(or as a fallback to) the local server, paste a regular OpenAI API key here.
-					Keys are stored in your encrypted vault and validated on save.
-				</div>
-				{hasOpenaiKey ? (
-					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-						<span style={{ color: "#30d158", fontSize: 12 }}>✓ OpenAI embedding key stored</span>
-						<button type="button" onClick={() => void clearOpenaiKey()} disabled={busy === "clear"} className="btn small ghost">
-							{busy === "clear" ? "Clearing…" : "Clear"}
-						</button>
-					</div>
-				) : (
+			)}
+			<dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", margin: 0, fontSize: 12 }}>
+				<dt style={{ opacity: 0.6 }}>Model</dt>
+				<dd style={{ margin: 0, fontFamily: "monospace" }}>
+					{status?.modelPath ? status.modelPath.split("/").pop() : "—"}
+				</dd>
+				<dt style={{ opacity: 0.6 }}>Endpoint</dt>
+				<dd style={{ margin: 0, fontFamily: "monospace" }}>{status?.url ?? "—"}</dd>
+				<dt style={{ opacity: 0.6 }}>Process</dt>
+				<dd style={{ margin: 0, fontFamily: "monospace" }}>{status?.pid ? `pid ${status.pid}` : "—"}</dd>
+				{upMs !== null && (
 					<>
-						<div style={{ display: "flex", gap: 6 }}>
-							<input
-								type="password"
-								placeholder="sk-… (validated against api.openai.com)"
-								value={openaiKey}
-								onChange={(e) => setOpenaiKey(e.target.value)}
-								className="pensieve-input"
-								style={{ flex: 1 }}
-							/>
-							<button type="button" onClick={() => void saveOpenaiKey()} disabled={busy === "save" || !openaiKey.trim()} className="btn">
-								{busy === "save" ? "Saving…" : "Save"}
-							</button>
-						</div>
-						{saveError && (
-							<div className="banner error" style={{ marginTop: 8, padding: 8, fontSize: 12, borderRadius: 4, background: "rgba(255,69,58,0.1)", color: "#ff453a" }}>
-								{saveError}
-							</div>
-						)}
+						<dt style={{ opacity: 0.6 }}>Uptime</dt>
+						<dd style={{ margin: 0 }}>{fmtDuration(upMs)}</dd>
 					</>
 				)}
-			</section>
+			</dl>
+		</section>
+	);
+}
+
+function DownloadProgress({ dl }: { dl: NonNullable<LlamaServerStatus["downloadProgress"]> }) {
+	return (
+		<div style={{ marginBottom: 10 }}>
+			<div style={{ fontSize: 12, marginBottom: 4 }}>
+				Downloading model — {dl.percent}% ({fmtBytes(dl.downloadedBytes)}/{fmtBytes(dl.totalBytes)})
+			</div>
+			<div style={{ height: 4, background: "rgba(128,128,128,0.2)", borderRadius: 2, overflow: "hidden" }}>
+				<div style={{ width: `${dl.percent}%`, height: "100%", background: "var(--accent, #0a84ff)" }} />
+			</div>
 		</div>
+	);
+}
+
+function PipelineCheckCard({
+	busy,
+	probe,
+	probeError,
+	running,
+	onProbe,
+}: {
+	busy: BusyState;
+	probe: DebugProbe | null;
+	probeError: string | null;
+	running: boolean;
+	onProbe: () => Promise<void>;
+}) {
+	return (
+		<section style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+			<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+				<strong>Pipeline check</strong>
+				<button type="button" onClick={() => void onProbe()} disabled={!running || busy === "test"} className="btn">
+					{busy === "test" ? "Running…" : "Test embedding"}
+				</button>
+			</div>
+			<div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>
+				Sends a real semantic-embedding request through the agent's plugin chain to local
+				llama-server. Confirms vectors are non-zero and stored in the right column.
+			</div>
+			{probeError && (
+				<div className="banner error" style={{ marginBottom: 8, padding: 8, fontSize: 12, borderRadius: 4, background: "rgba(255,69,58,0.1)", color: "#ff453a" }}>
+					{probeError}
+				</div>
+			)}
+			{probe && <ProbeResult probe={probe} />}
+		</section>
+	);
+}
+
+function ProbeResult({ probe }: { probe: DebugProbe }) {
+	return (
+		<dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", margin: 0, fontSize: 12 }}>
+			<dt style={{ opacity: 0.6 }}>Result</dt>
+			<dd style={{ margin: 0, color: probe.nonZero > 0 ? "#30d158" : "#ff9f0a" }}>
+				{probe.nonZero > 0 ? "real vectors" : "zero vectors (fallback)"}
+			</dd>
+			<dt style={{ opacity: 0.6 }}>Dimension</dt>
+			<dd style={{ margin: 0, fontFamily: "monospace" }}>
+				{probe.dim} ({probe.nonZero}/{probe.dim} non-zero)
+			</dd>
+			<dt style={{ opacity: 0.6 }}>Latency</dt>
+			<dd style={{ margin: 0 }}>{probe.durationMs} ms</dd>
+			<dt style={{ opacity: 0.6 }}>DB column</dt>
+			<dd style={{ margin: 0, fontFamily: "monospace" }}>
+				{probe.adapterEmbeddingDimension ?? "—"}
+			</dd>
+			<dt style={{ opacity: 0.6 }}>Drain queue</dt>
+			<dd style={{ margin: 0 }}>{probe.queueSize ?? "—"}</dd>
+		</dl>
+	);
+}
+
+function CloudFallbackCard({
+	busy,
+	hasOpenaiKey,
+	openaiKey,
+	saveError,
+	onClear,
+	onKeyChange,
+	onSave,
+}: {
+	busy: BusyState;
+	hasOpenaiKey: boolean;
+	openaiKey: string;
+	saveError: string | null;
+	onClear: () => Promise<void>;
+	onKeyChange: (value: string) => void;
+	onSave: () => Promise<void>;
+}) {
+	return (
+		<section style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 14 }}>
+			<div style={{ marginBottom: 8 }}>
+				<strong>Cloud fallback</strong>
+			</div>
+			<div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10 }}>
+				Optional. If you'd rather use OpenAI's embeddings (text-embedding-3-small) instead of
+				(or as a fallback to) the local server, paste a regular OpenAI API key here.
+				Keys are stored in your encrypted vault and validated on save.
+			</div>
+			{hasOpenaiKey ? (
+				<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+					<span style={{ color: "#30d158", fontSize: 12 }}>OpenAI embedding key stored</span>
+					<button type="button" onClick={() => void onClear()} disabled={busy === "clear"} className="btn small ghost">
+						{busy === "clear" ? "Clearing…" : "Clear"}
+					</button>
+				</div>
+			) : (
+				<OpenAiKeyForm
+					busy={busy}
+					openaiKey={openaiKey}
+					saveError={saveError}
+					onKeyChange={onKeyChange}
+					onSave={onSave}
+				/>
+			)}
+		</section>
+	);
+}
+
+function OpenAiKeyForm({
+	busy,
+	openaiKey,
+	saveError,
+	onKeyChange,
+	onSave,
+}: {
+	busy: BusyState;
+	openaiKey: string;
+	saveError: string | null;
+	onKeyChange: (value: string) => void;
+	onSave: () => Promise<void>;
+}) {
+	return (
+		<>
+			<div style={{ display: "flex", gap: 6 }}>
+				<input
+					type="password"
+					placeholder="sk-... (validated against api.openai.com)"
+					value={openaiKey}
+					onChange={(e) => onKeyChange(e.target.value)}
+					className="pensieve-input"
+					style={{ flex: 1 }}
+				/>
+				<button type="button" onClick={() => void onSave()} disabled={busy === "save" || !openaiKey.trim()} className="btn">
+					{busy === "save" ? "Saving…" : "Save"}
+				</button>
+			</div>
+			{saveError && (
+				<div className="banner error" style={{ marginTop: 8, padding: 8, fontSize: 12, borderRadius: 4, background: "rgba(255,69,58,0.1)", color: "#ff453a" }}>
+					{saveError}
+				</div>
+			)}
+		</>
 	);
 }

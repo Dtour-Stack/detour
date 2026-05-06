@@ -120,6 +120,82 @@ async function which(cmd: string): Promise<string | null> {
 	}
 }
 
+function missingOnePasswordDiagnostic(): OpDiagnostic {
+	return {
+		platform: process.platform,
+		opPath: null,
+		opVersion: null,
+		accountList: { exitCode: -1, stdout: "", stderr: "`op` not on PATH" },
+		vaultList: null,
+		desktopIntegrationDetected: false,
+		sessionTokenStored: false,
+		hint: "Install the 1Password CLI: brew install --cask 1password-cli",
+	};
+}
+
+async function probeOpVersion(): Promise<string | null> {
+	try {
+		const version = await spawnCapture("op", ["--version"], null, process.env, SHORT_TIMEOUT_MS);
+		return version.stdout.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+async function probeOpAccountList(): Promise<CapturedExec> {
+	return spawnCapture("op", ["account", "list", "--format=json"], null, process.env, SHORT_TIMEOUT_MS)
+		.catch((err) => ({
+			exitCode: -1,
+			stdout: "",
+			stderr: err instanceof Error ? err.message : String(err),
+		}));
+}
+
+function accountShorthand(accountList: CapturedExec): string | null {
+	if (accountList.exitCode !== 0 || !accountList.stdout.trim()) return null;
+	try {
+		const accounts = JSON.parse(accountList.stdout) as Array<{ shorthand?: string; url?: string }>;
+		return accounts.flatMap((account) => {
+			if (typeof account.shorthand === "string" && account.shorthand.length > 0) return [account.shorthand];
+			if (typeof account.url === "string") return account.url.split(".")[0] ? [account.url.split(".")[0]!] : [];
+			return [];
+		})[0] ?? null;
+	} catch {
+		return null;
+	}
+}
+
+async function probeOpVaultList(
+	shorthand: string | null,
+): Promise<OpDiagnostic["vaultList"]> {
+	if (!shorthand) return null;
+	const result = await spawnCapture(
+		"op",
+		[`--account=${shorthand}`, "vault", "list", "--format=json"],
+		null,
+		process.env,
+		SHORT_TIMEOUT_MS,
+	).catch((err) => ({
+		exitCode: -1,
+		stdout: "",
+		stderr: err instanceof Error ? err.message : String(err),
+	}));
+	return { account: shorthand, ...result };
+}
+
+function onePasswordHint(
+	accountList: CapturedExec,
+	shorthand: string | null,
+	desktopIntegrationDetected: boolean,
+	sessionTokenStored: boolean,
+): string {
+	if (accountList.exitCode !== 0) return "op account list failed. Run `op account add` from a terminal first, then come back.";
+	if (!shorthand) return "op is installed but no 1Password accounts are registered. Run `op account add` (or sign in via the form below).";
+	if (!desktopIntegrationDetected && !sessionTokenStored) return `Account "${shorthand}" registered but no auth path. Either enable 1Password 8 desktop CLI integration (1Password → Settings → Developer → Integrate with 1Password CLI) or sign in via the form below.`;
+	if (desktopIntegrationDetected) return `Authenticated via 1Password desktop app integration (account "${shorthand}").`;
+	return `Authenticated via stored session token (account "${shorthand}").`;
+}
+
 export class BackendOps {
 	constructor(private readonly vault: VaultService) {}
 
@@ -129,101 +205,14 @@ export class BackendOps {
 	 */
 	async diagnoseOnePassword(): Promise<OpDiagnostic> {
 		const opPath = await which("op");
-		if (!opPath) {
-			return {
-				platform: process.platform,
-				opPath: null,
-				opVersion: null,
-				accountList: { exitCode: -1, stdout: "", stderr: "`op` not on PATH" },
-				vaultList: null,
-				desktopIntegrationDetected: false,
-				sessionTokenStored: false,
-				hint: "Install the 1Password CLI: brew install --cask 1password-cli",
-			};
-		}
-
-		let opVersion: string | null = null;
-		try {
-			const v = await spawnCapture("op", ["--version"], null, process.env, SHORT_TIMEOUT_MS);
-			opVersion = v.stdout.trim() || null;
-		} catch {
-			opVersion = null;
-		}
-
-		const accountList = await spawnCapture(
-			"op",
-			["account", "list", "--format=json"],
-			null,
-			process.env,
-			SHORT_TIMEOUT_MS,
-		).catch((err) => ({
-			exitCode: -1,
-			stdout: "",
-			stderr: err instanceof Error ? err.message : String(err),
-		}));
-
-		// Pick first account shorthand (or derive from URL host)
-		let shorthand: string | null = null;
-		if (accountList.exitCode === 0 && accountList.stdout.trim()) {
-			try {
-				const accounts = JSON.parse(accountList.stdout) as Array<{
-					shorthand?: string;
-					url?: string;
-				}>;
-				for (const a of accounts) {
-					if (typeof a.shorthand === "string" && a.shorthand.length > 0) {
-						shorthand = a.shorthand;
-						break;
-					}
-					if (typeof a.url === "string") {
-						const sub = a.url.split(".")[0];
-						if (sub) {
-							shorthand = sub;
-							break;
-						}
-					}
-				}
-			} catch {
-				// JSON parse failure — leave shorthand null
-			}
-		}
-
-		let vaultList:
-			| { account: string | null; exitCode: number; stdout: string; stderr: string }
-			| null = null;
-		let desktopIntegrationDetected = false;
-		if (shorthand) {
-			const v = await spawnCapture(
-				"op",
-				[`--account=${shorthand}`, "vault", "list", "--format=json"],
-				null,
-				process.env,
-				SHORT_TIMEOUT_MS,
-			).catch((err) => ({
-				exitCode: -1,
-				stdout: "",
-				stderr: err instanceof Error ? err.message : String(err),
-			}));
-			vaultList = { account: shorthand, ...v };
-			desktopIntegrationDetected = v.exitCode === 0;
-		}
-
+		if (!opPath) return missingOnePasswordDiagnostic();
+		const opVersion = await probeOpVersion();
+		const accountList = await probeOpAccountList();
+		const shorthand = accountShorthand(accountList);
+		const vaultList = await probeOpVaultList(shorthand);
+		const desktopIntegrationDetected = vaultList?.exitCode === 0;
 		const v = await this.vault.vault();
 		const sessionTokenStored = await v.has(sessionKey("1password"));
-
-		let hint: string;
-		if (accountList.exitCode !== 0) {
-			hint = `op account list failed. Run \`op account add\` from a terminal first, then come back.`;
-		} else if (!shorthand) {
-			hint = `op is installed but no 1Password accounts are registered. Run \`op account add\` (or sign in via the form below).`;
-		} else if (!desktopIntegrationDetected && !sessionTokenStored) {
-			hint = `Account "${shorthand}" registered but no auth path. Either enable 1Password 8 desktop CLI integration (1Password → Settings → Developer → Integrate with 1Password CLI) or sign in via the form below.`;
-		} else if (desktopIntegrationDetected) {
-			hint = `Authenticated via 1Password desktop app integration (account "${shorthand}").`;
-		} else {
-			hint = `Authenticated via stored session token (account "${shorthand}").`;
-		}
-
 		return {
 			platform: process.platform,
 			opPath,
@@ -232,7 +221,7 @@ export class BackendOps {
 			vaultList,
 			desktopIntegrationDetected,
 			sessionTokenStored,
-			hint,
+			hint: onePasswordHint(accountList, shorthand, desktopIntegrationDetected, sessionTokenStored),
 		};
 	}
 

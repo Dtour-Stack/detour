@@ -122,72 +122,15 @@ export function DbPane({ client }: { client: WebClient }) {
 					)}
 				</div>
 
-				{mode === "schema" && (
-					selected ? (
-						detail ? (
-							<div className="db-detail">
-								<div className="db-detail-meta">
-									<span className="badge muted">{detail.schema}.{detail.name}</span>
-									<span className="hint">{detail.rowCount.toLocaleString()} rows · {detail.columns.length} columns</span>
-								</div>
-								<table className="db-schema-table">
-									<thead>
-										<tr><th>Column</th><th>Type</th><th>Null</th><th>Default</th></tr>
-									</thead>
-									<tbody>
-										{detail.columns.map((c) => (
-											<tr key={c.name}>
-												<td className="db-col-name">{c.name}</td>
-												<td className="db-col-type">{c.type}</td>
-												<td>{c.nullable ? "yes" : "—"}</td>
-												<td className="db-col-default">{c.default ?? "—"}</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-								{detail.sample.rows.length > 0 && (
-									<>
-										<div className="db-sample-label">
-											Sample ({detail.sample.rows.length} of {detail.rowCount})
-											{detail.sample.truncated && " (truncated)"}
-										</div>
-										<DbResultsTable
-											columns={detail.columns.map((c) => c.name)}
-											rows={detail.sample.rows}
-										/>
-									</>
-								)}
-							</div>
-						) : <div className="empty">Loading schema…</div>
-					) : <div className="empty" style={{ margin: 24 }}>Select a table.</div>
-				)}
-
+				{mode === "schema" && <SchemaPanel detail={detail} selected={selected} />}
 				{mode === "console" && (
-					<div className="db-console">
-						<textarea
-							value={sqlText}
-							onChange={(e) => setSqlText(e.target.value)}
-							onKeyDown={(e) => {
-								if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-									e.preventDefault();
-									void runQuery();
-								}
-							}}
-							className="pensieve-textarea db-console-textarea"
-							spellCheck={false}
-							placeholder="SELECT-only. Cmd+Enter to run."
-						/>
-						{queryError && <div className="banner error" style={{ margin: "8px 0 0" }}>{queryError}</div>}
-						{queryResult && !queryError && (
-							<div className="db-console-result">
-								<div className="hint">
-									{queryResult.rows.length} row{queryResult.rows.length === 1 ? "" : "s"} · {queryResult.durationMs}ms
-									{queryResult.truncated && " · truncated to 200"}
-								</div>
-								<DbResultsTable columns={queryResult.columns} rows={queryResult.rows} />
-							</div>
-						)}
-					</div>
+					<ConsolePanel
+						queryError={queryError}
+						queryResult={queryResult}
+						runQuery={runQuery}
+						sqlText={sqlText}
+						setSqlText={setSqlText}
+					/>
 				)}
 			</div>
 
@@ -196,6 +139,105 @@ export function DbPane({ client }: { client: WebClient }) {
 					Read-only console — only SELECT/EXPLAIN/SHOW/WITH allowed. Hard limit 200 rows per query.
 				</div>
 			</div>
+		</div>
+	);
+}
+
+function SchemaPanel({
+	detail,
+	selected,
+}: {
+	detail: ActivityDbTableDetail | null;
+	selected: { schema: string; name: string } | null;
+}) {
+	if (!selected) return <div className="empty" style={{ margin: 24 }}>Select a table.</div>;
+	if (!detail) return <div className="empty">Loading schema…</div>;
+	return (
+		<div className="db-detail">
+			<div className="db-detail-meta">
+				<span className="badge muted">{detail.schema}.{detail.name}</span>
+				<span className="hint">{detail.rowCount.toLocaleString()} rows · {detail.columns.length} columns</span>
+			</div>
+			<SchemaTable detail={detail} />
+			{detail.sample.rows.length > 0 && <SampleRows detail={detail} />}
+		</div>
+	);
+}
+
+function SchemaTable({ detail }: { detail: ActivityDbTableDetail }) {
+	return (
+		<table className="db-schema-table">
+			<thead>
+				<tr><th>Column</th><th>Type</th><th>Null</th><th>Default</th></tr>
+			</thead>
+			<tbody>
+				{detail.columns.map((column) => (
+					<tr key={column.name}>
+						<td className="db-col-name">{column.name}</td>
+						<td className="db-col-type">{column.type}</td>
+						<td>{column.nullable ? "yes" : "—"}</td>
+						<td className="db-col-default">{column.default ?? "—"}</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+	);
+}
+
+function SampleRows({ detail }: { detail: ActivityDbTableDetail }) {
+	return (
+		<>
+			<div className="db-sample-label">
+				Sample ({detail.sample.rows.length} of {detail.rowCount})
+				{detail.sample.truncated && " (truncated)"}
+			</div>
+			<DbResultsTable columns={detail.columns.map((column) => column.name)} rows={detail.sample.rows} />
+		</>
+	);
+}
+
+function ConsolePanel({
+	queryError,
+	queryResult,
+	runQuery,
+	sqlText,
+	setSqlText,
+}: {
+	queryError: string | null;
+	queryResult: ActivityDbQueryResult | null;
+	runQuery: () => Promise<void>;
+	sqlText: string;
+	setSqlText: (value: string) => void;
+}) {
+	return (
+		<div className="db-console">
+			<textarea
+				value={sqlText}
+				onChange={(e) => setSqlText(e.target.value)}
+				onKeyDown={(e) => {
+					if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+						e.preventDefault();
+						void runQuery();
+					}
+				}}
+				className="pensieve-textarea db-console-textarea"
+				spellCheck={false}
+				placeholder="SELECT-only. Cmd+Enter to run."
+			/>
+			{queryError && <div className="banner error" style={{ margin: "8px 0 0" }}>{queryError}</div>}
+			{queryResult && !queryError && <QueryResult result={queryResult} />}
+		</div>
+	);
+}
+
+function QueryResult({ result }: { result: ActivityDbQueryResult }) {
+	return (
+		<div className="db-console-result">
+			<div className="hint">
+				{result.rows.length} row{result.rows.length === 1 ? "" : "s"} · {result.durationMs}ms
+				{result.truncated && " · truncated to 200"}
+			</div>
+			<DbResultsTable columns={result.columns} rows={result.rows} />
 		</div>
 	);
 }

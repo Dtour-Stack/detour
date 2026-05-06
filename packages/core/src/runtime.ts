@@ -5,7 +5,6 @@ import {
 	type Character,
 	type Content,
 	createCharacter,
-	createMessageMemory,
 	type Memory,
 	type Plugin,
 	provisionAgent,
@@ -14,7 +13,7 @@ import {
 } from "@elizaos/core";
 import sqlPlugin from "@elizaos/plugin-sql";
 import { v4 as uuidv4 } from "uuid";
-import type { ModelProviderRoute, ProviderId } from "@detour/shared";
+import type { ProviderId } from "@detour/shared";
 import type { VaultService } from "./vault";
 import type { AuthService } from "./auth";
 import { listAccounts, type AccountCredentialRecord } from "@elizaos/agent/auth";
@@ -196,6 +195,8 @@ function slashOnePassword(tail: string): NativeSlashDispatch {
 type RuntimeState = {
 	runtime: AgentRuntime;
 	provider: ProviderId | "codex-chatgpt";
+	providerId: ProviderId;
+	attemptId: string;
 };
 type RuntimeProvider = RuntimeState["provider"];
 
@@ -206,12 +207,21 @@ const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugi
 	"codex-chatgpt": async () => (await import("@detour/plugin-codex-chatgpt")).default,
 };
 
+type ProviderAttempt = {
+	id: string;
+	label: string;
+	providerId: ProviderId;
+	runtimeProvider: RuntimeProvider;
+	prepare: () => Promise<void> | void;
+};
+
+const DEFAULT_PROVIDER_PRIORITY: ProviderId[] = ["openai", "anthropic", "openrouter"];
+
 type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
 
 export class RuntimeService {
 	private current: RuntimeState | null = null;
 	private buildPromise: Promise<RuntimeState | null> | null = null;
-	private providerPickPromise: Promise<RuntimeProvider | null> | null = null;
 	private afterBuildHooks: AfterBuildHook[] = [];
 
 	/**
@@ -250,22 +260,23 @@ export class RuntimeService {
 		if (this.current) return this.current;
 		if (!this.buildPromise) {
 			this.buildPromise = this.build()
-				.then(async (state) => {
-					this.current = state;
-					if (state) {
-						for (const hook of this.afterBuildHooks) {
-							try { await hook(state); } catch (err) {
-								console.warn("[runtime] afterBuild hook failed:", err instanceof Error ? err.message : err);
-							}
-						}
-					}
-					return state;
-				})
+				.then((state) => this.activateState(state))
 				.finally(() => {
 					this.buildPromise = null;
 				});
 		}
 		return this.buildPromise;
+	}
+
+	private async activateState(state: RuntimeState | null): Promise<RuntimeState | null> {
+		this.current = state;
+		if (!state) return null;
+		for (const hook of this.afterBuildHooks) {
+			try { await hook(state); } catch (err) {
+				console.warn("[runtime] afterBuild hook failed:", err instanceof Error ? err.message : err);
+			}
+		}
+		return state;
 	}
 
 	/**
@@ -386,15 +397,24 @@ export class RuntimeService {
 	}
 
 	async rebuild(): Promise<RuntimeState | null> {
-		if (this.current) {
-			try {
-				await this.current.runtime.stop();
-			} catch (err) {
-				console.error("Failed to stop runtime cleanly:", err);
-			}
-			this.current = null;
-		}
+		await this.stopCurrentRuntime();
 		return this.getOrBuild();
+	}
+
+	private async rebuildSkipping(blockedAttemptIds: ReadonlySet<string>): Promise<RuntimeState | null> {
+		await this.stopCurrentRuntime();
+		const state = await this.build(blockedAttemptIds);
+		return this.activateState(state);
+	}
+
+	private async stopCurrentRuntime(): Promise<void> {
+		if (!this.current) return;
+		try {
+			await this.current.runtime.stop();
+		} catch (err) {
+			console.error("Failed to stop runtime cleanly:", err);
+		}
+		this.current = null;
 	}
 
 	/** Sync accessor — returns the cached runtime if built, or null. Used by
@@ -404,19 +424,50 @@ export class RuntimeService {
 	}
 
 	getCurrentProvider(): ProviderId | null {
-		const p = this.current?.provider;
-		if (p === "codex-chatgpt") return "openai"; // surface as "openai" to existing UI consumers
-		return p ?? null;
+		return this.current?.providerId ?? null;
 	}
 
 	async sendMessage(
 		text: string,
 		onDelta: (delta: string) => void,
 	): Promise<void> {
-		const state = await this.getOrBuild();
-		if (!state) {
-			throw new Error("No LLM provider configured. Add an API key in Settings.");
+		if (nativeSlashCommand(text)) {
+			const state = await this.getOrBuild();
+			if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
+			await this.deliverMessage(state, text, onDelta);
+			return;
 		}
+		const failedAttemptIds = new Set<string>();
+		let lastError: Error | null = null;
+		while (true) {
+			const state = failedAttemptIds.size === 0
+				? await this.getOrBuild()
+				: await this.rebuildSkipping(failedAttemptIds);
+			if (!state) {
+				throw lastError ?? new Error("No LLM provider configured. Add an API key in Settings.");
+			}
+			let emitted = false;
+			try {
+				await this.deliverMessage(state, text, (delta) => {
+					if (delta.length > 0) emitted = true;
+					onDelta(delta);
+				});
+				return;
+			} catch (err) {
+				const error = err instanceof Error ? err : new Error(String(err));
+				if (emitted) throw error;
+				lastError = error;
+				failedAttemptIds.add(state.attemptId);
+				console.warn(`[runtime] provider attempt failed; trying fallback: ${state.attemptId}`, error.message);
+			}
+		}
+	}
+
+	private async deliverMessage(
+		state: RuntimeState,
+		text: string,
+		onDelta: (delta: string) => void,
+	): Promise<void> {
 		const service = state.runtime.messageService;
 		if (!service) {
 			throw new Error(
@@ -530,39 +581,60 @@ export class RuntimeService {
 		}
 	}
 
-	private async build(): Promise<RuntimeState | null> {
+	private async build(blockedAttemptIds: ReadonlySet<string> = new Set()): Promise<RuntimeState | null> {
 		await this.vault.loadKeysIntoEnv();
-		const provider = await this.pickProvider();
-		if (!provider) return null;
+		const attempts = (await this.providerAttempts()).filter((attempt) => !blockedAttemptIds.has(attempt.id));
+		if (attempts.length === 0) return null;
+		const errors: string[] = [];
+		for (const attempt of attempts) {
+			try {
+				return await this.buildAttempt(attempt);
+			} catch (err) {
+				errors.push(`${attempt.label}: ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+		throw new Error(`All configured LLM providers failed: ${errors.join(" | ")}`);
+	}
 
-		const llmPlugin = await PROVIDER_PLUGINS[provider]();
+	private async buildAttempt(attempt: ProviderAttempt): Promise<RuntimeState> {
+		await attempt.prepare();
+		const llmPlugin = await PROVIDER_PLUGINS[attempt.runtimeProvider]();
 		const character = await this.buildCharacter();
 		const channelResolved = await this.resolveChannelPlugins();
 		const settings = await this.buildRuntimeSettings(channelResolved.settings);
-
 		const runtime = new AgentRuntime({
 			character,
 			plugins: this.basePlugins(llmPlugin),
 			enableAutonomy: true,
 			settings,
 		});
-		await runtime.initialize();
-		await this.waitForOwnerBind(runtime);
-		await this.registerChannelPlugins(runtime, channelResolved.plugins);
-		this.wirePairingCommands(runtime);
-		await this.provisionRuntime(runtime);
-		this.startTaskServiceTimer(runtime);
-		await runtime.ensureConnection({
-			entityId: USER_ID,
-			roomId: ROOM_ID,
-			worldId: WORLD_ID,
-			userName: "User",
-			source: "tray-app",
-			channelId: "chat",
-			type: ChannelType.DM,
-		});
+		try {
+			await runtime.initialize();
+			await this.waitForOwnerBind(runtime);
+			await this.registerChannelPlugins(runtime, channelResolved.plugins);
+			this.wirePairingCommands(runtime);
+			await this.provisionRuntime(runtime);
+			this.startTaskServiceTimer(runtime);
+			await runtime.ensureConnection({
+				entityId: USER_ID,
+				roomId: ROOM_ID,
+				worldId: WORLD_ID,
+				userName: "User",
+				source: "tray-app",
+				channelId: "chat",
+				type: ChannelType.DM,
+			});
 
-		return { runtime, provider };
+			return {
+				runtime,
+				provider: attempt.runtimeProvider,
+				providerId: attempt.providerId,
+				attemptId: attempt.id,
+			};
+		} catch (err) {
+			await runtime.stop().catch(() => {});
+			throw err;
+		}
 	}
 
 	private async buildCharacter(): Promise<Character> {
@@ -707,83 +779,78 @@ export class RuntimeService {
 		}
 	}
 
-	/**
-	 * Pick a usable provider from OAuth subscription accounts.
-	 *
-	 *   openai-codex          → set CODEX_OAUTH_TOKEN + CODEX_CHATGPT_ACCOUNT_ID,
-	 *     @detour/plugin-codex-chatgpt talks to chatgpt.com/backend-api/codex.
-	 *   anthropic-subscription → fallback. Set ANTHROPIC_API_KEY = sk-ant-oat…,
-	 *     plugin-anthropic + claude-code-stealth interceptor handle it.
-	 *
-	 * Codex/ChatGPT is preferred as the primary because it's not as
-	 * aggressively rate-limited as the Anthropic Claude subscription tier.
-	 *
-	 * Auth source priority:
-	 * Reading the system Codex CLI's auth means the user only logs in ONCE
-	 * via the CLI (or ChatGPT desktop app, which writes the same file) and
-	 * the desktop app picks it up automatically — no re-auth dance.
-	 */
-	private async resolveActiveProvider(provider: ProviderId): Promise<ProviderId | "codex-chatgpt" | null> {
-		if (provider === "openrouter") {
-			return this.hasEnvKey("OPENROUTER_API_KEY") ? "openrouter" : null;
+	private async providerAttempts(): Promise<ProviderAttempt[]> {
+		const order = await this.providerOrder();
+		const attempts: ProviderAttempt[] = [];
+		const directKeys = {
+			openai: await this.providerApiKey("openai", "OPENAI_API_KEY"),
+			anthropic: await this.providerApiKey("anthropic", "ANTHROPIC_API_KEY"),
+			openrouter: await this.providerApiKey("openrouter", "OPENROUTER_API_KEY"),
+		};
+		for (const provider of order) {
+			if (provider === "openai") attempts.push(...await this.openAiAttempts(directKeys.openai));
+			if (provider === "anthropic") attempts.push(...this.anthropicAttempts(directKeys.anthropic));
+			if (provider === "openrouter" && directKeys.openrouter) {
+				attempts.push(this.apiAttempt("openrouter", "openrouter", "OPENROUTER_API_KEY", directKeys.openrouter, "OpenRouter API key"));
+			}
 		}
-		if (provider === "openai") {
-			return await this.pickOpenAiOAuth() ?? (this.hasEnvKey("OPENAI_API_KEY") ? "openai" : null);
-		}
-		return this.hasEnvKey("ANTHROPIC_API_KEY") ? "anthropic" : await this.pickAnthropicOAuth();
+		return attempts;
 	}
 
-	private async pickFromPriority(): Promise<ProviderId | "codex-chatgpt" | null> {
-		const fallback: ModelProviderRoute[] = ["anthropic-subscription", "openai-codex", "openrouter-api", "anthropic-api", "openai-api"];
-		const routes = this.config ? (await this.config.getModels()).providerPriority : fallback;
-		for (const route of routes.length > 0 ? routes : fallback) {
-			const provider = await this.pickRoute(route);
-			if (provider) return provider;
-		}
-		return null;
-	}
-
-	private async pickRoute(route: ModelProviderRoute): Promise<ProviderId | "codex-chatgpt" | null> {
-		if (route === "openai-codex") return this.pickOpenAiOAuth();
-		if (route === "anthropic-subscription") return this.pickAnthropicOAuth();
-		if (route === "openrouter-api") return this.hasEnvKey("OPENROUTER_API_KEY") ? "openrouter" : null;
-		if (route === "anthropic-api") return this.hasEnvKey("ANTHROPIC_API_KEY") ? "anthropic" : null;
-		if (route === "openai-api") return this.hasEnvKey("OPENAI_API_KEY") ? "openai" : null;
-		return null;
-	}
-
-	private hasEnvKey(key: string): boolean {
-		const value = process.env[key];
-		return typeof value === "string" && value.length > 0;
-	}
-
-	private async pickProvider(): Promise<RuntimeProvider | null> {
-		if (!this.providerPickPromise) {
-			this.providerPickPromise = this.pickProviderUnlocked()
-				.finally(() => {
-					this.providerPickPromise = null;
-				});
-		}
-		return this.providerPickPromise;
-	}
-
-	private async pickProviderUnlocked(): Promise<RuntimeProvider | null> {
+	private async providerOrder(): Promise<ProviderId[]> {
 		const activeProvider = await this.vault.getActiveProvider();
-		return (activeProvider ? await this.resolveActiveProvider(activeProvider) : null)
-			?? await this.pickFromPriority();
+		const priority = this.config ? (await this.config.getModels()).providerPriority : DEFAULT_PROVIDER_PRIORITY;
+		return [activeProvider, ...priority, ...DEFAULT_PROVIDER_PRIORITY].filter(
+			(provider, index, list): provider is ProviderId =>
+				provider !== null && list.indexOf(provider) === index,
+		);
 	}
 
-	private async pickOpenAiOAuth(): Promise<"codex-chatgpt" | null> {
+	private async providerApiKey(provider: ProviderId, envKey: string): Promise<string | null> {
+		const stored = await this.vault.getProviderKey(provider);
+		if (stored) return stored;
+		const env = process.env[envKey];
+		return typeof env === "string" && env.length > 0 ? env : null;
+	}
+
+	private apiAttempt(
+		providerId: ProviderId,
+		runtimeProvider: RuntimeProvider,
+		envKey: string,
+		key: string,
+		label: string,
+	): ProviderAttempt {
+		return {
+			id: `${providerId}:api`,
+			label,
+			providerId,
+			runtimeProvider,
+			prepare: () => {
+				process.env[envKey] = key;
+				if (providerId === "openai") {
+					delete process.env.CODEX_OAUTH_TOKEN;
+					delete process.env.CODEX_CHATGPT_ACCOUNT_ID;
+				}
+			},
+		};
+	}
+
+	private async openAiAttempts(apiKey: string | null): Promise<ProviderAttempt[]> {
+		const attempts: ProviderAttempt[] = [];
 		const systemCodex = await detectSystemCodexAuth();
 		if (systemCodex) {
-			process.env.CODEX_OAUTH_TOKEN = systemCodex.accessToken;
-			process.env.CODEX_CHATGPT_ACCOUNT_ID = systemCodex.accountId;
-			console.log(
-				`[runtime] using system Codex CLI auth from ~/.codex/auth.json (account_id=${systemCodex.accountId})`,
-			);
-			return "codex-chatgpt";
+			attempts.push({
+				id: "openai:oauth:system-codex",
+				label: "OpenAI Codex OAuth",
+				providerId: "openai",
+				runtimeProvider: "codex-chatgpt",
+				prepare: () => {
+					process.env.CODEX_OAUTH_TOKEN = systemCodex.accessToken;
+					process.env.CODEX_CHATGPT_ACCOUNT_ID = systemCodex.accountId;
+					console.log(`[runtime] using system Codex CLI auth (account_id=${systemCodex.accountId})`);
+				},
+			});
 		}
-
 		try {
 			const codexAccounts = listAccounts("openai-codex") as AccountCredentialRecord[];
 			const usable = codexAccounts
@@ -792,28 +859,35 @@ export class RuntimeService {
 					const exp = a.credentials?.expires;
 					return typeof exp !== "number" || exp <= 0 || exp > Date.now();
 				});
-			if (usable.length > 0) {
-				const pick = usable[0]!;
-				const token = pick.credentials!.access;
+			for (const account of usable) {
+				const token = account.credentials!.access;
 				const claims = decodeCodexJwt(token);
 				const acctId = claims?.chatgptAccountId ?? "";
 				if (acctId) {
-					process.env.CODEX_OAUTH_TOKEN = token;
-					process.env.CODEX_CHATGPT_ACCOUNT_ID = acctId;
-					console.log(
-						`[runtime] using openai-codex account "${pick.label}" (id=${pick.id}, chatgpt_account_id=${acctId})`,
-					);
-					return "codex-chatgpt";
+					attempts.push({
+						id: `openai:oauth:${account.id}`,
+						label: `OpenAI Codex OAuth (${account.label})`,
+						providerId: "openai",
+						runtimeProvider: "codex-chatgpt",
+						prepare: () => {
+							process.env.CODEX_OAUTH_TOKEN = token;
+							process.env.CODEX_CHATGPT_ACCOUNT_ID = acctId;
+							console.log(`[runtime] using openai-codex account "${account.label}" (id=${account.id})`);
+						},
+					});
+				} else {
+					console.warn(`[runtime] codex token has no chatgpt_account_id claim (id=${account.id})`);
 				}
-				console.warn("[runtime] codex token has no chatgpt_account_id claim");
 			}
 		} catch (err) {
 			console.warn("[runtime] codex OAuth probe failed:", err instanceof Error ? err.message : err);
 		}
-		return null;
+		if (apiKey) attempts.push(this.apiAttempt("openai", "openai", "OPENAI_API_KEY", apiKey, "OpenAI API key"));
+		return attempts;
 	}
 
-	private async pickAnthropicOAuth(): Promise<"anthropic" | null> {
+	private anthropicAttempts(apiKey: string | null): ProviderAttempt[] {
+		const attempts: ProviderAttempt[] = [];
 		try {
 			const anthropicAccounts = listAccounts("anthropic-subscription") as AccountCredentialRecord[];
 			const usable = anthropicAccounts
@@ -822,16 +896,23 @@ export class RuntimeService {
 					const exp = a.credentials?.expires;
 					return typeof exp !== "number" || exp <= 0 || exp > Date.now();
 				});
-			if (usable.length > 0) {
-				const pick = usable[0]!;
-				process.env.ANTHROPIC_API_KEY = pick.credentials!.access;
-				console.log(`[runtime] using anthropic-subscription account "${pick.label}" (id=${pick.id})`);
-				return "anthropic";
+			for (const account of usable) {
+				const token = account.credentials!.access;
+				attempts.push({
+					id: `anthropic:oauth:${account.id}`,
+					label: `Anthropic OAuth (${account.label})`,
+					providerId: "anthropic",
+					runtimeProvider: "anthropic",
+					prepare: () => {
+						process.env.ANTHROPIC_API_KEY = token;
+						console.log(`[runtime] using anthropic-subscription account "${account.label}" (id=${account.id})`);
+					},
+				});
 			}
 		} catch (err) {
 			console.warn("[runtime] anthropic OAuth probe failed:", err instanceof Error ? err.message : err);
 		}
-
-		return null;
+		if (apiKey) attempts.push(this.apiAttempt("anthropic", "anthropic", "ANTHROPIC_API_KEY", apiKey, "Anthropic API key"));
+		return attempts;
 	}
 }

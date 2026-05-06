@@ -70,6 +70,30 @@ function resolveStateDir(): string {
 	);
 }
 
+type HfModelRef = {
+	user: string;
+	repo: string;
+	filePath: string;
+	fileName: string;
+};
+
+type ByteReader = {
+	read(): Promise<{ done: boolean; value?: Uint8Array }>;
+};
+
+function parseHfModelRef(modelRef: string): HfModelRef {
+	const hfPath = modelRef.slice("hf://".length);
+	const segments = hfPath.split("/");
+	if (segments.length < 3) throw new Error(`invalid hf:// ref: ${modelRef}`);
+	const filePath = segments.slice(2).join("/");
+	return {
+		user: segments[0]!,
+		repo: segments[1]!,
+		filePath,
+		fileName: filePath.split("/").pop() ?? filePath,
+	};
+}
+
 function resolveBundledBinaryDir(): string {
 	// In the bundled .app: bun/index.js + bun/llama/llama-server.
 	// In dev (running source via Bun): packages/tray/build-assets/llama, but
@@ -236,23 +260,21 @@ export class LlamaServerService {
 	 */
 	private async ensureModel(modelRef: string, modelsDir: string): Promise<string> {
 		if (!modelRef.startsWith("hf://")) {
-			// Treat as direct file path.
 			if (!existsSync(modelRef)) throw new Error(`model file not found: ${modelRef}`);
 			return modelRef;
 		}
-		const hfPath = modelRef.slice("hf://".length);
-		const segments = hfPath.split("/");
-		if (segments.length < 3) throw new Error(`invalid hf:// ref: ${modelRef}`);
-		const user = segments[0];
-		const repo = segments[1];
-		const filePath = segments.slice(2).join("/");
-		const fileName = filePath.split("/").pop() ?? filePath;
-		const localPath = join(modelsDir, fileName);
-		if (existsSync(localPath)) {
-			const size = statSync(localPath).size;
-			if (size >= MIN_MODEL_BYTES) return localPath;
-		}
-		const downloadUrl = `https://huggingface.co/${user}/${repo}/resolve/main/${filePath}`;
+		const ref = parseHfModelRef(modelRef);
+		const localPath = join(modelsDir, ref.fileName);
+		if (this.modelAlreadyPresent(localPath)) return localPath;
+		return this.downloadModel(ref, localPath);
+	}
+
+	private modelAlreadyPresent(localPath: string): boolean {
+		return existsSync(localPath) && statSync(localPath).size >= MIN_MODEL_BYTES;
+	}
+
+	private async downloadModel(ref: HfModelRef, localPath: string): Promise<string> {
+		const downloadUrl = `https://huggingface.co/${ref.user}/${ref.repo}/resolve/main/${ref.filePath}`;
 		console.log(`[llama-server] downloading model: ${downloadUrl}`);
 		const res = await fetch(downloadUrl, { redirect: "follow" });
 		if (!res.ok) {
@@ -262,6 +284,21 @@ export class LlamaServerService {
 		this.downloadProgress = { downloadedBytes: 0, totalBytes, percent: 0 };
 		const reader = res.body?.getReader();
 		if (!reader) throw new Error("response body not readable");
+		await this.writeModelDownload(reader, localPath, totalBytes);
+		const final = statSync(localPath);
+		if (final.size < MIN_MODEL_BYTES) {
+			throw new Error(`download truncated (${final.size} bytes < ${MIN_MODEL_BYTES})`);
+		}
+		this.downloadProgress = { downloadedBytes: final.size, totalBytes: final.size, percent: 100 };
+		console.log(`[llama-server] model ready: ${localPath} (${(final.size / 1024 / 1024).toFixed(1)} MB)`);
+		return localPath;
+	}
+
+	private async writeModelDownload(
+		reader: ByteReader,
+		localPath: string,
+		totalBytes: number,
+	): Promise<void> {
 		const writer = Bun.file(localPath).writer();
 		let downloaded = 0;
 		try {
@@ -286,12 +323,5 @@ export class LlamaServerService {
 			try { (await import("node:fs/promises")).unlink(localPath); } catch { /* best-effort */ }
 			throw err;
 		}
-		const final = statSync(localPath);
-		if (final.size < MIN_MODEL_BYTES) {
-			throw new Error(`download truncated (${final.size} bytes < ${MIN_MODEL_BYTES})`);
-		}
-		this.downloadProgress = { downloadedBytes: final.size, totalBytes: final.size, percent: 100 };
-		console.log(`[llama-server] model ready: ${localPath} (${(final.size / 1024 / 1024).toFixed(1)} MB)`);
-		return localPath;
 	}
 }

@@ -117,97 +117,118 @@ export class PensieveEmbeddingMapService {
 		if (!runtime) return { available: false, count: 0, points: [], source: "random-projection" };
 		const db = getDb(runtime);
 		if (!db) return { available: false, count: 0, points: [], source: "random-projection" };
-
-		// Pull embeddings + joined memory metadata in one query.
-		// Use COALESCE to pick whichever dim_* column is populated.
-		const cols = DIM_COLUMNS.map((c) => `e."${c}"::text AS ${c}`).join(", ");
-		const rows = await exec(db, `
-			SELECT
-				e.memory_id::text AS memory_id,
-				EXTRACT(EPOCH FROM e.created_at)::bigint * 1000 AS created_at_ms,
-				m.type AS type,
-				m.metadata AS metadata,
-				m.content AS content,
-				${cols}
-			FROM embeddings e
-			LEFT JOIN memories m ON m.id = e.memory_id
-			ORDER BY e.created_at DESC
-			LIMIT ${MAX_POINTS}
-		`);
-
-		// First pass: parse vectors, group by dimension. We project only the
-		// dominant dim — mixing dimensions in one projection would be wrong.
-		const byDim = new Map<number, Array<{ memoryId: string; embedding: number[]; row: Record<string, unknown> }>>();
-		for (const r of rows) {
-			const memoryId = String(r.memory_id ?? "");
-			if (!memoryId) continue;
-			let embedding: number[] | null = null;
-			for (const col of DIM_COLUMNS) {
-				const parsed = parseVector(r[col]);
-				if (parsed && parsed.length > 0) { embedding = parsed; break; }
-			}
-			if (!embedding) continue;
-			const dim = embedding.length;
-			if (!byDim.has(dim)) byDim.set(dim, []);
-			byDim.get(dim)!.push({ memoryId, embedding, row: r });
-		}
-
-		// Pick the largest cohort; project that one. (UI can show "showing dim X" hint.)
-		let chosenDim = 0;
-		let chosenGroup: Array<{ memoryId: string; embedding: number[]; row: Record<string, unknown> }> | undefined;
-		for (const [dim, group] of byDim) {
-			if (!chosenGroup || group.length > chosenGroup.length) {
-				chosenDim = dim;
-				chosenGroup = group;
-			}
-		}
+		const rows = await loadEmbeddingRows(db);
+		const chosenGroup = largestEmbeddingGroup(groupRowsByDimension(rows));
 		if (!chosenGroup || chosenGroup.length === 0) {
 			return { available: true, count: 0, points: [], source: "random-projection" };
 		}
-
-		const matrix = buildProjection(chosenDim, 42);
-		const raw = chosenGroup.map(({ memoryId, embedding, row }) => {
-			const [px, py] = project(embedding, matrix);
-			const meta = parseMetadata(row.metadata);
-			const content = parseMetadata(row.content);
-			const text = (content?.text as string | undefined) ?? "";
-			return {
-				memoryId,
-				type: typeof row.type === "string" ? row.type : undefined,
-				path: typeof meta?.path === "string" ? meta.path : "/uncategorized",
-				preview: text.replace(/\s+/g, " ").slice(0, 120) || "(no text)",
-				...(typeof row.created_at_ms === "string" || typeof row.created_at_ms === "number"
-					? { createdAt: Number(row.created_at_ms) }
-					: {}),
-				rawX: px,
-				rawY: py,
-				dim: chosenDim,
-			};
-		});
-
-		// Normalise to roughly [-1, 1] for the UI to scale into its canvas.
-		const xs = raw.map((p) => p.rawX);
-		const ys = raw.map((p) => p.rawY);
-		const xMin = Math.min(...xs);
-		const xMax = Math.max(...xs);
-		const yMin = Math.min(...ys);
-		const yMax = Math.max(...ys);
-		const xRange = xMax - xMin || 1;
-		const yRange = yMax - yMin || 1;
-
-		const points: EmbeddingPoint[] = raw.map((p) => ({
-			memoryId: p.memoryId,
-			...(p.type !== undefined && { type: p.type }),
-			path: p.path,
-			preview: p.preview,
-			...(p.createdAt !== undefined && { createdAt: p.createdAt }),
-			x: ((p.rawX - xMin) / xRange) * 2 - 1,
-			y: ((p.rawY - yMin) / yRange) * 2 - 1,
-			dim: p.dim,
-		}));
-
+		const points = normalizePoints(projectRows(chosenGroup));
 		return { available: true, count: points.length, points, source: "random-projection" };
 	}
+}
+
+type EmbeddingRow = { memoryId: string; embedding: number[]; row: Record<string, unknown> };
+type ProjectedRow = {
+	memoryId: string;
+	type?: string;
+	path: string;
+	preview: string;
+	createdAt?: number;
+	rawX: number;
+	rawY: number;
+	dim: number;
+};
+
+async function loadEmbeddingRows(db: AdapterDb): Promise<Record<string, unknown>[]> {
+	const cols = DIM_COLUMNS.map((column) => `e."${column}"::text AS ${column}`).join(", ");
+	return exec(db, `
+		SELECT
+			e.memory_id::text AS memory_id,
+			EXTRACT(EPOCH FROM e.created_at)::bigint * 1000 AS created_at_ms,
+			m.type AS type,
+			m.metadata AS metadata,
+			m.content AS content,
+			${cols}
+		FROM embeddings e
+		LEFT JOIN memories m ON m.id = e.memory_id
+		ORDER BY e.created_at DESC
+		LIMIT ${MAX_POINTS}
+	`);
+}
+
+function groupRowsByDimension(rows: Record<string, unknown>[]): Map<number, EmbeddingRow[]> {
+	const byDim = new Map<number, EmbeddingRow[]>();
+	for (const row of rows) {
+		const memoryId = String(row.memory_id ?? "");
+		const embedding = firstEmbedding(row);
+		if (!memoryId || !embedding) continue;
+		const dim = embedding.length;
+		const group = byDim.get(dim) ?? [];
+		group.push({ memoryId, embedding, row });
+		byDim.set(dim, group);
+	}
+	return byDim;
+}
+
+function firstEmbedding(row: Record<string, unknown>): number[] | null {
+	for (const column of DIM_COLUMNS) {
+		const parsed = parseVector(row[column]);
+		if (parsed && parsed.length > 0) return parsed;
+	}
+	return null;
+}
+
+function largestEmbeddingGroup(byDim: Map<number, EmbeddingRow[]>): EmbeddingRow[] | undefined {
+	return [...byDim.values()].sort((a, b) => b.length - a.length)[0];
+}
+
+function projectRows(group: EmbeddingRow[]): ProjectedRow[] {
+	const dim = group[0]?.embedding.length ?? 0;
+	const matrix = buildProjection(dim, 42);
+	return group.map(({ memoryId, embedding, row }) => projectedRow(memoryId, embedding, row, matrix));
+}
+
+function projectedRow(
+	memoryId: string,
+	embedding: number[],
+	row: Record<string, unknown>,
+	matrix: number[][],
+): ProjectedRow {
+	const [rawX, rawY] = project(embedding, matrix);
+	const meta = parseMetadata(row.metadata);
+	const content = parseMetadata(row.content);
+	const text = (content?.text as string | undefined) ?? "";
+	return {
+		memoryId,
+		type: typeof row.type === "string" ? row.type : undefined,
+		path: typeof meta?.path === "string" ? meta.path : "/uncategorized",
+		preview: text.replace(/\s+/g, " ").slice(0, 120) || "(no text)",
+		...(typeof row.created_at_ms === "string" || typeof row.created_at_ms === "number"
+			? { createdAt: Number(row.created_at_ms) }
+			: {}),
+		rawX,
+		rawY,
+		dim: embedding.length,
+	};
+}
+
+function normalizePoints(raw: ProjectedRow[]): EmbeddingPoint[] {
+	const xs = raw.map((point) => point.rawX);
+	const ys = raw.map((point) => point.rawY);
+	const xMin = Math.min(...xs);
+	const xRange = Math.max(...xs) - xMin || 1;
+	const yMin = Math.min(...ys);
+	const yRange = Math.max(...ys) - yMin || 1;
+	return raw.map((point) => ({
+		memoryId: point.memoryId,
+		...(point.type !== undefined && { type: point.type }),
+		path: point.path,
+		preview: point.preview,
+		...(point.createdAt !== undefined && { createdAt: point.createdAt }),
+		x: ((point.rawX - xMin) / xRange) * 2 - 1,
+		y: ((point.rawY - yMin) / yRange) * 2 - 1,
+		dim: point.dim,
+	}));
 }
 
 function parseMetadata(v: unknown): Record<string, unknown> | null {

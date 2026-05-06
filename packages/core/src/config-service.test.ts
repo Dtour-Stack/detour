@@ -86,7 +86,7 @@ describe("ConfigService", () => {
 		expect(m.codexSmall).toBe("gpt-5.2");
 		expect(m.codexImage).toBe("gpt-5.2");
 		expect(m.openRouterTextLarge).toBe("openrouter/free");
-		expect(m.providerPriority[0]).toBe("anthropic-subscription");
+		expect(m.providerPriority).toEqual(["openai", "anthropic", "openrouter"]);
 	});
 
 	test("setModels applies env vars so plugin-codex picks them up", async () => {
@@ -100,7 +100,7 @@ describe("ConfigService", () => {
 			openRouterEmbedding: "openai/text-embedding-3-small",
 			openRouterImage: "google/gemini-2.5-flash-image",
 			openRouterVision: "openrouter/free",
-			providerPriority: ["openai-codex", "anthropic-subscription", "openrouter-api", "anthropic-api", "openai-api"],
+			providerPriority: ["openai", "anthropic", "openrouter"],
 		});
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
 		expect(process.env.CODEX_MODEL_SMALL).toBe("gpt-5.4-mini");
@@ -130,6 +130,7 @@ describe("ConfigService", () => {
 		await svc.bootstrap();
 		expect(getPermissionConfig().mode).toBe("off");
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
+		expect((await svc.getModels()).providerPriority).toEqual(["openai", "anthropic", "openrouter"]);
 		setPermissionConfig({ mode: "read", deny: false, allowedPrefixes: [], deniedPrefixes: [] });
 	});
 

@@ -26,7 +26,6 @@ type VendorSpec = {
 	label: string;
 	oauthProvider?: "anthropic-subscription" | "openai-codex";
 	oauthLabel?: string;
-	oauthNote?: string;
 };
 
 const VENDORS: VendorSpec[] = [
@@ -41,8 +40,6 @@ const VENDORS: VendorSpec[] = [
 		label: "OpenAI",
 		oauthProvider: "openai-codex",
 		oauthLabel: "Connect via ChatGPT (Codex) OAuth",
-		oauthNote:
-			"If you've signed in with the Codex CLI, Detour auto-detects your token at ~/.codex/auth.json and uses it for chat — no API key needed. Paste an OpenAI key only if you'd rather pay-per-token.",
 	},
 	{
 		id: "openrouter",
@@ -171,7 +168,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 		<div>
 			<h3 style={{ margin: "0 0 4px" }}>Providers</h3>
 			<p className="hint">
-				Connect once via OAuth or paste an API key. The active provider handles chat.
+				Connect once via OAuth or paste an API key. The active provider is tried first for chat.
 			</p>
 			{error && <div className="banner error">{error}</div>}
 
@@ -284,11 +281,6 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 											{usableOAuth ? "Add another" : "Reconnect"}
 										</button>
 									</>
-								)}
-								{vendor.oauthNote && (
-									<div className="hint" style={{ marginTop: 6 }}>
-										{vendor.oauthNote}
-									</div>
 								)}
 							</div>
 						)}

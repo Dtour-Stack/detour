@@ -202,81 +202,15 @@ function BackendDetail({
 
 				{backend.detail && <div className="banner">{backend.detail}</div>}
 
-				{/* Install instructions when CLI not detected */}
-				{!installed && spec && spec.commands.some((c) => c) && (
-					<div style={{ marginBottom: 16 }}>
-						<h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Install</h4>
-						{spec.commands
-							.filter((c): c is { command: string; args: string[] } => c != null)
-							.map((c, idx) => (
-								<pre className="diag-block" key={idx}>
-									{c.command} {c.args.join(" ")}
-								</pre>
-							))}
-						<p className="hint" style={{ marginTop: 8 }}>
-							Run the command above in your terminal, then return here and refresh.
-						</p>
-						<button type="button" className="btn secondary small" onClick={onChange}>
-							Re-detect
-						</button>
-					</div>
-				)}
-
-				{/* 1Password diagnostics */}
+				<InstallInstructions installed={installed} spec={spec} onChange={onChange} />
 				{backend.id === "1password" && installed && (
-					<div style={{ marginBottom: 16 }}>
-						<div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-							<h4 style={{ fontSize: 13, margin: 0 }}>Diagnostics</h4>
-							<button
-								type="button"
-								className="btn secondary small"
-								onClick={runDiagnose}
-								disabled={diagLoading}
-							>
-								{diagLoading ? "Probing…" : "Run diagnostics"}
-							</button>
-							{diag && (
-								<button
-									type="button"
-									className="btn ghost small"
-									onClick={() => setDiagOpen((x) => !x)}
-								>
-									{diagOpen ? "Hide raw" : "Show raw"}
-								</button>
-							)}
-						</div>
-						{diag && (
-							<div className="banner" style={{ marginBottom: 8 }}>
-								{diag.hint}
-							</div>
-						)}
-						{diag && diagOpen && (
-							<>
-								<DiagRow label="op path" value={diag.opPath ?? "(not found)"} />
-								<DiagRow label="op version" value={diag.opVersion ?? "(unknown)"} />
-								<DiagRow
-									label="account list"
-									value={`exit ${diag.accountList.exitCode}\n${diag.accountList.stdout || diag.accountList.stderr || "(empty)"}`}
-								/>
-								{diag.vaultList && (
-									<DiagRow
-										label={`vault list (${diag.vaultList.account ?? "?"})`}
-										value={`exit ${diag.vaultList.exitCode}\n${diag.vaultList.stdout || diag.vaultList.stderr || "(empty)"}`}
-									/>
-								)}
-								<DiagRow
-									label="auth path"
-									value={
-										diag.desktopIntegrationDetected
-											? "desktop-app integration"
-											: diag.sessionTokenStored
-												? "stored session token"
-												: "(none — sign in below)"
-									}
-								/>
-							</>
-						)}
-					</div>
+					<OnePasswordDiagnostics
+						diag={diag}
+						diagLoading={diagLoading}
+						diagOpen={diagOpen}
+						onRun={runDiagnose}
+						onToggle={() => setDiagOpen((x) => !x)}
+					/>
 				)}
 
 				{/* Sign-in form */}
@@ -286,18 +220,110 @@ function BackendDetail({
 
 				{/* Sign-out */}
 				{installed && signedIn && backend.id !== "in-house" && (
-					<div>
-						<h4 style={{ fontSize: 13, margin: "16px 0 8px" }}>Sign out</h4>
-						<p className="hint">
-							Clears the stored session token. Your saved logins remain in the vendor app —
-							only this app's access is revoked.
-						</p>
-						<button type="button" className="btn danger small" onClick={signOut}>
-							Sign out of {backend.label}
-						</button>
-					</div>
+					<BackendSignOut label={backend.label} onSignOut={signOut} />
 				)}
 			</div>
+		</div>
+	);
+}
+
+function InstallInstructions({
+	installed,
+	spec,
+	onChange,
+}: {
+	installed: boolean;
+	spec: InstallSpec | undefined;
+	onChange: () => Promise<void>;
+}) {
+	const commands = spec?.commands.filter((c): c is { command: string; args: string[] } => c != null) ?? [];
+	if (installed || commands.length === 0) return null;
+	return (
+		<div style={{ marginBottom: 16 }}>
+			<h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Install</h4>
+			{commands.map((c, idx) => (
+				<pre className="diag-block" key={idx}>
+					{c.command} {c.args.join(" ")}
+				</pre>
+			))}
+			<p className="hint" style={{ marginTop: 8 }}>
+				Run the command above in your terminal, then return here and refresh.
+			</p>
+			<button type="button" className="btn secondary small" onClick={onChange}>
+				Re-detect
+			</button>
+		</div>
+	);
+}
+
+function OnePasswordDiagnostics({
+	diag,
+	diagLoading,
+	diagOpen,
+	onRun,
+	onToggle,
+}: {
+	diag: OpDiagnostic | null;
+	diagLoading: boolean;
+	diagOpen: boolean;
+	onRun: () => Promise<void>;
+	onToggle: () => void;
+}) {
+	return (
+		<div style={{ marginBottom: 16 }}>
+			<div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+				<h4 style={{ fontSize: 13, margin: 0 }}>Diagnostics</h4>
+				<button type="button" className="btn secondary small" onClick={onRun} disabled={diagLoading}>
+					{diagLoading ? "Probing…" : "Run diagnostics"}
+				</button>
+				{diag && (
+					<button type="button" className="btn ghost small" onClick={onToggle}>
+						{diagOpen ? "Hide raw" : "Show raw"}
+					</button>
+				)}
+			</div>
+			{diag && <div className="banner" style={{ marginBottom: 8 }}>{diag.hint}</div>}
+			{diag && diagOpen && <OnePasswordDiagnosticRows diag={diag} />}
+		</div>
+	);
+}
+
+function OnePasswordDiagnosticRows({ diag }: { diag: OpDiagnostic }) {
+	return (
+		<>
+			<DiagRow label="op path" value={diag.opPath ?? "(not found)"} />
+			<DiagRow label="op version" value={diag.opVersion ?? "(unknown)"} />
+			<DiagRow
+				label="account list"
+				value={`exit ${diag.accountList.exitCode}\n${diag.accountList.stdout || diag.accountList.stderr || "(empty)"}`}
+			/>
+			{diag.vaultList && (
+				<DiagRow
+					label={`vault list (${diag.vaultList.account ?? "?"})`}
+					value={`exit ${diag.vaultList.exitCode}\n${diag.vaultList.stdout || diag.vaultList.stderr || "(empty)"}`}
+				/>
+			)}
+			<DiagRow label="auth path" value={diagnosticAuthPath(diag)} />
+		</>
+	);
+}
+
+function diagnosticAuthPath(diag: OpDiagnostic): string {
+	if (diag.desktopIntegrationDetected) return "desktop-app integration";
+	return diag.sessionTokenStored ? "stored session token" : "(none — sign in below)";
+}
+
+function BackendSignOut({ label, onSignOut }: { label: string; onSignOut: () => Promise<void> }) {
+	return (
+		<div>
+			<h4 style={{ fontSize: 13, margin: "16px 0 8px" }}>Sign out</h4>
+			<p className="hint">
+				Clears the stored session token. Your saved logins remain in the vendor app —
+				only this app's access is revoked.
+			</p>
+			<button type="button" className="btn danger small" onClick={onSignOut}>
+				Sign out of {label}
+			</button>
 		</div>
 	);
 }

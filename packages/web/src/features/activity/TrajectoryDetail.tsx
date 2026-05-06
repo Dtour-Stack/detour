@@ -604,7 +604,7 @@ function collectFragmentArrays(data: unknown, found: unknown[][], seen: Set<obje
 	if (!data || typeof data !== "object" || depth > 6 || seen.has(data)) return;
 	seen.add(data);
 	if (Array.isArray(data)) {
-		if (data.length > 0 && data.some((item) => parseFragment(item))) found.push(data);
+		if (data.some((item) => parseFragment(item))) found.push(data);
 		for (const item of data) collectFragmentArrays(item, found, seen, depth + 1);
 		return;
 	}

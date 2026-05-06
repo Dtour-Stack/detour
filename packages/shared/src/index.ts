@@ -226,7 +226,7 @@ export type ModelConfig = {
 	openRouterEmbedding: string;
 	openRouterImage: string;
 	openRouterVision: string;
-	providerPriority: ModelProviderRoute[];
+	providerPriority: ProviderId[];
 };
 
 export type WindowConfig = {

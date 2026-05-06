@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelConfig, ModelProviderRoute, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse } from "@detour/shared";
+import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse, ProviderId } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 
 const CODEX_MODELS = [
@@ -16,12 +16,10 @@ const CODEX_MODELS = [
 	"codex-mini-latest",
 ];
 
-const PROVIDER_LABELS: Record<ModelProviderRoute, string> = {
-	"anthropic-subscription": "Claude Pro/Max (OAuth)",
-	"openai-codex": "ChatGPT (Codex OAuth)",
-	"openrouter-api": "OpenRouter API key",
-	"anthropic-api": "Anthropic API key",
-	"openai-api": "OpenAI API key",
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+	openai: "OpenAI",
+	anthropic: "Anthropic",
+	openrouter: "OpenRouter",
 };
 
 const selectStyle = {
@@ -150,7 +148,7 @@ export function ModelsTab({ client }: { client: WebClient }) {
 		<div>
 			<h3 style={{ margin: "0 0 4px" }}>Models &amp; routing</h3>
 			<p className="hint">
-				Model overrides for each elizaOS model bucket + provider priority for chat.
+				Model overrides for each elizaOS model bucket + provider fallback order for chat.
 			</p>
 
 			<div className="card">
@@ -248,9 +246,9 @@ export function ModelsTab({ client }: { client: WebClient }) {
 			</div>
 
 			<div className="card">
-				<label>Provider priority</label>
+				<label>Provider fallback order</label>
 				<div className="hint" style={{ marginTop: 4, marginBottom: 8 }}>
-					Top of list wins when no explicit active provider is usable.
+					The active provider is tried first; this order is used after that.
 				</div>
 				{cfg.providerPriority.map((p, idx) => (
 					<div className="row" key={p} style={{ marginBottom: 4, padding: 6, background: idx === 0 ? "var(--accent-soft)" : "transparent", borderRadius: "var(--radius-sm)" }}>

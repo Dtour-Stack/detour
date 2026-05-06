@@ -192,7 +192,7 @@ export class PensieveRelationshipService {
 		const next = {
 			...match,
 			...(patch.tags ? { tags: patch.tags } : {}),
-			...(patch.metadata ? { metadata: { ...(match.metadata ?? {}), ...patch.metadata } } : {}),
+			...(patch.metadata ? { metadata: { ...match.metadata, ...patch.metadata } } : {}),
 		} as unknown as Relationship;
 		await a.updateRelationships([next]);
 		return true;

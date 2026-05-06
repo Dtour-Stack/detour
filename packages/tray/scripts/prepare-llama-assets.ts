@@ -73,73 +73,78 @@ async function main(): Promise<void> {
 		console.log(`[prepare-llama] up-to-date at ${LLAMA_TAG}`);
 		return;
 	}
-
 	const assetName = platformAssetName();
+	downloadAndExtract(assetName);
+	flattenArchiveRoot();
+	const { kept, dropped } = trimBundle();
+	const finalFiles = finalAssetFiles();
+	markExecutable(finalFiles);
+	writeManifest(finalFiles);
+	const totalBytes = finalFiles.reduce((sum, name) => sum + statSync(join(OUT_DIR, name)).size, 0);
+	const mb = (totalBytes / (1024 * 1024)).toFixed(1);
+	console.log(`[prepare-llama] kept ${kept}, dropped ${dropped}, total ${mb} MB at tag ${LLAMA_TAG}`);
+}
+
+function downloadAndExtract(assetName: string): void {
 	const url = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/${assetName}`;
 	console.log(`[prepare-llama] downloading ${url}`);
-
 	rmSync(OUT_DIR, { recursive: true, force: true });
 	mkdirSync(OUT_DIR, { recursive: true });
 	const tmpFile = join(OUT_DIR, assetName);
 	execSync(`curl -fsSL "${url}" -o "${tmpFile}"`, { stdio: "inherit" });
-
 	console.log("[prepare-llama] extracting");
-	if (assetName.endsWith(".zip")) {
-		execSync(`unzip -q "${tmpFile}" -d "${OUT_DIR}"`, { stdio: "inherit" });
-	} else {
-		execSync(`tar -xzf "${tmpFile}" -C "${OUT_DIR}"`, { stdio: "inherit" });
-	}
+	execSync(assetName.endsWith(".zip") ? `unzip -q "${tmpFile}" -d "${OUT_DIR}"` : `tar -xzf "${tmpFile}" -C "${OUT_DIR}"`, { stdio: "inherit" });
 	rmSync(tmpFile);
+}
 
-	// Archive layout is `llama-bXXXX/<files>` — flatten into OUT_DIR.
+function flattenArchiveRoot(): void {
 	const root = join(OUT_DIR, `llama-${LLAMA_TAG}`);
-	if (existsSync(root)) {
-		for (const name of readdirSync(root)) {
-			const src = join(root, name);
-			const dst = join(OUT_DIR, name);
-			execSync(`mv "${src}" "${dst}"`, { stdio: "pipe" });
-		}
-		rmSync(root, { recursive: true, force: true });
+	if (!existsSync(root)) return;
+	for (const name of readdirSync(root)) {
+		execSync(`mv "${join(root, name)}" "${join(OUT_DIR, name)}"`, { stdio: "pipe" });
 	}
+	rmSync(root, { recursive: true, force: true });
+}
 
-	// Trim the bundle: keep llama-server + the dylibs it actually loads. The
-	// other clients (llama-cli, llama-bench, ...) we don't ship.
-	const KEEP = new Set<string>([
-		"llama-server",
-		"LICENSE",
-	]);
-	const allFiles = readdirSync(OUT_DIR);
+function trimBundle(): { kept: number; dropped: number } {
+	const keep = new Set<string>(["llama-server", "LICENSE"]);
 	let kept = 0;
 	let dropped = 0;
-	for (const name of allFiles) {
-		if (KEEP.has(name) || name.endsWith(".dylib") || name.endsWith(".so") || name.endsWith(".dll")) {
-			kept += 1;
-		} else if (name === "manifest.json") {
-			// preserved
-		} else {
+	for (const name of readdirSync(OUT_DIR)) {
+		if (keep.has(name) || nativeLibrary(name)) kept += 1;
+		else if (name !== "manifest.json") {
 			rmSync(join(OUT_DIR, name), { recursive: true, force: true });
 			dropped += 1;
 		}
 	}
+	return { kept, dropped };
+}
 
-	const finalFiles = readdirSync(OUT_DIR).filter((n) => n !== "manifest.json");
-	for (const name of finalFiles) {
+function nativeLibrary(name: string): boolean {
+	return name.endsWith(".dylib") || name.endsWith(".so") || name.endsWith(".dll");
+}
+
+function finalAssetFiles(): string[] {
+	return readdirSync(OUT_DIR).filter((name) => name !== "manifest.json");
+}
+
+function markExecutable(files: string[]): void {
+	for (const name of files) {
 		const fp = join(OUT_DIR, name);
 		const s = statSync(fp);
 		if (s.isFile() && (name === "llama-server" || name.endsWith(".dylib") || name.endsWith(".so"))) {
 			chmodSync(fp, 0o755);
 		}
 	}
+}
+
+function writeManifest(files: string[]): void {
 	const manifest: Manifest = {
 		tag: LLAMA_TAG,
 		downloadedAt: new Date().toISOString(),
-		files: finalFiles.sort(),
+		files: files.sort(),
 	};
 	writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
-	let totalBytes = 0;
-	for (const name of finalFiles) totalBytes += statSync(join(OUT_DIR, name)).size;
-	const mb = (totalBytes / (1024 * 1024)).toFixed(1);
-	console.log(`[prepare-llama] kept ${kept}, dropped ${dropped}, total ${mb} MB at tag ${LLAMA_TAG}`);
 }
 
 await main();

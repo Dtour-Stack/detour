@@ -102,12 +102,15 @@ export class VaultService {
 		const manager = await this.manager();
 		const p = this.providerById(id);
 		await manager.remove(p.envKey);
-		const v = manager.vault;
-		if ((await this.getActiveProvider()) === id) {
-			const remaining = await this.firstProviderWithKey();
-			if (remaining) await v.set(ACTIVE_PROVIDER_KEY, remaining);
-			else await v.remove(ACTIVE_PROVIDER_KEY);
-		}
+		delete process.env[p.envKey];
+	}
+
+	async getProviderKey(id: ProviderId): Promise<string | null> {
+		const manager = await this.manager();
+		const p = this.providerById(id);
+		if (!(await manager.has(p.envKey))) return null;
+		const value = await manager.get(p.envKey);
+		return value.length > 0 ? value : null;
 	}
 
 	async getActiveProvider(): Promise<ProviderId | null> {
@@ -140,13 +143,6 @@ export class VaultService {
 		return p;
 	}
 
-	private async firstProviderWithKey(): Promise<ProviderId | null> {
-		const manager = await this.manager();
-		for (const p of PROVIDERS) {
-			if (await manager.has(p.envKey)) return p.id;
-		}
-		return null;
-	}
 }
 
 // --- Free-standing vault helpers exposed to the API layer -------------------

@@ -72,6 +72,103 @@ function memoryLabel(m: Memory): string {
 		: text || (m.metadata as { type?: string } | undefined)?.type || "memory";
 }
 
+async function loadGraphRows(
+	runtime: IAgentRuntime,
+	limit: number,
+): Promise<{ memories: Memory[]; relationships: Relationship[] }> {
+	const adapter = runtime as unknown as AdapterShape;
+	const memories = typeof adapter.getMemories === "function"
+		? await adapter.getMemories({ tableName: "memories", count: limit })
+		: [];
+	const relationships = typeof adapter.getRelationships === "function"
+		? await adapter.getRelationships({ limit })
+		: [];
+	return { memories, relationships };
+}
+
+function memoryMatchesFilter(memory: Memory, filter: GraphFilter): boolean {
+	const metadata = memory.metadata as { type?: string; tags?: unknown } | undefined;
+	if (filter.dateFrom && (memory.createdAt ?? 0) < filter.dateFrom) return false;
+	if (filter.dateTo && (memory.createdAt ?? 0) > filter.dateTo) return false;
+	if (filter.entityIds?.length && (!memory.entityId || !filter.entityIds.includes(String(memory.entityId)))) return false;
+	if (filter.types?.length && metadata?.type && !filter.types.includes(metadata.type)) return false;
+	if (!filter.tags?.length) return true;
+	return memoryTags(memory).some((tag) => filter.tags!.includes(tag));
+}
+
+function memoryTags(memory: Memory): string[] {
+	const tags = (memory.metadata as { tags?: unknown } | undefined)?.tags;
+	return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === "string") : [];
+}
+
+function entityIdsFor(memories: Memory[], relationships: Relationship[]): Set<string> {
+	const ids = new Set<string>();
+	for (const memory of memories) if (memory.entityId) ids.add(String(memory.entityId));
+	for (const relationship of relationships) {
+		ids.add(String(relationship.sourceEntityId));
+		ids.add(String(relationship.targetEntityId));
+	}
+	return ids;
+}
+
+function graphNodesFor(memories: Memory[], entityIds: Set<string>): GraphNode[] {
+	return [
+		...memories.map(memoryNode),
+		...[...entityIds].map((id) => ({ id: `entity:${id}`, kind: "entity" as const, label: id.slice(0, 8) })),
+	];
+}
+
+function memoryNode(memory: Memory): GraphNode {
+	const tags = memoryTags(memory);
+	return {
+		id: `memory:${memory.id}`,
+		kind: "memory",
+		label: memoryLabel(memory),
+		...(typeof memory.createdAt === "number" ? { createdAt: memory.createdAt } : {}),
+		...(tags.length > 0 ? { tags } : {}),
+	};
+}
+
+function memoryEntityEdges(memories: Memory[]): GraphEdge[] {
+	return memories.flatMap((memory) =>
+		memory.entityId
+			? [{ source: `memory:${memory.id}`, target: `entity:${memory.entityId}`, kind: "memory-entity" as const }]
+			: [],
+	);
+}
+
+function relationshipEdges(relationships: Relationship[]): GraphEdge[] {
+	return relationships.map((relationship) => ({
+		source: `entity:${relationship.sourceEntityId}`,
+		target: `entity:${relationship.targetEntityId}`,
+		kind: "entity-relationship",
+		weight: Math.max(1, relationship.tags?.length ?? 1),
+	}));
+}
+
+function memoryTagEdges(memories: Memory[]): GraphEdge[] {
+	const byTag = new Map<string, string[]>();
+	for (const memory of memories) {
+		for (const tag of memoryTags(memory)) {
+			const bucket = byTag.get(tag) ?? [];
+			bucket.push(`memory:${memory.id}`);
+			byTag.set(tag, bucket);
+		}
+	}
+	return [...byTag.values()].flatMap(memoryTagEdgesForGroup);
+}
+
+function memoryTagEdgesForGroup(ids: string[]): GraphEdge[] {
+	const edges: GraphEdge[] = [];
+	const cap = Math.min(ids.length, 10);
+	for (let i = 0; i < cap; i++) {
+		for (let j = i + 1; j < cap; j++) {
+			edges.push({ source: ids[i]!, target: ids[j]!, kind: "memory-tag", weight: 1 });
+		}
+	}
+	return edges;
+}
+
 export class PensieveGraphService {
 	constructor(
 		private readonly resolveRuntime: () => IAgentRuntime | null,
@@ -81,98 +178,15 @@ export class PensieveGraphService {
 	async snapshot(filter: GraphFilter = {}): Promise<GraphSnapshot> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return { nodes: [], edges: [], stats: { memories: 0, entities: 0, edges: 0 } };
-		const a = runtime as unknown as AdapterShape;
-		const memories = (typeof a.getMemories === "function"
-			? await a.getMemories({ tableName: "memories", count: this.hardLimit })
-			: []) as Memory[];
-		const rels = (typeof a.getRelationships === "function"
-			? await a.getRelationships({ limit: this.hardLimit })
-			: []) as Relationship[];
-
-		const memoriesFiltered = memories.filter((m) => {
-			if (filter.dateFrom && (m.createdAt ?? 0) < filter.dateFrom) return false;
-			if (filter.dateTo && (m.createdAt ?? 0) > filter.dateTo) return false;
-			if (filter.entityIds?.length && (!m.entityId || !filter.entityIds.includes(String(m.entityId)))) return false;
-			const md = m.metadata as { type?: string; tags?: unknown } | undefined;
-			if (filter.types?.length && md?.type && !filter.types.includes(md.type)) return false;
-			if (filter.tags?.length) {
-				const tags = Array.isArray(md?.tags) ? (md!.tags as string[]) : [];
-				if (!tags.some((t) => filter.tags!.includes(t))) return false;
-			}
-			return true;
-		});
-
-		const nodes: GraphNode[] = [];
-		const seenNode = new Set<string>();
-		const addNode = (n: GraphNode) => {
-			if (seenNode.has(n.id)) return;
-			seenNode.add(n.id);
-			nodes.push(n);
-		};
-
-		// Memory nodes
-		for (const m of memoriesFiltered) {
-			const md = m.metadata as { tags?: unknown } | undefined;
-			const memTags = Array.isArray(md?.tags) ? (md!.tags as string[]) : undefined;
-			addNode({
-				id: `memory:${m.id}`,
-				kind: "memory",
-				label: memoryLabel(m),
-				...(typeof m.createdAt === "number" ? { createdAt: m.createdAt } : {}),
-				...(memTags ? { tags: memTags } : {}),
-			});
-		}
-
-		// Entity nodes (from memories + relationships)
-		const entityIds = new Set<string>();
-		for (const m of memoriesFiltered) if (m.entityId) entityIds.add(String(m.entityId));
-		for (const r of rels) {
-			entityIds.add(String(r.sourceEntityId));
-			entityIds.add(String(r.targetEntityId));
-		}
-		for (const id of entityIds) {
-			addNode({ id: `entity:${id}`, kind: "entity", label: id.slice(0, 8) });
-		}
-
-		// Edges
-		const edges: GraphEdge[] = [];
-
-		// memory → entity
-		for (const m of memoriesFiltered) {
-			if (m.entityId) {
-				edges.push({ source: `memory:${m.id}`, target: `entity:${m.entityId}`, kind: "memory-entity" });
-			}
-		}
-
-		// entity ↔ entity from relationships
-		for (const r of rels) {
-			edges.push({
-				source: `entity:${r.sourceEntityId}`,
-				target: `entity:${r.targetEntityId}`,
-				kind: "entity-relationship",
-				weight: Math.max(1, r.tags?.length ?? 1),
-			});
-		}
-
-		// memory ↔ memory by shared tag (only when ≥ 2 memories share a tag, capped to 50 edges per tag)
-		const byTag = new Map<string, string[]>();
-		for (const m of memoriesFiltered) {
-			const tagsRaw = (m.metadata as { tags?: unknown } | undefined)?.tags;
-			const tags = Array.isArray(tagsRaw) ? (tagsRaw as string[]) : [];
-			for (const t of tags) {
-				if (!byTag.has(t)) byTag.set(t, []);
-				byTag.get(t)!.push(`memory:${m.id}`);
-			}
-		}
-		for (const [, ids] of byTag) {
-			if (ids.length < 2) continue;
-			const cap = Math.min(ids.length, 10);
-			for (let i = 0; i < cap; i++) {
-				for (let j = i + 1; j < cap; j++) {
-					edges.push({ source: ids[i]!, target: ids[j]!, kind: "memory-tag", weight: 1 });
-				}
-			}
-		}
+		const { memories, relationships } = await loadGraphRows(runtime, this.hardLimit);
+		const memoriesFiltered = memories.filter((memory) => memoryMatchesFilter(memory, filter));
+		const entityIds = entityIdsFor(memoriesFiltered, relationships);
+		const nodes = graphNodesFor(memoriesFiltered, entityIds);
+		const edges = [
+			...memoryEntityEdges(memoriesFiltered),
+			...relationshipEdges(relationships),
+			...memoryTagEdges(memoriesFiltered),
+		];
 
 		return {
 			nodes,

@@ -92,75 +92,21 @@ async function main(argv: string[]): Promise<void> {
 			case "status":
 				await showStatus(client, lock);
 				break;
-			case "providers": {
-				const [sub, id, key] = rest;
-				if (!sub) {
-					await listProviders(client);
-				} else if (sub === "add" && id && key) {
-					await setProviderKey(client, id as ProviderId, key);
-				} else if (sub === "active" && id) {
-					await setActiveProvider(client, id as ProviderId);
-				} else if (sub === "remove" && id) {
-					await removeProviderKey(client, id as ProviderId);
-				} else {
-					console.error("Usage: detour providers [add <id> <key> | active <id> | remove <id>]");
-					process.exit(2);
-				}
+			case "providers":
+				await handleProviders(client, rest);
 				break;
-			}
-			case "vault": {
-				const [sub, ...args] = rest;
-				if (!sub || sub === "list") {
-					await listInventory(client);
-				} else if (sub === "get" && args[0]) {
-					await getKey(client, args[0]);
-				} else if (sub === "set") {
-					const plain = args[0] === "--plain";
-					const offset = plain ? 1 : 0;
-					const k = args[offset];
-					const v = args[offset + 1];
-					if (!k || v === undefined) {
-						console.error("Usage: detour vault set [--plain] <key> <value>");
-						process.exit(2);
-					}
-					await setKey(client, k, v, !plain);
-				} else if ((sub === "rm" || sub === "remove" || sub === "delete") && args[0]) {
-					await removeKey(client, args[0]);
-				} else {
-					console.error("Usage: detour vault [list | get <key> | set [--plain] <key> <value> | rm <key>]");
-					process.exit(2);
-				}
+			case "vault":
+				await handleVault(client, rest);
 				break;
-			}
-			case "logins": {
-				const [sub, source, id] = rest;
-				if (!sub) {
-					await listLogins(client);
-				} else if (sub === "reveal" && source && id) {
-					await revealLogin(client, source, id);
-				} else {
-					console.error("Usage: detour logins [reveal <source> <identifier>]");
-					process.exit(2);
-				}
+			case "logins":
+				await handleLogins(client, rest);
 				break;
-			}
 			case "backends":
 				await listBackends(client);
 				break;
-			case "accounts": {
-				const [sub, provider, accountId] = rest;
-				if (!sub || sub === "list") {
-					await listAccounts(client);
-				} else if (sub === "connect" && provider) {
-					await connectAccount(client, provider, accountId ?? "Default");
-				} else if ((sub === "remove" || sub === "rm" || sub === "delete") && provider && accountId) {
-					await removeAccount(client, provider, accountId);
-				} else {
-					console.error("Usage: detour accounts [list | connect <provider> [label] | remove <provider> <id>]");
-					process.exit(2);
-				}
+			case "accounts":
+				await handleAccounts(client, rest);
 				break;
-			}
 			default:
 				console.error(`Unknown command: ${command}\n`);
 				console.log(HELP);
@@ -169,6 +115,55 @@ async function main(argv: string[]): Promise<void> {
 	} finally {
 		client.close();
 	}
+}
+
+async function handleProviders(client: CliClient, args: string[]): Promise<void> {
+	const [sub, id, key] = args;
+	if (!sub) return listProviders(client);
+	if (sub === "add" && id && key) return setProviderKey(client, id as ProviderId, key);
+	if (sub === "active" && id) return setActiveProvider(client, id as ProviderId);
+	if (sub === "remove" && id) return removeProviderKey(client, id as ProviderId);
+	return failUsage("Usage: detour providers [add <id> <key> | active <id> | remove <id>]");
+}
+
+async function handleVault(client: CliClient, args: string[]): Promise<void> {
+	const [sub, ...rest] = args;
+	if (!sub || sub === "list") return listInventory(client);
+	if (sub === "get" && rest[0]) return getKey(client, rest[0]);
+	if (sub === "set") return setVaultEntry(client, rest);
+	if ((sub === "rm" || sub === "remove" || sub === "delete") && rest[0]) return removeKey(client, rest[0]);
+	return failUsage("Usage: detour vault [list | get <key> | set [--plain] <key> <value> | rm <key>]");
+}
+
+async function setVaultEntry(client: CliClient, args: string[]): Promise<void> {
+	const plain = args[0] === "--plain";
+	const offset = plain ? 1 : 0;
+	const key = args[offset];
+	const value = args[offset + 1];
+	if (!key || value === undefined) return failUsage("Usage: detour vault set [--plain] <key> <value>");
+	return setKey(client, key, value, !plain);
+}
+
+async function handleLogins(client: CliClient, args: string[]): Promise<void> {
+	const [sub, source, id] = args;
+	if (!sub) return listLogins(client);
+	if (sub === "reveal" && source && id) return revealLogin(client, source, id);
+	return failUsage("Usage: detour logins [reveal <source> <identifier>]");
+}
+
+async function handleAccounts(client: CliClient, args: string[]): Promise<void> {
+	const [sub, provider, accountId] = args;
+	if (!sub || sub === "list") return listAccounts(client);
+	if (sub === "connect" && provider) return connectAccount(client, provider, accountId ?? "Default");
+	if ((sub === "remove" || sub === "rm" || sub === "delete") && provider && accountId) {
+		return removeAccount(client, provider, accountId);
+	}
+	return failUsage("Usage: detour accounts [list | connect <provider> [label] | remove <provider> <id>]");
+}
+
+function failUsage(message: string): never {
+	console.error(message);
+	process.exit(2);
 }
 
 await main(process.argv.slice(2));

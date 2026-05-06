@@ -29,7 +29,7 @@ const DEFAULT_MODELS: ModelConfig = {
 	openRouterEmbedding: "openai/text-embedding-3-small",
 	openRouterImage: "google/gemini-2.5-flash-image",
 	openRouterVision: "openrouter/free",
-	providerPriority: ["anthropic-subscription", "openai-codex", "openrouter-api", "anthropic-api", "openai-api"],
+	providerPriority: ["openai", "anthropic", "openrouter"],
 };
 
 const DEFAULT_WINDOW: WindowConfig = {
@@ -144,8 +144,9 @@ export class ConfigService {
 	}
 
 	async setModels(next: ModelConfig): Promise<void> {
-		await this.writeJson(KEY_MODELS, next);
-		this.applyModels(next);
+		const sanitized = { ...next, providerPriority: this.providerPriority(next.providerPriority) };
+		await this.writeJson(KEY_MODELS, sanitized);
+		this.applyModels(sanitized);
 	}
 
 	private applyModels(cfg: ModelConfig): void {
@@ -206,16 +207,12 @@ export class ConfigService {
 	}
 
 	private cleanProviderPriority(raw: unknown[]): ModelConfig["providerPriority"] {
-		const allowed = new Set<ModelConfig["providerPriority"][number]>([
-			"anthropic-subscription",
-			"openai-codex",
-			"openrouter-api",
-			"anthropic-api",
-			"openai-api",
-		]);
-		const values = raw.filter((value): value is ModelConfig["providerPriority"][number] =>
-			typeof value === "string" && allowed.has(value as ModelConfig["providerPriority"][number]),
-		);
+		const values = raw.flatMap((value) => {
+			if (value === "anthropic-subscription" || value === "anthropic-api" || value === "anthropic") return ["anthropic" as const];
+			if (value === "openai-codex" || value === "openai-api" || value === "openai") return ["openai" as const];
+			if (value === "openrouter-api" || value === "openrouter") return ["openrouter" as const];
+			return [];
+		});
 		const merged = [...values, ...DEFAULT_MODELS.providerPriority].filter((value, index, array) =>
 			array.indexOf(value) === index,
 		);
