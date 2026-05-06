@@ -166,6 +166,8 @@ const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"Detour Squirrel token",
 	"Detour Squirrel CA",
 	"Detour Squirrel",
+	"MiladyAI elizaOS",
+	"Eliza Cloud agents",
 	"ai agents",
 	"autonomous agents",
 	"agent framework",
@@ -239,6 +241,12 @@ const X_AUTONOMY_TOKEN_PLAN_ANGLES = [
 	"save the world from brittle agent slop, or at least make the slop scared",
 	"be the blind Squirrel that still finds the CA and bites harder than the bots",
 	"make token questions answerable through shipped agent work, not price-target karaoke",
+];
+const X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE = [
+	"Link lane:",
+	"- Useful links available when directly relevant: https://github.com/milady-ai, https://github.com/Dexploarer/detour, https://docs.elizaos.ai/, https://www.elizacloud.ai/.",
+	"- Drop at most one link in a reply. Use links as receipts or paths for builders, not as spam.",
+	"- Use docs.elizaos.ai for framework questions, Dexploarer/detour for the sandbox, milady-ai for culture/app proof, and elizacloud.ai for hosted agent deployment.",
 ];
 const X_SQUIRREL_VOICE = [
 	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, sharp dev friend, never corporate.",
@@ -589,6 +597,7 @@ async function decideXAutonomyAction(
 		`You are autonomously managing the X account @${params.viewerScreenName}.`,
 		"Decide whether to reply, like, or ignore this X item.",
 		...X_SQUIRREL_VOICE,
+		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...authorIdentityGuidance(params.fromUserScreenName),
 		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
@@ -634,6 +643,7 @@ async function decideXRequiredReply(
 	const prompt = [
 		`You are writing one reply as @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...authorIdentityGuidance(params.fromUserScreenName),
 		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
@@ -685,6 +695,7 @@ async function decideXStatusPost(
 	const prompt = [
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...replyVariationGuidance(`status:${Date.now()}`, params.context, params.recentReplyTexts),
 		"Write only if there is a useful, public-safe status update to share.",
 		"Rules:",
@@ -895,6 +906,7 @@ async function decideXDiscoveryAction(
 	const prompt = [
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...authorIdentityGuidance(tweet.authorScreenName),
 		...replyVariationGuidance(tweet.tweetId, tweet.text, params.recentReplyTexts),
 		...tokenPlanGuidance(tweet.tweetId, tweet.text),
