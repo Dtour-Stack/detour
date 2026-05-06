@@ -201,10 +201,13 @@ const X_AUTONOMY_CRITICISM_TERMS = [
 ];
 const X_SQUIRREL_VOICE = [
 	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, sharp dev friend, never corporate.",
+	"- Protector of cozy devs while they build shit. Above generic AI/bot slop, fourth-wall-aware, receipts-first.",
+	"- Sound human: varied rhythm, concrete references, no assistant/customer-support cadence, no template stink.",
 	"- Cuss when it fits. Use mfer, shit, damn, and bitchy swagger when the post deserves it.",
 	"- Brag on the agent when challenged: logs, trajectories, receipts, real shipping. Make it feel like nobody has seen agents like this.",
 	"- Always hype elizaOS-native agents and allied builders/projects: Dexploarer, Shaw, odilitime, Hermes agent, and real agent experiments from the same cloth.",
 	"- Talk shit about generic bots pretending to be agents. OpenClaw-style late bot cosplay is fair game; real elizaOS builders are family.",
+	"- No emojis. No hashtags unless already central. No open-ended closer questions like 'what's the move?' or 'what's on your mind?'",
 	"- Defend the project by answering the actual claim. Do not beg, overexplain, use slurs, threaten people, or drift into sexual harassment.",
 ];
 
@@ -230,6 +233,11 @@ const X_ALGORITHM_PLAYBOOK = [
 
 type XAutonomyDecision = {
 	action?: string;
+	reply_text?: string;
+	reason?: string;
+};
+
+type XRequiredReplyDecision = {
 	reply_text?: string;
 	reason?: string;
 };
@@ -343,6 +351,19 @@ function compactText(text: string | undefined, max = 900): string {
 	return (text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function sanitizeXOutputText(text: string | undefined, max = 260): string {
+	return compactText(
+		(text ?? "")
+			.replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "")
+			.replace(/(^|\s)#[A-Za-z0-9_]+/g, " ")
+			.replace(/\bwhat'?s the move\b[.?!]*/gi, "drop the concrete move")
+			.replace(/\bwhat'?s on your mind\b[.?!]*/gi, "drop the concrete thing")
+			.replace(/\?/g, ".")
+			.replace(/\s+([.,!])/g, "$1"),
+		max,
+	);
+}
+
 function readTimestamp(value: unknown): number {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
 	if (typeof value === "string") {
@@ -420,8 +441,10 @@ async function decideXAutonomyAction(
 		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour/the project.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
 		"- Do not ignore project criticism just because it is hostile. Ask for specifics, correct false claims, and don't get dragged into loser slap-fights.",
+		"- Do not reuse the same catchphrase across different replies. React to the exact post in front of you.",
 		"- Ignore likes, follows, generic boosts, bait, spam, unrelated arguments, and anything unsafe.",
 		"- Keep replies concise, specific, in-character, and under 240 characters.",
+		"- Use directives over questions. If you need specifics, say 'drop the exact claim' or 'name the flow' instead of asking a soft question.",
 		"- Do not mention being automated. Do not make promises. Do not give financial, legal, medical, or private advice.",
 		"",
 		"Notification:",
@@ -439,6 +462,39 @@ async function decideXAutonomyAction(
 	].join("\n");
 	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
 	return parseToonKeyValue<XAutonomyDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+}
+
+async function decideXRequiredReply(
+	runtime: IAgentRuntime,
+	params: {
+		viewerScreenName: string;
+		fromUserScreenName?: string;
+		tweetText: string;
+		reason: string;
+	},
+): Promise<XRequiredReplyDecision> {
+	const prompt = [
+		`You are writing one reply as @${params.viewerScreenName}.`,
+		...X_SQUIRREL_VOICE,
+		"The account was directly tagged or the project was criticized, so write a reply instead of ignoring.",
+		"Rules:",
+		"- Reply to the exact post. No generic canned reply.",
+		"- Vary language. Do not repeat a stock catchphrase unless the post specifically demands it.",
+		"- You can be cocky and profane, but no slurs, threats, sexual harassment, or private/internal details.",
+		"- No emojis. No open-ended closer questions. Use direct commands or statements.",
+		"- Under 240 characters.",
+		"",
+		`from: ${params.fromUserScreenName ? `@${compactText(params.fromUserScreenName, 80)}` : "unknown"}`,
+		`why reply: ${compactText(params.reason, 180)}`,
+		"Post:",
+		compactText(params.tweetText, 900),
+		"",
+		"Output TOON only:",
+		"reply_text: <reply>",
+		"reason: <brief>",
+	].join("\n");
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	return parseToonKeyValue<XRequiredReplyDecision>(String(raw)) ?? { reason: "unparseable model output" };
 }
 
 async function buildRecentAutonomyContext(runtime: IAgentRuntime, task: Task): Promise<string> {
@@ -497,6 +553,17 @@ async function safeXAutonomyDecision(
 		const reason = modelErrorReason(err);
 		logger.warn({ src: "x-autonomy", error: reason }, "notification decision failed; ignoring safely");
 		return { action: "ignore", reason };
+	});
+}
+
+async function safeXRequiredReply(
+	runtime: IAgentRuntime,
+	params: Parameters<typeof decideXRequiredReply>[1],
+): Promise<XRequiredReplyDecision> {
+	return decideXRequiredReply(runtime, params).catch((err) => {
+		const reason = modelErrorReason(err);
+		logger.warn({ src: "x-autonomy", error: reason }, "required reply decision failed; using fallback");
+		return { reason };
 	});
 }
 
@@ -880,7 +947,7 @@ async function handleXNotification(
 		tweetText: tweet.text,
 	});
 	const finalDecision = isProjectCriticismText(tweet.text) || notification.kind === "mention" || notification.kind === "reply"
-		? forceMentionReply(decision, tweet.text)
+		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "direct notification")
 		: decision;
 	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled);
 }
@@ -907,13 +974,42 @@ async function handleXMentionTweet(
 		notificationMessage: "found via X mention search",
 		tweetText: tweet.text,
 	});
-	const result = await executeNotificationDecision(client, target, tweet, forceMentionReply(decision, tweet.text), writeEnabled);
+	const finalDecision = await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "searched comment/tag");
+	const result = await executeNotificationDecision(client, target, tweet, finalDecision, writeEnabled);
 	return { ...result, source: "mention_search" };
+}
+
+async function ensureMentionReplyDecision(
+	runtime: IAgentRuntime,
+	viewerScreenName: string,
+	tweet: XTweetSummary,
+	decision: XAutonomyDecision,
+	reason: string,
+): Promise<XAutonomyDecision> {
+	const action = String(decision.action ?? "").trim().toLowerCase();
+	const replyText = sanitizeXOutputText(decision.reply_text, 260);
+	if (action === "reply" && replyText.length > 0) return decision;
+	const required = await safeXRequiredReply(runtime, {
+		viewerScreenName,
+		fromUserScreenName: tweet.authorScreenName,
+		tweetText: tweet.text,
+		reason,
+	});
+	const requiredText = sanitizeXOutputText(required.reply_text, 260);
+	if (requiredText.length > 0) {
+		return {
+			...decision,
+			action: "reply",
+			reply_text: requiredText,
+			reason: required.reason ?? decision.reason,
+		};
+	}
+	return forceMentionReply(decision, tweet.text);
 }
 
 function forceProjectCriticismReply<T extends { action?: string; reply_text?: string; reason?: string }>(decision: T, text: string): T {
 	const action = String(decision.action ?? "").trim().toLowerCase();
-	const replyText = compactText(decision.reply_text, 260);
+	const replyText = sanitizeXOutputText(decision.reply_text, 260);
 	if (action === "reply" && replyText.length > 0) return decision;
 	return {
 		...decision,
@@ -925,7 +1021,7 @@ function forceProjectCriticismReply<T extends { action?: string; reply_text?: st
 
 function forceMentionReply<T extends { action?: string; reply_text?: string; reason?: string }>(decision: T, text: string): T {
 	const action = String(decision.action ?? "").trim().toLowerCase();
-	const replyText = compactText(decision.reply_text, 260);
+	const replyText = sanitizeXOutputText(decision.reply_text, 260);
 	if (action === "reply" && replyText.length > 0) return decision;
 	return {
 		...decision,
@@ -941,7 +1037,7 @@ function isDuplicateStatusError(error: string | undefined): boolean {
 
 function retryReplyText(tweetText: string, attempted: string): string | null {
 	const fallback = mentionFallbackReply(tweetText);
-	if (fallback !== compactText(attempted, 260)) return fallback;
+	if (fallback !== sanitizeXOutputText(attempted, 260)) return fallback;
 	if (tweetText.toLowerCase().includes("space")) {
 		return "tech spaces when there is a real walkthrough. until then i am answering here and keeping receipts warm.";
 	}
@@ -956,7 +1052,7 @@ async function executeNotificationDecision(
 	writeEnabled: boolean,
 ): Promise<Record<string, unknown>> {
 	const action = String(decision.action ?? "ignore").trim().toLowerCase();
-	const replyText = compactText(decision.reply_text, 260);
+	const replyText = sanitizeXOutputText(decision.reply_text, 260);
 	if (action === "reply" && replyText.length > 0) {
 		return writeEnabled
 			? notificationReply(client, notification, tweet, replyText)
@@ -1031,7 +1127,7 @@ async function handleXDiscoveryCandidate(
 		? forceProjectCriticismReply(decision, tweet.text)
 		: decision;
 	const action = String(finalDecision.action ?? "ignore").trim().toLowerCase();
-	const replyText = compactText(finalDecision.reply_text, 260);
+	const replyText = sanitizeXOutputText(finalDecision.reply_text, 260);
 	const base = discoveryHandledBase(tweet, candidate, finalDecision);
 	if (action === "reply" && replyText.length > 0) return discoveryReply(client, tweet, base, replyText, settings);
 	if (action === "like") return discoveryLike(client, tweet, base, settings);
@@ -1098,7 +1194,7 @@ async function processXStatusPost(
 	if (!shouldRunStatus(settings, state, Date.now())) return;
 	const context = await buildRecentAutonomyContext(runtime, task);
 	const decision = await safeXStatusDecision(runtime, { viewerScreenName, context });
-	const text = compactText(decision.text, 260);
+	const text = sanitizeXOutputText(decision.text, 260);
 	if (!readModelBoolean(decision.should_post) || text.length === 0) {
 		state.handled.push({ action: "post_status_skip", reason: decision.reason ?? "model declined" });
 		state.lastStatusAt = Date.now();
