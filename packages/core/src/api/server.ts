@@ -1466,6 +1466,43 @@ async function validateChannelCredential(
 			return { ok: false, error: `Could not reach OpenAI to validate key: ${msg}` };
 		}
 	}
+	if (key === "X_AUTH_TOKEN" || key === "X_CT0") {
+		// Validate by hitting a cheap authenticated endpoint. We need BOTH
+		// cookies to make a request, so look up whichever isn't being saved
+		// from the running process env (set by previous saves) and pair
+		// them. If only one is set, accept silently — the other half will
+		// be checked once both are stored.
+		const otherKey = key === "X_AUTH_TOKEN" ? "X_CT0" : "X_AUTH_TOKEN";
+		const otherValue = process.env[otherKey];
+		if (!otherValue) {
+			return { ok: true }; // can't validate alone; defer to runtime
+		}
+		const authToken = key === "X_AUTH_TOKEN" ? trimmed : otherValue;
+		const ct0 = key === "X_CT0" ? trimmed : otherValue;
+		try {
+			const res = await fetchWithTimeout("https://api.x.com/1.1/account/settings.json", {
+				headers: {
+					authorization:
+						"Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+					"x-csrf-token": ct0,
+					cookie: `auth_token=${authToken}; ct0=${ct0}`,
+					"user-agent":
+						"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+				},
+			});
+			if (res.status === 401 || res.status === 403) {
+				return {
+					ok: false,
+					error: "X rejected the cookies (auth_token + ct0). Re-export both from x.com via Cookie-Editor and try again.",
+				};
+			}
+			if (!res.ok) return { ok: false, error: `X cookie check failed: HTTP ${res.status}` };
+			return { ok: true };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: `Could not reach X to validate cookies: ${msg}` };
+		}
+	}
 	// Unknown / non-validatable key — accept silently.
 	return { ok: true };
 }

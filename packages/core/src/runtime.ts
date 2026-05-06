@@ -25,6 +25,7 @@ import { embeddingOpenAIPlugin } from "@detour/plugin-embedding-openai";
 import { decodeCodexJwt } from "@detour/plugin-codex-chatgpt";
 import { pensieveToolsPlugin } from "@detour/plugin-pensieve-tools";
 import { vaultToolsPlugin } from "@detour/plugin-vault-tools";
+import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -267,13 +268,33 @@ export class RuntimeService {
 		}
 		settings.OPENAI_EMBEDDING_DIMENSIONS = "384";
 
+		// X (Twitter) credentials — read directly from vault and thread into
+		// runtime settings so the @detour/plugin-x-tweets actions can find
+		// them via runtime.getSetting(). These aren't a "channel" in the
+		// messaging-service sense (X is an outbound action surface, no
+		// inbound subscription), so they bypass channelResolved.settings.
+		try {
+			const v = await this.vault.vault();
+			for (const key of ["X_AUTH_TOKEN", "X_CT0", "X_USER_AGENT"]) {
+				if (await v.has(key)) {
+					const val = await v.get(key);
+					if (typeof val === "string" && val.length > 0) {
+						settings[key] = val;
+						process.env[key] = val;
+					}
+				}
+			}
+		} catch (err) {
+			console.warn("[runtime] x-creds load failed:", err instanceof Error ? err.message : err);
+		}
+
 		const runtime = new AgentRuntime({
 			character,
 			// embeddingOpenAIPlugin first so it wins TEXT_EMBEDDING registration
 			// (eliza picks first-registered for equal priority). It internally
 			// falls back to zero vectors when OPENAI_EMBEDDING_API_KEY is unset,
 			// so embeddingStubPlugin is now redundant — kept as final safety net.
-			plugins: [sqlPlugin, llmPlugin, embeddingOpenAIPlugin, embeddingStubPlugin, vaultToolsPlugin, pensieveToolsPlugin, ...channelResolved.plugins],
+			plugins: [sqlPlugin, llmPlugin, embeddingOpenAIPlugin, embeddingStubPlugin, vaultToolsPlugin, pensieveToolsPlugin, xTweetsPlugin, ...channelResolved.plugins],
 			settings,
 		});
 		await runtime.initialize();

@@ -2599,6 +2599,7 @@
         "@detour/plugin-embedding-openai": "workspace:*",
         "@detour/plugin-pensieve-tools": "workspace:*",
         "@detour/plugin-vault-tools": "workspace:*",
+        "@detour/plugin-x-tweets": "workspace:*",
         "@detour/shared": "workspace:*",
         "@elizaos/agent": "workspace:*",
         "@elizaos/core": "workspace:*",
@@ -2658,6 +2659,17 @@
       "dependencies": {
         "@elizaos/core": "workspace:*",
         "@elizaos/vault": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-x-tweets": {
+      "name": "@detour/plugin-x-tweets",
+      "version": "0.3.0",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -3114,6 +3126,8 @@
     "@detour/plugin-pensieve-tools": ["@detour/plugin-pensieve-tools@workspace:packages/plugin-pensieve-tools"],
 
     "@detour/plugin-vault-tools": ["@detour/plugin-vault-tools@workspace:packages/plugin-vault-tools"],
+
+    "@detour/plugin-x-tweets": ["@detour/plugin-x-tweets@workspace:packages/plugin-x-tweets"],
 
     "@detour/shared": ["@detour/shared@workspace:packages/shared"],
 

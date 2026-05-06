@@ -51,6 +51,7 @@ The installer downloads from GitHub Releases, removes `com.apple.quarantine`, an
 | **Activity** | `Cmd+Shift+A` | Trajectories, logs, runtime introspection, tasks, plugins, raw DB |
 | **Channels** | `Cmd+Shift+C` | Discord / Telegram / iMessage setup with token validation on save |
 | **Settings > Local AI** | `Cmd+,` then "Local AI" | Bundled llama.cpp embedding server status + test button + cloud-fallback OpenAI key |
+| **X (Twitter) actions** | agent-callable | `X_POST` and `X_REPLY` actions — the agent posts as @detour_squirrel directly via X's web GraphQL (cookie auth, no developer API key). Setup: paste `X_AUTH_TOKEN` + `X_CT0` cookies into the vault. |
 
 Behind the surfaces:
 

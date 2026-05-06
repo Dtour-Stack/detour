@@ -13,6 +13,7 @@
 		"@detour/plugin-embedding-openai": "workspace:*",
 		"@detour/plugin-pensieve-tools": "workspace:*",
 		"@detour/plugin-vault-tools": "workspace:*",
+		"@detour/plugin-x-tweets": "workspace:*",
 		"@detour/shared": "workspace:*",
 		"@elizaos/agent": "workspace:*",
 		"@elizaos/core": "workspace:*",
