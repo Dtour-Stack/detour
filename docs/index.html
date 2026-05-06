@@ -8,7 +8,14 @@
 <meta property="og:title" content="Detour — a playground for elizaOS agent experiments" />
 <meta property="og:description" content="A macOS menu-bar app wrapping an elizaOS AgentRuntime. Developer sandbox: bundled llama.cpp embeddings, unified channel gateway, agent-driven inbox. Expect breakage." />
 <meta property="og:type" content="website" />
-<link rel="icon" type="image/png" href="../packages/web/public/favicon-32.png" />
+<meta property="og:image" content="assets/favicon-512.png" />
+<link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="48x48" href="assets/favicon-48.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="assets/favicon-180.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="assets/favicon-192.png" />
+<link rel="icon" type="image/png" sizes="512x512" href="assets/favicon-512.png" />
 <style>
 :root {
   --bg: #06060a;
@@ -279,16 +286,20 @@ section .sub {
 .mascot.in-view { opacity: 1; }
 
 .mascot-laptop {
-  /* Hero pose — sitting at the laptop, "I'm working" */
-  width: clamp(280px, 36vw, 560px);
-  right: -60px;
-  top: 30px;
+  /* Hero pose — squirrel sitting on a long branch with the dangling acorn.
+     Squirrel is on the LEFT of the asset, branch trails right with empty
+     pixels at the far right. Anchor right: -22vw so the trailing branch
+     extends off-viewport but the squirrel itself stays well inside. */
+  width: clamp(420px, 56vw, 880px);
+  right: -22vw;
+  top: 80px;
 }
 .mascot-branch {
-  /* Reflective pose — alone on a branch with the dangling acorn */
-  width: clamp(280px, 36vw, 540px);
-  left: -80px;
-  top: -40px;
+  /* Action pose — squirrel hanging off the branch, swinging. Squirrel is
+     mid-frame; anchor left: -8vw so the figure stays on the page edge. */
+  width: clamp(420px, 52vw, 820px);
+  left: -8vw;
+  top: -80px;
 }
 .mascot-corner {
   /* Small footer accent */
