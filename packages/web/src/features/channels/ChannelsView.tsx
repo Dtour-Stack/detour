@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type {
 	ActivityTrajectoryListItem,
 	ActivityTrajectoryListResult,
@@ -194,167 +195,337 @@ function ChannelCard({
 	}, [client, onChanged]);
 
 	const toggleEnabled = useCallback(async () => {
-		setBusy("toggle");
-		setActionError(null);
-		try {
-			if (channel.id === "imessage") {
-				if (channel.configured) {
-					if (!confirm("Disable iMessage bridge?")) { setBusy(null); return; }
-					await client.channelClearCredential("IMESSAGE_ENABLED");
-				} else {
-					await client.channelSetCredential("IMESSAGE_ENABLED", "true");
-				}
-				await onChanged();
-				if (!expanded) onToggleExpand();
-			} else if (channel.configured) {
-				if (!confirm(`Disable ${channel.label}? This will clear stored credentials.`)) { setBusy(null); return; }
-				for (const k of channel.requiredVaultKeys) await client.channelClearCredential(k);
-				await onChanged();
-			} else {
-				if (!expanded) onToggleExpand();
-			}
-		} catch (e) {
-			setActionError(e instanceof Error ? e.message : String(e));
-		} finally {
-			setBusy(null);
-		}
-	}, [channel, client, onChanged]);
+		await toggleChannelEnabled({
+			channel,
+			client,
+			expanded,
+			onChanged,
+			onToggleExpand,
+			setActionError,
+			setBusy,
+		});
+	}, [channel, client, expanded, onChanged, onToggleExpand]);
 
 	const allKeys = [...channel.requiredVaultKeys, ...channel.optionalVaultKeys];
 	const isEnabled = channel.configured;
 
 	return (
 		<div className={`channel-card ${expanded ? "expanded" : ""} ${isEnabled ? "enabled" : ""}`}>
-			<div className="channel-card-header">
-				<button
-					type="button"
-					className="channel-card-expand"
-					onClick={onToggleExpand}
-					aria-expanded={expanded}
-				>
-					<span className="channel-card-icon" aria-hidden>{CHANNEL_ICONS[channel.id] ?? "🔌"}</span>
-					<div className="channel-card-title">
-						<div className="channel-card-name">{channel.label}</div>
-						<div className="channel-card-sub">{channel.description}</div>
-					</div>
-					<div className="channel-card-status">
-						<span className={`badge ${statusTone(channel)}`} title={channel.liveDetail ?? ""}>
-							{statusLabel(channel)}
-						</span>
-						{!channel.pluginLoaded && channel.configured && (
-							<span className="badge warn" title="Plugin not loaded yet — reload runtime">reload needed</span>
-						)}
-						{!channel.platformAvailable && (
-							<span className="badge muted">{channel.platform}-only</span>
-						)}
-					</div>
-					<span className="channel-card-twirl" aria-hidden>{expanded ? "▾" : "▸"}</span>
-				</button>
-				<button
-					type="button"
-					className={`channel-toggle ${isEnabled ? "on" : "off"}`}
-					disabled={busy === "toggle" || !channel.platformAvailable}
-					onClick={toggleEnabled}
-					title={isEnabled ? `Disable ${channel.label}` : `Enable ${channel.label}`}
-					aria-label={isEnabled ? `Disable ${channel.label}` : `Enable ${channel.label}`}
-				>
-					<span className="channel-toggle-knob" />
-				</button>
-			</div>
-
+			<ChannelCardHeader
+				channel={channel}
+				expanded={expanded}
+				isEnabled={isEnabled}
+				toggleBusy={busy === "toggle"}
+				onToggleExpand={onToggleExpand}
+				onToggleEnabled={toggleEnabled}
+			/>
 			{expanded && (
-				<div className="channel-card-body">
-					{actionError && <div className="banner error" style={{ marginBottom: 8 }}>{actionError}</div>}
-					{!channel.platformAvailable && (
-						<div className="banner warn" style={{ marginBottom: 8 }}>
-							This channel requires {channel.platform}.
-						</div>
-					)}
-					{channel.liveDetail && (channel.liveStatus === "invalid-token" || channel.liveStatus === "error" || channel.liveStatus === "connecting") && (
-						<div className={`banner ${channel.liveStatus === "invalid-token" || channel.liveStatus === "error" ? "error" : "warn"}`} style={{ marginBottom: 8 }}>
-							{channel.liveDetail}
-						</div>
-					)}
-					{channel.liveStatus === "online" && channel.liveDetail && (
-						<div className="banner ok" style={{ marginBottom: 8, fontSize: 12 }}>
-							✓ {channel.liveDetail}
-						</div>
-					)}
-
-					{channel.id === "imessage" && channel.pluginLoaded && (
-						<ImessageTccBanner client={client} />
-					)}
-
-					{(channel.id === "telegram" || channel.id === "discord") && channel.liveStatus === "online" && (
-						<OwnerPairingSection client={client} connector={channel.id} />
-					)}
-
-					{channel.id === "discord" && channel.liveStatus === "online" && (
-						<DiscordBackfillSection client={client} />
-					)}
-
-					{allKeys.length > 0 && (
-						<section className="channel-card-section">
-							<h4 className="channel-card-section-title">Credentials</h4>
-							<div className="channel-creds">
-								{allKeys.map((key) => {
-									const required = channel.requiredVaultKeys.includes(key);
-									const missing = channel.missingKeys.includes(key);
-									return (
-										<div key={key} className="channel-cred-row">
-											<label className="channel-cred-label">
-												<span className="form-label">{key}</span>
-												<span className="hint">{required ? "required" : "optional"} · {missing ? "not set" : "stored"}</span>
-											</label>
-											<div className="row" style={{ gap: 6 }}>
-												<input
-													type="password"
-													value={draft[key] ?? ""}
-													onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-													placeholder={missing ? "paste value…" : "(stored — paste to overwrite)"}
-													className="pensieve-input"
-													style={{ flex: 1 }}
-												/>
-												<button type="button" className="btn small" disabled={busy === key || !draft[key]} onClick={() => setKey(key)}>
-													{busy === key ? "Saving…" : "Save"}
-												</button>
-												{!missing && (
-													<button type="button" className="btn small ghost" disabled={busy === key} onClick={() => clearKey(key)}>
-														Clear
-													</button>
-												)}
-											</div>
-										</div>
-									);
-								})}
-							</div>
-						</section>
-					)}
-
-					<section className="channel-card-section">
-						<div className="channel-card-section-row">
-							<h4 className="channel-card-section-title">Status</h4>
-							{channel.configured && !channel.pluginLoaded && (
-								<button type="button" className="btn small" disabled={reloading} onClick={reload}>
-									{reloading ? "Reloading…" : "Load plugin (rebuild runtime)"}
-								</button>
-							)}
-						</div>
-						<dl className="channel-status">
-							<dt>Plugin</dt><dd className="mono">{channel.pluginPackage}</dd>
-							<dt>Platform</dt><dd>{channel.platform === "any" ? "any" : `${channel.platform} (${channel.platformAvailable ? "ok" : "unavailable"})`}</dd>
-							<dt>Configured</dt><dd>{channel.configured ? "yes" : "no"}</dd>
-							<dt>Loaded into runtime</dt><dd>{channel.pluginLoaded ? "yes" : "no"}</dd>
-						</dl>
-					</section>
-
-					<section className="channel-card-section">
-						<h4 className="channel-card-section-title">Recent activity (from trajectories)</h4>
-						<ChannelHistory client={client} sourceId={channel.id} pluginLoaded={channel.pluginLoaded} />
-					</section>
-				</div>
+				<ChannelCardBody
+					client={client}
+					channel={channel}
+					actionError={actionError}
+					allKeys={allKeys}
+					busy={busy}
+					draft={draft}
+					reloading={reloading}
+					onClearKey={clearKey}
+					onDraftChange={setDraft}
+					onReload={reload}
+					onSetKey={setKey}
+				/>
 			)}
 		</div>
+	);
+}
+
+async function toggleChannelEnabled({
+	channel,
+	client,
+	expanded,
+	onChanged,
+	onToggleExpand,
+	setActionError,
+	setBusy,
+}: {
+	channel: ChannelStatus;
+	client: WebClient;
+	expanded: boolean;
+	onChanged: () => Promise<void> | void;
+	onToggleExpand: () => void;
+	setActionError: (value: string | null) => void;
+	setBusy: (value: string | null) => void;
+}) {
+	setBusy("toggle");
+	setActionError(null);
+	try {
+		if (channel.id === "imessage") {
+			await toggleImessageChannel(channel, client);
+			await onChanged();
+			if (!expanded) onToggleExpand();
+		} else if (channel.configured) {
+			if (!confirm(`Disable ${channel.label}? This will clear stored credentials.`)) return;
+			for (const k of channel.requiredVaultKeys) await client.channelClearCredential(k);
+			await onChanged();
+		} else if (!expanded) {
+			onToggleExpand();
+		}
+	} catch (e) {
+		setActionError(e instanceof Error ? e.message : String(e));
+	} finally {
+		setBusy(null);
+	}
+}
+
+async function toggleImessageChannel(channel: ChannelStatus, client: WebClient): Promise<void> {
+	if (channel.configured) {
+		if (!confirm("Disable iMessage bridge?")) return;
+		await client.channelClearCredential("IMESSAGE_ENABLED");
+		return;
+	}
+	await client.channelSetCredential("IMESSAGE_ENABLED", "true");
+}
+
+function ChannelCardHeader({
+	channel,
+	expanded,
+	isEnabled,
+	toggleBusy,
+	onToggleExpand,
+	onToggleEnabled,
+}: {
+	channel: ChannelStatus;
+	expanded: boolean;
+	isEnabled: boolean;
+	toggleBusy: boolean;
+	onToggleExpand: () => void;
+	onToggleEnabled: () => Promise<void> | void;
+}) {
+	return (
+		<div className="channel-card-header">
+			<button
+				type="button"
+				className="channel-card-expand"
+				onClick={onToggleExpand}
+				aria-expanded={expanded}
+			>
+				<span className="channel-card-icon" aria-hidden>{CHANNEL_ICONS[channel.id] ?? "🔌"}</span>
+				<div className="channel-card-title">
+					<div className="channel-card-name">{channel.label}</div>
+					<div className="channel-card-sub">{channel.description}</div>
+				</div>
+				<div className="channel-card-status">
+					<span className={`badge ${statusTone(channel)}`} title={channel.liveDetail ?? ""}>
+						{statusLabel(channel)}
+					</span>
+					{!channel.pluginLoaded && channel.configured && (
+						<span className="badge warn" title="Plugin not loaded yet — reload runtime">reload needed</span>
+					)}
+					{!channel.platformAvailable && (
+						<span className="badge muted">{channel.platform}-only</span>
+					)}
+				</div>
+				<span className="channel-card-twirl" aria-hidden>{expanded ? "▾" : "▸"}</span>
+			</button>
+			<button
+				type="button"
+				className={`channel-toggle ${isEnabled ? "on" : "off"}`}
+				disabled={toggleBusy || !channel.platformAvailable}
+				onClick={onToggleEnabled}
+				title={isEnabled ? `Disable ${channel.label}` : `Enable ${channel.label}`}
+				aria-label={isEnabled ? `Disable ${channel.label}` : `Enable ${channel.label}`}
+			>
+				<span className="channel-toggle-knob" />
+			</button>
+		</div>
+	);
+}
+
+function ChannelCardBody({
+	client,
+	channel,
+	actionError,
+	allKeys,
+	busy,
+	draft,
+	reloading,
+	onClearKey,
+	onDraftChange,
+	onReload,
+	onSetKey,
+}: {
+	client: WebClient;
+	channel: ChannelStatus;
+	actionError: string | null;
+	allKeys: string[];
+	busy: string | null;
+	draft: Record<string, string>;
+	reloading: boolean;
+	onClearKey: (key: string) => void;
+	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
+	onReload: () => void;
+	onSetKey: (key: string) => void;
+}) {
+	return (
+		<div className="channel-card-body">
+			<ChannelAlerts channel={channel} actionError={actionError} />
+			{channel.id === "imessage" && channel.pluginLoaded && <ImessageTccBanner client={client} />}
+			{(channel.id === "telegram" || channel.id === "discord") && channel.liveStatus === "online" && (
+				<OwnerPairingSection client={client} connector={channel.id} />
+			)}
+			{channel.id === "discord" && channel.liveStatus === "online" && <DiscordBackfillSection client={client} />}
+			<CredentialsSection
+				allKeys={allKeys}
+				busy={busy}
+				channel={channel}
+				draft={draft}
+				onClearKey={onClearKey}
+				onDraftChange={onDraftChange}
+				onSetKey={onSetKey}
+			/>
+			<ChannelStatusSection channel={channel} reloading={reloading} onReload={onReload} />
+			<section className="channel-card-section">
+				<h4 className="channel-card-section-title">Recent activity (from trajectories)</h4>
+				<ChannelHistory client={client} sourceId={channel.id} pluginLoaded={channel.pluginLoaded} />
+			</section>
+		</div>
+	);
+}
+
+function ChannelAlerts({ channel, actionError }: { channel: ChannelStatus; actionError: string | null }) {
+	return (
+		<>
+			{actionError && <div className="banner error" style={{ marginBottom: 8 }}>{actionError}</div>}
+			{!channel.platformAvailable && (
+				<div className="banner warn" style={{ marginBottom: 8 }}>
+					This channel requires {channel.platform}.
+				</div>
+			)}
+			{channel.liveDetail && (channel.liveStatus === "invalid-token" || channel.liveStatus === "error" || channel.liveStatus === "connecting") && (
+				<div className={`banner ${channel.liveStatus === "invalid-token" || channel.liveStatus === "error" ? "error" : "warn"}`} style={{ marginBottom: 8 }}>
+					{channel.liveDetail}
+				</div>
+			)}
+			{channel.liveStatus === "online" && channel.liveDetail && (
+				<div className="banner ok" style={{ marginBottom: 8, fontSize: 12 }}>
+					✓ {channel.liveDetail}
+				</div>
+			)}
+		</>
+	);
+}
+
+function CredentialsSection({
+	allKeys,
+	busy,
+	channel,
+	draft,
+	onClearKey,
+	onDraftChange,
+	onSetKey,
+}: {
+	allKeys: string[];
+	busy: string | null;
+	channel: ChannelStatus;
+	draft: Record<string, string>;
+	onClearKey: (key: string) => void;
+	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
+	onSetKey: (key: string) => void;
+}) {
+	if (allKeys.length === 0) return null;
+	return (
+		<section className="channel-card-section">
+			<h4 className="channel-card-section-title">Credentials</h4>
+			<div className="channel-creds">
+				{allKeys.map((key) => (
+					<CredentialRow
+						key={key}
+						busy={busy}
+						channel={channel}
+						draft={draft}
+						credentialKey={key}
+						onClearKey={onClearKey}
+						onDraftChange={onDraftChange}
+						onSetKey={onSetKey}
+					/>
+				))}
+			</div>
+		</section>
+	);
+}
+
+function CredentialRow({
+	busy,
+	channel,
+	credentialKey,
+	draft,
+	onClearKey,
+	onDraftChange,
+	onSetKey,
+}: {
+	busy: string | null;
+	channel: ChannelStatus;
+	credentialKey: string;
+	draft: Record<string, string>;
+	onClearKey: (key: string) => void;
+	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
+	onSetKey: (key: string) => void;
+}) {
+	const required = channel.requiredVaultKeys.includes(credentialKey);
+	const missing = channel.missingKeys.includes(credentialKey);
+	return (
+		<div className="channel-cred-row">
+			<label className="channel-cred-label">
+				<span className="form-label">{credentialKey}</span>
+				<span className="hint">{required ? "required" : "optional"} · {missing ? "not set" : "stored"}</span>
+			</label>
+			<div className="row" style={{ gap: 6 }}>
+				<input
+					type="password"
+					value={draft[credentialKey] ?? ""}
+					onChange={(e) => onDraftChange((d) => ({ ...d, [credentialKey]: e.target.value }))}
+					placeholder={missing ? "paste value…" : "(stored — paste to overwrite)"}
+					className="pensieve-input"
+					style={{ flex: 1 }}
+				/>
+				<button type="button" className="btn small" disabled={busy === credentialKey || !draft[credentialKey]} onClick={() => onSetKey(credentialKey)}>
+					{busy === credentialKey ? "Saving…" : "Save"}
+				</button>
+				{!missing && (
+					<button type="button" className="btn small ghost" disabled={busy === credentialKey} onClick={() => onClearKey(credentialKey)}>
+						Clear
+					</button>
+				)}
+			</div>
+		</div>
+	);
+}
+
+function ChannelStatusSection({
+	channel,
+	reloading,
+	onReload,
+}: {
+	channel: ChannelStatus;
+	reloading: boolean;
+	onReload: () => void;
+}) {
+	return (
+		<section className="channel-card-section">
+			<div className="channel-card-section-row">
+				<h4 className="channel-card-section-title">Status</h4>
+				{channel.configured && !channel.pluginLoaded && (
+					<button type="button" className="btn small" disabled={reloading} onClick={onReload}>
+						{reloading ? "Reloading…" : "Load plugin (rebuild runtime)"}
+					</button>
+				)}
+			</div>
+			<dl className="channel-status">
+				<dt>Plugin</dt><dd className="mono">{channel.pluginPackage}</dd>
+				<dt>Platform</dt><dd>{channel.platform === "any" ? "any" : `${channel.platform} (${channel.platformAvailable ? "ok" : "unavailable"})`}</dd>
+				<dt>Configured</dt><dd>{channel.configured ? "yes" : "no"}</dd>
+				<dt>Loaded into runtime</dt><dd>{channel.pluginLoaded ? "yes" : "no"}</dd>
+			</dl>
+		</section>
 	);
 }
 
