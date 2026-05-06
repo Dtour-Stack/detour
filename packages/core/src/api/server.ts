@@ -1412,7 +1412,7 @@ export class ApiServer {
 async function validateChannelCredential(
 	key: string,
 	value: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; info?: string } | { ok: false; error: string }> {
 	const trimmed = value.trim();
 	if (trimmed.length === 0) return { ok: false, error: `${key} is empty` };
 	const TIMEOUT = 5000;
@@ -1480,26 +1480,18 @@ async function validateChannelCredential(
 		const authToken = key === "X_AUTH_TOKEN" ? trimmed : otherValue;
 		const ct0 = key === "X_CT0" ? trimmed : otherValue;
 		try {
-			const res = await fetchWithTimeout("https://api.x.com/1.1/account/settings.json", {
-				headers: {
-					authorization:
-						"Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
-					"x-csrf-token": ct0,
-					cookie: `auth_token=${authToken}; ct0=${ct0}`,
-					"user-agent":
-						"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-				},
-			});
-			if (res.status === 401 || res.status === 403) {
+			const { XClient } = await import("@detour/plugin-x-tweets");
+			const client = new XClient({ cookies: { authToken, ct0 } });
+			const viewer = await client.viewer();
+			return { ok: true, info: `signed in as @${viewer.screenName}` };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
 				return {
 					ok: false,
 					error: "X rejected the cookies (auth_token + ct0). Re-export both from x.com via Cookie-Editor and try again.",
 				};
 			}
-			if (!res.ok) return { ok: false, error: `X cookie check failed: HTTP ${res.status}` };
-			return { ok: true };
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
 			return { ok: false, error: `Could not reach X to validate cookies: ${msg}` };
 		}
 	}

@@ -1,87 +1,48 @@
 /**
- * Minimal X (Twitter) client for posting + replying as the logged-in user.
+ * X (Twitter) web GraphQL client. Cookie auth, no developer key.
  *
- * TypeScript port of the relevant bits of `@steipete/bird` (MIT) — specifically
- * the `tweet()` / `reply()` flow that talks to X's undocumented web GraphQL
- * `CreateTweet` endpoint with cookie auth (`auth_token` + `ct0`).
+ * Talks to the same `/i/api/graphql/<queryId>/<Operation>` surface that the
+ * official x.com web bundle uses. Auth = `auth_token` + `ct0` cookies that the
+ * user exports from a logged-in browser session (Cookie-Editor extension).
  *
- * Auth model: same as the X web app. The user signs into x.com in their
- * browser, exports the `auth_token` and `ct0` cookies (Cookie-Editor extension
- * is the standard recipe), and pastes them into the vault. No API key, no
- * developer account — everything routes through the same GraphQL surface
- * the official x.com web client uses.
+ * What this client gives the agent (matches X's open-source ranking weights —
+ * see https://github.com/twitter/the-algorithm — so the actions are ordered by
+ * which actually move profile reach):
  *
- * **Heads up**: X's GraphQL API is undocumented and the operation hash
- * (`queryId`) rotates from time to time. If posting starts 404'ing, refresh
- * the QUERY_ID below from a current build of the bird CLI:
+ *   - tweet/reply           — REPLY weight ≈ 13.5×, AUTHOR_REPLIED ≈ 75×
+ *   - like                  — FAVORITED ≈ 0.5× (cheap signal but high volume)
+ *   - retweet               — RETWEETED ≈ 1×
+ *   - bookmark              — BOOKMARKED ≈ 1× (engagement only, no broadcast)
+ *   - delete                — clean up own posts
+ *   - search/getTweet       — find conversations to engage in
+ *   - getUser/getUserTweets — read someone's recent activity to engage with
+ *   - getNotifications      — fast-reply to mentions (fast engagement is the
+ *                             biggest cold-start signal in the ranker)
+ *   - viewer                — confirm we're posting as the right account
  *
- *     bunx @steipete/bird query-ids --fresh --json | jq -r '.CreateTweet'
- *
- * The fallback path uses the legacy v1.1 `/i/api/1.1/statuses/update.json`
- * endpoint (which has been stable for ~15 years) for resilience.
+ * Heads-up: X rotates queryIds every few months. When something starts 404ing
+ * refresh the IDs in `x-query-ids.ts` from a current bundle (instructions in
+ * that file's header comment).
  */
 
-const TWITTER_API_BASE = "https://x.com/i/api/graphql";
-const TWITTER_STATUS_UPDATE_URL = "https://x.com/i/api/1.1/statuses/update.json";
+import { X_PUBLIC_BEARER, X_QUERY_IDS, buildFeatures } from "./x-query-ids";
 
-// The CreateTweet operation hash. Refresh from `bird query-ids --fresh` if
-// posting stops working — X rotates these every few months.
-const CREATE_TWEET_QUERY_ID = "TAJw1rBsjAtdNgTdlo2oeg";
+const GQL_BASE = "https://x.com/i/api/graphql";
+const REST_V11_BASE = "https://x.com/i/api/1.1";
+const TWITTER_STATUS_UPDATE_URL = `${REST_V11_BASE}/statuses/update.json`;
+const NOTIFICATIONS_URL = "https://x.com/i/api/2/notifications/all.json";
 
-// Public bearer token used by every browser X session. NOT a developer key —
-// this is hard-coded into the x.com web bundle. Same value bird uses; same
-// value the official site uses. If X rotates it the symptom is HTTP 401 on
-// every request and we can pull the new one from a network capture.
-const X_PUBLIC_BEARER =
-	"Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
-
-// The features object that has to ship with every CreateTweet call. X uses
-// these to decide which interactive UI surfaces are enabled in the response
-// (longform tweets, grok, edit, etc.). Wrong/missing features → 400.
-function buildTweetCreateFeatures(): Record<string, boolean> {
-	return {
-		rweb_video_screen_enabled: true,
-		creator_subscriptions_tweet_preview_api_enabled: true,
-		premium_content_api_read_enabled: false,
-		communities_web_enable_tweet_community_results_fetch: true,
-		c9s_tweet_anatomy_moderator_badge_enabled: true,
-		responsive_web_grok_analyze_button_fetch_trends_enabled: false,
-		responsive_web_grok_analyze_post_followups_enabled: false,
-		responsive_web_grok_annotations_enabled: false,
-		responsive_web_jetfuel_frame: true,
-		post_ctas_fetch_enabled: true,
-		responsive_web_grok_share_attachment_enabled: true,
-		responsive_web_edit_tweet_api_enabled: true,
-		graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-		view_counts_everywhere_api_enabled: true,
-		longform_notetweets_consumption_enabled: true,
-		responsive_web_twitter_article_tweet_consumption_enabled: true,
-		tweet_awards_web_tipping_enabled: false,
-		responsive_web_grok_show_grok_translated_post: false,
-		responsive_web_grok_analysis_button_from_backend: true,
-		creator_subscriptions_quote_tweet_preview_enabled: false,
-		longform_notetweets_rich_text_read_enabled: true,
-		longform_notetweets_inline_media_enabled: true,
-		profile_label_improvements_pcf_label_in_post_enabled: true,
-		responsive_web_profile_redirect_enabled: false,
-		rweb_tipjar_consumption_enabled: true,
-		verified_phone_label_enabled: false,
-		articles_preview_enabled: true,
-		responsive_web_grok_community_note_auto_translation_is_enabled: false,
-		responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
-		freedom_of_speech_not_reach_fetch_enabled: true,
-		standardized_nudges_misinfo: true,
-		tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
-		responsive_web_grok_image_annotation_enabled: true,
-		responsive_web_grok_imagine_annotation_enabled: true,
-		responsive_web_graphql_timeline_navigation_enabled: true,
-		responsive_web_enhance_cards_enabled: false,
-	};
-}
+// ── Public types ────────────────────────────────────────────────────────────
 
 export interface XCookies {
 	authToken: string;
 	ct0: string;
+}
+
+export interface XClientOptions {
+	cookies: XCookies;
+	timeoutMs?: number;
+	userAgent?: string;
 }
 
 export interface XPostResult {
@@ -91,11 +52,50 @@ export interface XPostResult {
 	error?: string;
 }
 
-export interface XClientOptions {
-	cookies: XCookies;
-	timeoutMs?: number;
-	userAgent?: string;
+export interface XViewer {
+	userId: string;
+	screenName: string;
+	name?: string;
 }
+
+export interface XTweetSummary {
+	tweetId: string;
+	authorId?: string;
+	authorScreenName?: string;
+	text: string;
+	createdAt?: string;
+	favoriteCount?: number;
+	retweetCount?: number;
+	replyCount?: number;
+	url: string;
+}
+
+export interface XUserSummary {
+	userId: string;
+	screenName: string;
+	name?: string;
+	description?: string;
+	followersCount?: number;
+	followingCount?: number;
+	verified?: boolean;
+}
+
+export interface XSearchOptions {
+	query: string;
+	limit?: number;
+	product?: "Top" | "Latest" | "People" | "Photos" | "Videos";
+}
+
+export interface XNotification {
+	id: string;
+	timestamp: string;
+	message?: string;
+	tweetId?: string;
+	fromUserScreenName?: string;
+	kind: "mention" | "reply" | "like" | "retweet" | "follow" | "other";
+}
+
+// ── Client ──────────────────────────────────────────────────────────────────
 
 export class XClient {
 	private readonly authToken: string;
@@ -121,7 +121,8 @@ export class XClient {
 		this.clientDeviceId = crypto.randomUUID();
 	}
 
-	/** Post a new tweet. Returns `{success, tweetId, url}` or `{success:false, error}`. */
+	// ── WRITE ────────────────────────────────────────────────────────────────
+
 	async tweet(text: string): Promise<XPostResult> {
 		return this.createTweet({
 			tweet_text: text,
@@ -131,50 +132,196 @@ export class XClient {
 		});
 	}
 
-	/** Reply to an existing tweet by ID. */
 	async reply(text: string, replyToTweetId: string): Promise<XPostResult> {
 		return this.createTweet({
 			tweet_text: text,
-			reply: {
-				in_reply_to_tweet_id: replyToTweetId,
-				exclude_reply_user_ids: [],
-			},
+			reply: { in_reply_to_tweet_id: replyToTweetId, exclude_reply_user_ids: [] },
 			dark_request: false,
 			media: { media_entities: [], possibly_sensitive: false },
 			semantic_annotation_ids: [],
 		});
 	}
 
-	/** Quick auth check — returns the logged-in user's screen_name or throws. */
-	async whoami(): Promise<{ screenName: string; userId?: string }> {
-		const url = "https://api.x.com/1.1/account/settings.json";
-		const res = await this.fetchWithTimeout(url, {
+	async like(tweetId: string): Promise<{ success: boolean; error?: string }> {
+		return this.mutation(X_QUERY_IDS.FavoriteTweet, "FavoriteTweet", { tweet_id: tweetId }, (data) =>
+			(data?.data as { favorite_tweet?: string })?.favorite_tweet === "Done",
+		);
+	}
+
+	async unlike(tweetId: string): Promise<{ success: boolean; error?: string }> {
+		return this.mutation(
+			X_QUERY_IDS.UnfavoriteTweet,
+			"UnfavoriteTweet",
+			{ tweet_id: tweetId },
+			(data) => (data?.data as { unfavorite_tweet?: string })?.unfavorite_tweet === "Done",
+		);
+	}
+
+	async retweet(tweetId: string): Promise<XPostResult> {
+		const result = await this.mutationRaw(X_QUERY_IDS.CreateRetweet, "CreateRetweet", {
+			tweet_id: tweetId,
+			dark_request: false,
+		});
+		if (!result.ok) return { success: false, error: result.error };
+		const data = result.body as {
+			data?: { create_retweet?: { retweet_results?: { result?: { rest_id?: string } } } };
+		};
+		const rt = data.data?.create_retweet?.retweet_results?.result?.rest_id;
+		if (!rt) return { success: false, error: "retweet returned no id" };
+		return { success: true, tweetId: rt, url: `https://x.com/i/web/status/${rt}` };
+	}
+
+	async unretweet(tweetId: string): Promise<{ success: boolean; error?: string }> {
+		return this.mutation(
+			X_QUERY_IDS.DeleteRetweet,
+			"DeleteRetweet",
+			{ source_tweet_id: tweetId, dark_request: false },
+			() => true,
+		);
+	}
+
+	async deleteTweet(tweetId: string): Promise<{ success: boolean; error?: string }> {
+		return this.mutation(
+			X_QUERY_IDS.DeleteTweet,
+			"DeleteTweet",
+			{ tweet_id: tweetId, dark_request: false },
+			() => true,
+		);
+	}
+
+	async bookmark(tweetId: string): Promise<{ success: boolean; error?: string }> {
+		return this.mutation(X_QUERY_IDS.CreateBookmark, "CreateBookmark", { tweet_id: tweetId }, () => true);
+	}
+
+	async unbookmark(tweetId: string): Promise<{ success: boolean; error?: string }> {
+		return this.mutation(X_QUERY_IDS.DeleteBookmark, "DeleteBookmark", { tweet_id: tweetId }, () => true);
+	}
+
+	/** Follow a user. Uses legacy v1.1 endpoint (no GraphQL CreateFriendship in current bundle). */
+	async follow(userId: string): Promise<{ success: boolean; error?: string }> {
+		const params = new URLSearchParams({ user_id: userId });
+		return this.restMutation(`${REST_V11_BASE}/friendships/create.json`, params);
+	}
+
+	async unfollow(userId: string): Promise<{ success: boolean; error?: string }> {
+		const params = new URLSearchParams({ user_id: userId });
+		return this.restMutation(`${REST_V11_BASE}/friendships/destroy.json`, params);
+	}
+
+	// ── READ ─────────────────────────────────────────────────────────────────
+
+	/** Returns the logged-in account info — confirms cookies belong to expected user. */
+	async viewer(): Promise<XViewer> {
+		const data = await this.query(X_QUERY_IDS.Viewer, "Viewer", { withCommunitiesMemberships: true });
+		const viewer = (data.data as { viewer?: { user_results?: { result?: ViewerUserResult } } })?.viewer;
+		const u = viewer?.user_results?.result;
+		const userId = u?.rest_id;
+		const screenName = u?.core?.screen_name ?? u?.legacy?.screen_name;
+		if (!userId || !screenName) {
+			throw new Error("Viewer response missing user identity");
+		}
+		return { userId, screenName, name: u?.core?.name ?? u?.legacy?.name };
+	}
+
+	async getUserByScreenName(screenName: string): Promise<XUserSummary | null> {
+		const data = await this.query(X_QUERY_IDS.UserByScreenName, "UserByScreenName", {
+			screen_name: screenName,
+			withSafetyModeUserFields: true,
+		});
+		const u = (data.data as { user?: { result?: ViewerUserResult } })?.user?.result;
+		if (!u || u.__typename === "UserUnavailable") return null;
+		return summarizeUser(u);
+	}
+
+	async getUserById(userId: string): Promise<XUserSummary | null> {
+		const data = await this.query(X_QUERY_IDS.UserByRestId, "UserByRestId", {
+			userId,
+			withSafetyModeUserFields: true,
+		});
+		const u = (data.data as { user?: { result?: ViewerUserResult } })?.user?.result;
+		if (!u || u.__typename === "UserUnavailable") return null;
+		return summarizeUser(u);
+	}
+
+	async getTweet(tweetId: string): Promise<XTweetSummary | null> {
+		const data = await this.query(X_QUERY_IDS.TweetDetail, "TweetDetail", {
+			focalTweetId: tweetId,
+			with_rux_injections: false,
+			rankingMode: "Relevance",
+			includePromotedContent: false,
+			withCommunity: true,
+			withQuickPromoteEligibilityTweetFields: true,
+			withBirdwatchNotes: true,
+			withVoice: true,
+		});
+		const tweets = collectTweets(data);
+		return tweets.find((t) => t.tweetId === tweetId) ?? tweets[0] ?? null;
+	}
+
+	async getUserTweets(userId: string, limit = 20): Promise<XTweetSummary[]> {
+		const data = await this.query(X_QUERY_IDS.UserTweets, "UserTweets", {
+			userId,
+			count: limit,
+			includePromotedContent: false,
+			withQuickPromoteEligibilityTweetFields: false,
+			withVoice: true,
+			withV2Timeline: true,
+		});
+		return collectTweets(data).slice(0, limit);
+	}
+
+	async search(opts: XSearchOptions): Promise<XTweetSummary[]> {
+		const limit = opts.limit ?? 20;
+		const data = await this.query(X_QUERY_IDS.SearchTimeline, "SearchTimeline", {
+			rawQuery: opts.query,
+			count: limit,
+			querySource: "typed_query",
+			product: opts.product ?? "Latest",
+		});
+		return collectTweets(data).slice(0, limit);
+	}
+
+	async getHomeTimeline(limit = 20): Promise<XTweetSummary[]> {
+		const data = await this.query(X_QUERY_IDS.HomeLatestTimeline, "HomeLatestTimeline", {
+			count: limit,
+			includePromotedContent: false,
+			latestControlAvailable: true,
+			requestContext: "launch",
+			withCommunity: true,
+		});
+		return collectTweets(data).slice(0, limit);
+	}
+
+	/**
+	 * Recent notifications (mentions, replies, likes, follows).
+	 * Replying fast to mentions is the highest-leverage cold-start signal in
+	 * X's ranker (`AUTHOR_REPLIED` ≈ 75× weight); polling this and reacting
+	 * promptly is the single most valuable thing the agent can do for reach.
+	 */
+	async getNotifications(): Promise<XNotification[]> {
+		const res = await this.fetchWithTimeout(NOTIFICATIONS_URL, {
 			method: "GET",
 			headers: this.getBaseHeaders(),
 		});
-		if (!res.ok) {
-			throw new Error(`whoami HTTP ${res.status}`);
-		}
-		const body = (await res.json()) as { screen_name?: string };
-		if (!body.screen_name) throw new Error("whoami response missing screen_name");
-		return { screenName: body.screen_name };
+		if (!res.ok) throw new Error(`getNotifications HTTP ${res.status}`);
+		const body = (await res.json()) as RawNotificationsResponse;
+		return collectNotifications(body);
 	}
 
+	// ── Internals ────────────────────────────────────────────────────────────
+
 	private async createTweet(variables: Record<string, unknown>): Promise<XPostResult> {
-		const features = buildTweetCreateFeatures();
-		const queryId = CREATE_TWEET_QUERY_ID;
-		const url = `${TWITTER_API_BASE}/${queryId}/CreateTweet`;
-		const body = JSON.stringify({ variables, features, queryId });
-		const headers = {
-			...this.getJsonHeaders(),
-			referer: "https://x.com/compose/post",
-		};
+		const url = `${GQL_BASE}/${X_QUERY_IDS.CreateTweet}/CreateTweet`;
+		const body = JSON.stringify({
+			variables,
+			features: buildFeatures(),
+			queryId: X_QUERY_IDS.CreateTweet,
+		});
+		const headers = { ...this.getJsonHeaders(), referer: "https://x.com/compose/post" };
 
 		try {
 			const response = await this.fetchWithTimeout(url, { method: "POST", headers, body });
 			if (response.status === 404) {
-				// X probably rotated the queryId. Fall back to the v1.1 status_update
-				// endpoint which has been stable for ~15 years.
 				return this.postStatusUpdateFallback(variables);
 			}
 			if (!response.ok) {
@@ -192,11 +339,7 @@ export class XClient {
 			}
 			const tweetId = data.data?.create_tweet?.tweet_results?.result?.rest_id;
 			if (tweetId) {
-				return {
-					success: true,
-					tweetId,
-					url: `https://x.com/i/web/status/${tweetId}`,
-				};
+				return { success: true, tweetId, url: `https://x.com/i/web/status/${tweetId}` };
 			}
 			return { success: false, error: "Tweet created but no ID returned" };
 		} catch (err) {
@@ -205,10 +348,9 @@ export class XClient {
 	}
 
 	/**
-	 * v1.1 fallback. X returns error code 226 when the GraphQL surface refuses
-	 * a tweet for spam-prevention reasons but the same content is fine via the
-	 * legacy endpoint. Also useful when the queryId rotates and we can't reach
-	 * GraphQL at all.
+	 * v1.1 fallback. Used when GraphQL queryId rotates (404) or when X returns
+	 * error 226 ("appears to be automated") which the v1.1 endpoint sometimes
+	 * still accepts.
 	 */
 	private async postStatusUpdateFallback(
 		variables: Record<string, unknown>,
@@ -258,9 +400,100 @@ export class XClient {
 		errors: Array<{ code?: number; message?: string }>,
 		variables: Record<string, unknown>,
 	): Promise<XPostResult | null> {
-		// 226 = "Tweet appears to be automated"; sometimes the v1.1 endpoint accepts.
 		if (!errors.some((e) => e.code === 226)) return null;
 		return this.postStatusUpdateFallback(variables);
+	}
+
+	private async query(
+		queryId: string,
+		operationName: string,
+		variables: Record<string, unknown>,
+	): Promise<{ data?: unknown; errors?: Array<{ message?: string }> }> {
+		// X's GraphQL surface accepts POST for both queries and mutations, and
+		// some operations (notably SearchTimeline) only respond to POST — they
+		// 404 the equivalent GET. So we POST everything for consistency.
+		const url = `${GQL_BASE}/${queryId}/${operationName}`;
+		const body = JSON.stringify({ variables, features: buildFeatures(), queryId });
+		const res = await this.fetchWithTimeout(url, {
+			method: "POST",
+			headers: this.getJsonHeaders(),
+			body,
+		});
+		if (!res.ok) {
+			const text = await res.text();
+			throw new Error(`${operationName} HTTP ${res.status}: ${text.slice(0, 200)}`);
+		}
+		const json = (await res.json()) as { data?: unknown; errors?: Array<{ message?: string }> };
+		if (json.errors && json.errors.length > 0) {
+			throw new Error(`${operationName}: ${json.errors.map((e) => e.message ?? "?").join(", ")}`);
+		}
+		return json;
+	}
+
+	private async mutation(
+		queryId: string,
+		operationName: string,
+		variables: Record<string, unknown>,
+		predicate: (body: { data?: unknown }) => boolean,
+	): Promise<{ success: boolean; error?: string }> {
+		const result = await this.mutationRaw(queryId, operationName, variables);
+		if (!result.ok) return { success: false, error: result.error };
+		const ok = predicate(result.body);
+		return ok ? { success: true } : { success: false, error: `${operationName} acknowledged but predicate failed` };
+	}
+
+	private async mutationRaw(
+		queryId: string,
+		operationName: string,
+		variables: Record<string, unknown>,
+	): Promise<{ ok: true; body: { data?: unknown } } | { ok: false; error: string }> {
+		const url = `${GQL_BASE}/${queryId}/${operationName}`;
+		const body = JSON.stringify({ variables, queryId });
+		try {
+			const res = await this.fetchWithTimeout(url, {
+				method: "POST",
+				headers: { ...this.getJsonHeaders(), referer: "https://x.com/" },
+				body,
+			});
+			if (!res.ok) {
+				const text = await res.text();
+				return { ok: false, error: `${operationName} HTTP ${res.status}: ${text.slice(0, 200)}` };
+			}
+			const data = (await res.json()) as {
+				data?: unknown;
+				errors?: Array<{ code?: number; message?: string }>;
+			};
+			if (data.errors && data.errors.length > 0) {
+				return { ok: false, error: this.formatErrors(data.errors) };
+			}
+			return { ok: true, body: data };
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err) };
+		}
+	}
+
+	private async restMutation(
+		url: string,
+		params: URLSearchParams,
+	): Promise<{ success: boolean; error?: string }> {
+		try {
+			const res = await this.fetchWithTimeout(url, {
+				method: "POST",
+				headers: {
+					...this.getBaseHeaders(),
+					"content-type": "application/x-www-form-urlencoded",
+					referer: "https://x.com/",
+				},
+				body: params.toString(),
+			});
+			if (!res.ok) {
+				const text = await res.text();
+				return { success: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
+			}
+			return { success: true };
+		} catch (err) {
+			return { success: false, error: err instanceof Error ? err.message : String(err) };
+		}
 	}
 
 	private formatErrors(errors: Array<{ code?: number; message?: string }>): string {
@@ -270,6 +503,11 @@ export class XClient {
 	}
 
 	private getBaseHeaders(): Record<string, string> {
+		// `x-client-transaction-id` intentionally omitted: X validates this header
+		// against a signed challenge baked into the live web bundle, and a
+		// fake/random value triggers a silent 200 with empty `create_tweet` data
+		// (the post never lands). Omitting the header makes X treat us like a
+		// non-web client and process the request normally.
 		return {
 			accept: "*/*",
 			"accept-language": "en-US,en;q=0.9",
@@ -280,7 +518,6 @@ export class XClient {
 			"x-twitter-client-language": "en",
 			"x-client-uuid": this.clientUuid,
 			"x-twitter-client-deviceid": this.clientDeviceId,
-			"x-client-transaction-id": this.randomTransactionId(),
 			cookie: this.cookieHeader,
 			"user-agent": this.userAgent,
 			origin: "https://x.com",
@@ -292,14 +529,6 @@ export class XClient {
 		return { ...this.getBaseHeaders(), "content-type": "application/json" };
 	}
 
-	private randomTransactionId(): string {
-		const buf = new Uint8Array(16);
-		crypto.getRandomValues(buf);
-		return Array.from(buf)
-			.map((b) => b.toString(16).padStart(2, "0"))
-			.join("");
-	}
-
 	private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
 		if (!this.timeoutMs || this.timeoutMs <= 0) return fetch(url, init);
 		const controller = new AbortController();
@@ -309,5 +538,127 @@ export class XClient {
 		} finally {
 			clearTimeout(timer);
 		}
+	}
+}
+
+// ── Helpers (response shape extraction) ─────────────────────────────────────
+
+interface ViewerUserResult {
+	__typename?: string;
+	rest_id?: string;
+	legacy?: {
+		screen_name?: string;
+		name?: string;
+		description?: string;
+		followers_count?: number;
+		friends_count?: number;
+		verified?: boolean;
+	};
+	core?: { screen_name?: string; name?: string };
+}
+
+function summarizeUser(u: ViewerUserResult): XUserSummary {
+	const screenName = u.legacy?.screen_name ?? u.core?.screen_name ?? "";
+	const name = u.legacy?.name ?? u.core?.name;
+	return {
+		userId: u.rest_id ?? "",
+		screenName,
+		...(name !== undefined ? { name } : {}),
+		...(u.legacy?.description !== undefined ? { description: u.legacy.description } : {}),
+		...(u.legacy?.followers_count !== undefined ? { followersCount: u.legacy.followers_count } : {}),
+		...(u.legacy?.friends_count !== undefined ? { followingCount: u.legacy.friends_count } : {}),
+		...(u.legacy?.verified !== undefined ? { verified: u.legacy.verified } : {}),
+	};
+}
+
+function collectTweets(data: { data?: unknown }): XTweetSummary[] {
+	const out: XTweetSummary[] = [];
+	walk(data, (node) => {
+		if (typeof node !== "object" || node === null) return;
+		const obj = node as Record<string, unknown>;
+		const legacy = obj.legacy as Record<string, unknown> | undefined;
+		if (!legacy || typeof legacy.full_text !== "string") return;
+		const tweetId = (obj.rest_id as string) || (legacy.id_str as string);
+		if (!tweetId) return;
+		const userResults =
+			(obj.core as { user_results?: { result?: ViewerUserResult } } | undefined)?.user_results
+				?.result ?? undefined;
+		out.push({
+			tweetId,
+			text: legacy.full_text as string,
+			authorId: (legacy.user_id_str as string) || userResults?.rest_id,
+			authorScreenName: userResults?.legacy?.screen_name ?? userResults?.core?.screen_name,
+			createdAt: legacy.created_at as string | undefined,
+			favoriteCount: legacy.favorite_count as number | undefined,
+			retweetCount: legacy.retweet_count as number | undefined,
+			replyCount: legacy.reply_count as number | undefined,
+			url: `https://x.com/i/web/status/${tweetId}`,
+		});
+	});
+	const seen = new Set<string>();
+	return out.filter((t) => (seen.has(t.tweetId) ? false : seen.add(t.tweetId)));
+}
+
+interface RawNotificationsResponse {
+	globalObjects?: {
+		notifications?: Record<string, RawNotification>;
+		tweets?: Record<string, { id_str?: string }>;
+		users?: Record<string, { id_str?: string; screen_name?: string }>;
+	};
+}
+
+interface RawNotification {
+	id?: string;
+	timestampMs?: string;
+	message?: { text?: string };
+	template?: {
+		aggregateUserActionsV1?: {
+			targetObjects?: Array<{ tweet?: { id?: string } }>;
+			fromUsers?: Array<{ user?: { id?: string } }>;
+		};
+	};
+	icon?: { id?: string };
+}
+
+function collectNotifications(body: RawNotificationsResponse): XNotification[] {
+	const notifs = body.globalObjects?.notifications ?? {};
+	const users = body.globalObjects?.users ?? {};
+	const out: XNotification[] = [];
+	for (const [id, n] of Object.entries(notifs)) {
+		const targetTweet =
+			n.template?.aggregateUserActionsV1?.targetObjects?.[0]?.tweet?.id ?? undefined;
+		const fromUserId = n.template?.aggregateUserActionsV1?.fromUsers?.[0]?.user?.id ?? undefined;
+		const fromUser = fromUserId ? users[fromUserId] : undefined;
+		out.push({
+			id,
+			timestamp: n.timestampMs ?? "",
+			message: n.message?.text,
+			...(targetTweet ? { tweetId: targetTweet } : {}),
+			...(fromUser?.screen_name ? { fromUserScreenName: fromUser.screen_name } : {}),
+			kind: classifyNotification(n.icon?.id ?? n.message?.text ?? ""),
+		});
+	}
+	return out.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+}
+
+function classifyNotification(hint: string): XNotification["kind"] {
+	const h = hint.toLowerCase();
+	if (h.includes("heart")) return "like";
+	if (h.includes("retweet")) return "retweet";
+	if (h.includes("person") || h.includes("follow")) return "follow";
+	if (h.includes("reply") || h.includes("replied")) return "reply";
+	if (h.includes("mention") || h.includes("@")) return "mention";
+	return "other";
+}
+
+function walk(node: unknown, visit: (n: unknown) => void): void {
+	if (node === null || node === undefined) return;
+	visit(node);
+	if (Array.isArray(node)) {
+		for (const item of node) walk(item, visit);
+		return;
+	}
+	if (typeof node === "object") {
+		for (const v of Object.values(node)) walk(v, visit);
 	}
 }
