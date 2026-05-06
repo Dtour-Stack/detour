@@ -1308,6 +1308,7 @@ async function completeXAutonomyTrajectoryStep(
 }
 
 async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise<void> {
+	if (!readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return;
 	await withStandaloneTrajectory(
 		runtime,
 		{
@@ -1322,15 +1323,17 @@ async function executeXAutonomyTask(runtime: IAgentRuntime, task: Task): Promise
 }
 
 async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Promise<void> {
-	if (!readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return;
+	const settings = readXAutonomySettings(runtime);
+	const state = initialXAutonomyState(task);
 	const { client, error } = buildClient(runtime);
 	if (!client) {
 		logger.warn({ src: "x-autonomy", error }, "X autonomy skipped; auth unavailable");
+		state.handled.push({ action: "auth_unavailable", success: false, error });
+		await completeXAutonomyTrajectoryStep(runtime, settings, state);
+		await updateXAutonomyTask(runtime, task, state);
 		return;
 	}
 
-	const settings = readXAutonomySettings(runtime);
-	const state = initialXAutonomyState(task);
 	try {
 		const viewer = await client.viewer();
 		state.viewerScreenName = viewer.screenName;
@@ -1342,6 +1345,8 @@ async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Pr
 		await completeXAutonomyTrajectoryStep(runtime, settings, state);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
+		state.handled.push({ action: "tick_failed", success: false, error: message });
+		await completeXAutonomyTrajectoryStep(runtime, settings, state);
 		logger.warn({ src: "x-autonomy", error: message }, "X autonomy tick failed");
 		await logXAutonomy(runtime, task, { ok: false, error: message, viewerScreenName: state.viewerScreenName });
 		throw err;
