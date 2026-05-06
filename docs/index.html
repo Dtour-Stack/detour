@@ -534,6 +534,120 @@ section .sub {
   .community-card { padding: 32px 24px; }
 }
 
+/* ── Tip-jar / agent CA card ───────────────────────────────────────── */
+.tip-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 32px;
+  background: var(--bg-card);
+  position: relative;
+  overflow: hidden;
+}
+.tip-card::before {
+  /* whisper of accent color so it has its own identity but stays quiet */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(196, 181, 253, 0.04) 0%, transparent 60%);
+  pointer-events: none;
+}
+.tip-eyebrow {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: #c4b5fd;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.tip-card h3 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-bottom: 14px;
+}
+.tip-card .tip-pitch {
+  font-size: 14px;
+  color: var(--fg-muted);
+  line-height: 1.6;
+  margin-bottom: 20px;
+  max-width: 640px;
+}
+.tip-card .tip-pitch strong { color: var(--fg); font-weight: 600; }
+.tip-card .tip-pitch a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--fg-dim); }
+.tip-card .tip-pitch a:hover { text-decoration-color: var(--accent); }
+
+.ca-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.ca-row .ca-label {
+  color: var(--fg-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  flex-shrink: 0;
+}
+.ca-row code {
+  color: var(--fg);
+  font-size: 12px;
+  word-break: break-all;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ca-row .ca-copy {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ca-row .ca-copy:hover { color: var(--fg); border-color: var(--fg-muted); }
+.ca-row .ca-copy.copied { color: var(--accent-2); border-color: var(--accent-2); }
+
+.tip-explorer-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+.tip-explorer-row a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tip-explorer-row a:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.tip-disclaimer {
+  margin-top: 20px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+  font-style: italic;
+}
+
 /* ── Activity feed ─────────────────────────────────────────────────── */
 .activity-state {
   font-size: 13px;
@@ -702,6 +816,7 @@ footer a:hover { color: var(--fg); }
     <a href="#features">Inside</a>
     <a href="#activity">Activity</a>
     <a href="#community">Community</a>
+    <a href="#support">Support</a>
     <a href="https://github.com/Dexploarer/detour" target="_blank" rel="noopener">GitHub</a>
   </div>
 </nav>
@@ -821,6 +936,56 @@ footer a:hover { color: var(--fg); }
       </a>
       <span class="community-aside">discord.gg/BfTrruWcZ · x.com/detour_squirrel</span>
     </div>
+  </div>
+</section>
+
+<section id="support">
+  <div class="tip-card">
+    <div class="tip-eyebrow">Optional · tip jar</div>
+    <h3>Fueling a playground built by an ADHD dev.</h3>
+    <p class="tip-pitch">
+      Detour exists because I can't stop poking at agents in public.
+      If watching that has been useful — or if you just want to help
+      keep an OSS eliza-stack experiment alive on someone's tray
+      icon — there's a Solana token that funds the time I get to
+      spend on it. Buying or holding it is entirely optional and
+      changes nothing about Detour itself.
+    </p>
+    <p class="tip-pitch">
+      <strong>This is not a competitor to anything in the
+      <a href="https://github.com/elizaOS/eliza" target="_blank" rel="noopener">elizaOS</a>
+      or <a href="https://github.com/milady-ai/milady" target="_blank" rel="noopener">Milady</a>
+      ecosystems.</strong> Those are the canon. This is just a small
+      pool that lets one developer keep shipping breakage in public on
+      top of the framework — which, when it works, feeds back into the
+      OSS that everyone else builds on. The goal is the same goal
+      eliza has always had: the best possible open-source agent
+      app, framework, and community on web3 and the rest of the
+      internet. This token's job is simply to help keep one more
+      person paying attention to that.
+    </p>
+    <div class="ca-row">
+      <span class="ca-label">$cozy on solana</span>
+      <code id="ca-text">DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy</code>
+      <button class="ca-copy" id="ca-copy-btn" type="button">copy</button>
+    </div>
+    <div class="tip-explorer-row">
+      <a href="https://dexscreener.com/solana/DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy" target="_blank" rel="noopener">
+        chart on dexscreener
+      </a>
+      <a href="https://solscan.io/token/DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy" target="_blank" rel="noopener">
+        token on solscan
+      </a>
+      <a href="https://jup.ag/swap/SOL-DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy" target="_blank" rel="noopener">
+        swap on jupiter
+      </a>
+    </div>
+    <p class="tip-disclaimer">
+      Not financial advice. No promises, no roadmap, no airdrop, no
+      utility claims. It's literally a tip jar attached to a developer
+      who likes building OSS in public. Always verify the contract
+      address before sending anything anywhere.
+    </p>
   </div>
 </section>
 
@@ -965,7 +1130,29 @@ footer a:hover { color: var(--fg); }
 </footer>
 
 <script>
-// ── Copy button ────────────────────────────────────────────────────────
+// ── Copy CA address ────────────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById("ca-copy-btn");
+  const txt = document.getElementById("ca-text");
+  if (!btn || !txt) return;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(txt.textContent.trim());
+      const old = btn.textContent;
+      btn.textContent = "copied";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = old; btn.classList.remove("copied"); }, 1500);
+    } catch (e) {
+      const range = document.createRange();
+      range.selectNodeContents(txt);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+})();
+
+// ── Copy install command ───────────────────────────────────────────────
 (function() {
   const btn = document.getElementById("copy-btn");
   const txt = document.getElementById("install-cmd-text");
