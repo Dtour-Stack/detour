@@ -264,6 +264,22 @@ export class ContinuousImprovementService {
 
 	private async execute(runtime: IAgentRuntime, task: Task): Promise<void> {
 		if (!booleanSetting(runtime, "CONTINUOUS_IMPROVEMENT_ENABLED", true)) return;
+		const input = await this.improvementInput(runtime, task);
+		const write = await this.writeImprovementMemories(input);
+		await this.updateImprovementTask(runtime, task, input, write);
+		logger.info(
+			{ src: "continuous-improvement", result: write.result, category: write.category, createdCount: write.createdIds.length },
+			"continuous improvement tick complete",
+		);
+	}
+
+	private async improvementInput(runtime: IAgentRuntime, task: Task): Promise<{
+		metadata: Record<string, unknown>;
+		logs: ReturnType<ActivityLogService["list"]>;
+		recentMemories: Awaited<ReturnType<PensieveMemoryService["list"]>>;
+		decision: ContinuousImprovementDecision;
+		modelError?: string;
+	}> {
 		const metadata = isRecord(task.metadata) ? task.metadata : {};
 		const lastRunAt = readTimestamp(metadata.continuousImprovementLastRunAt);
 		const since = lastRunAt > 0 ? lastRunAt : Date.now() - 2 * 60 * 60_000;
@@ -275,95 +291,124 @@ export class ContinuousImprovementService {
 			logger.warn({ src: "continuous-improvement", error: modelError }, "model reflection failed; using deterministic fallback");
 			return fallbackImprovement(logs, modelError);
 		});
+		return { metadata, logs, recentMemories, decision, ...(modelError ? { modelError } : {}) };
+	}
+
+	private async writeImprovementMemories(input: {
+		metadata: Record<string, unknown>;
+		logs: ReturnType<ActivityLogService["list"]>;
+		recentMemories: Awaited<ReturnType<PensieveMemoryService["list"]>>;
+		decision: ContinuousImprovementDecision;
+	}): Promise<{
+		category: string;
+		createdIds: string[];
+		hashes: string[];
+		proposal: string;
+		result: string;
+	}> {
+		const { decision } = input;
 		const category = compact(decision.category, 80) || "skip";
 		const memory = compact(decision.memory, 900);
 		const profile = compact(decision.user_profile, 500);
 		const skillCandidate = compact(decision.skill_candidate, 700);
-		const hashes = readStringArray(metadata.continuousImprovementHashes);
+		const hashes = readStringArray(input.metadata.continuousImprovementHashes);
 		const createdIds: string[] = [];
 		let result = "skip";
 		let proposal = compact(decision.reason, 300);
 
 		if (readModelBoolean(decision.should_write) && memory.length > 0) {
-			const hash = hashText(`${category}\n${memory}`);
-			if (!hashes.includes(hash)) {
-				const created = await this.memories.create({
-					text: memory,
-					path: "/improvement/reflections",
-					type: "description",
-					tags: ["continuous-improvement", category],
-					extraMetadata: {
-						source: "continuous-improvement",
-						category,
-						reason: decision.reason,
-						logCount: logs.length,
-						memoryCount: recentMemories.length,
-					},
-				});
-				if (created) {
-					createdIds.push(created.id);
-					hashes.push(hash);
-					result = "memory_written";
-					proposal = memory;
-				} else {
-					result = "memory_write_failed";
-				}
-			} else {
+			const written = await this.writePrimaryReflection(input, category, memory, hashes, createdIds);
+			if (written === "written") {
+				result = "memory_written";
+				proposal = memory;
+			} else if (written === "failed") {
+				result = "memory_write_failed";
+			} else if (written === "duplicate") {
 				result = "duplicate_skip";
 			}
 		}
 
-		if (profile.length > 0) {
-			const hash = hashText(`profile\n${profile}`);
-			if (!hashes.includes(hash)) {
-				const created = await this.memories.create({
-					text: profile,
-					path: "/profile/user",
-					type: "description",
-					tags: ["continuous-improvement", "user-model"],
-					extraMetadata: { source: "continuous-improvement", category: "user-profile" },
-				});
-				if (created) {
-					createdIds.push(created.id);
-					hashes.push(hash);
-				}
-			}
-		}
+		await this.writeSecondaryReflection(profile, "profile", "/profile/user", "user-model", "user-profile", hashes, createdIds);
+		await this.writeSecondaryReflection(skillCandidate, "skill", "/improvement/skill-candidates", "skill-candidate", "skill-candidate", hashes, createdIds);
 
-		if (skillCandidate.length > 0) {
-			const hash = hashText(`skill\n${skillCandidate}`);
-			if (!hashes.includes(hash)) {
-				const created = await this.memories.create({
-					text: skillCandidate,
-					path: "/improvement/skill-candidates",
-					type: "description",
-					tags: ["continuous-improvement", "skill-candidate"],
-					extraMetadata: { source: "continuous-improvement", category: "skill-candidate" },
-				});
-				if (created) {
-					createdIds.push(created.id);
-					hashes.push(hash);
-				}
-			}
-		}
+		return { category, createdIds, hashes, proposal, result };
+	}
 
+	private async writePrimaryReflection(
+		input: {
+			logs: ReturnType<ActivityLogService["list"]>;
+			recentMemories: Awaited<ReturnType<PensieveMemoryService["list"]>>;
+			decision: ContinuousImprovementDecision;
+		},
+		category: string,
+		memory: string,
+		hashes: string[],
+		createdIds: string[],
+	): Promise<"written" | "failed" | "duplicate"> {
+		const hash = hashText(`${category}\n${memory}`);
+		if (hashes.includes(hash)) return "duplicate";
+		const created = await this.memories.create({
+			text: memory,
+			path: "/improvement/reflections",
+			type: "description",
+			tags: ["continuous-improvement", category],
+			extraMetadata: {
+				source: "continuous-improvement",
+				category,
+				reason: input.decision.reason,
+				logCount: input.logs.length,
+				memoryCount: input.recentMemories.length,
+			},
+		});
+		if (!created) return "failed";
+		createdIds.push(created.id);
+		hashes.push(hash);
+		return "written";
+	}
+
+	private async writeSecondaryReflection(
+		text: string,
+		hashKind: string,
+		path: string,
+		tag: string,
+		category: string,
+		hashes: string[],
+		createdIds: string[],
+	): Promise<void> {
+		if (text.length === 0) return;
+		const hash = hashText(`${hashKind}\n${text}`);
+		if (hashes.includes(hash)) return;
+		const created = await this.memories.create({
+			text,
+			path,
+			type: "description",
+			tags: ["continuous-improvement", tag],
+			extraMetadata: { source: "continuous-improvement", category },
+		});
+		if (!created) return;
+		createdIds.push(created.id);
+		hashes.push(hash);
+	}
+
+	private async updateImprovementTask(
+		runtime: IAgentRuntime,
+		task: Task,
+		input: { metadata: Record<string, unknown>; modelError?: string },
+		write: { category: string; createdIds: string[]; hashes: string[]; proposal: string; result: string },
+	): Promise<void> {
 		if (task.id) {
 			await (runtime as RuntimeTaskSurface).updateTask?.(task.id, {
 				metadata: {
-					...metadata,
+					...input.metadata,
 					continuousImprovementLastRunAt: Date.now(),
-					continuousImprovementLastResult: result,
-					continuousImprovementLastCategory: category,
-					continuousImprovementLastProposal: proposal,
-					...(modelError ? { continuousImprovementLastError: modelError } : {}),
-					continuousImprovementLastMemoryIds: createdIds,
-					continuousImprovementHashes: hashes.slice(-HASH_LIMIT),
+					continuousImprovementLastResult: write.result,
+					continuousImprovementLastCategory: write.category,
+					continuousImprovementLastProposal: write.proposal,
+					...(input.modelError ? { continuousImprovementLastError: input.modelError } : {}),
+					continuousImprovementLastMemoryIds: write.createdIds,
+					continuousImprovementHashes: write.hashes.slice(-HASH_LIMIT),
 				},
 			});
 		}
-		logger.info(
-			{ src: "continuous-improvement", result, category, createdCount: createdIds.length },
-			"continuous improvement tick complete",
-		);
 	}
 }

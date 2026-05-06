@@ -31,6 +31,26 @@ function looksLikeTelegramBotToken(value: string): boolean {
 	return /^\d{6,12}$/.test(id ?? "") && (secret?.length ?? 0) >= 30;
 }
 
+function invalidChannelCredential(id: ChannelId, key: string, value: string): ChannelLiveSnapshot | null {
+	if (id === "discord" && key === "DISCORD_API_TOKEN" && !looksLikeDiscordBotToken(value)) {
+		return {
+			liveStatus: "invalid-token",
+			liveDetail: `${key} doesn't look like a Discord bot token (expected ~70 chars with two dots; got ${value.length} chars, ${value.split(".").length - 1} dots).`,
+		};
+	}
+	if (id === "telegram" && key === "TELEGRAM_BOT_TOKEN" && !looksLikeTelegramBotToken(value)) {
+		return {
+			liveStatus: "invalid-token",
+			liveDetail: `${key} doesn't look like a Telegram bot token (expected <id>:<35-char secret>).`,
+		};
+	}
+	return null;
+}
+
+function settingField<K extends "autoReply" | "respondOnlyToMentions">(key: K, value: boolean | undefined): Pick<ChannelStatus, K> | {} {
+	return value === undefined ? {} : { [key]: value } as Pick<ChannelStatus, K>;
+}
+
 /**
  * Probe a channel's actual gateway/connection state via its registered
  * service. Different plugins expose connection state differently:
@@ -277,6 +297,8 @@ export interface ChannelsSnapshot {
 	channels: ChannelStatus[];
 }
 
+type ChannelLiveSnapshot = { liveStatus: ChannelLiveStatus; liveDetail?: string };
+
 export class ChannelsService {
 	constructor(private readonly vault: VaultService) {}
 
@@ -306,74 +328,78 @@ export class ChannelsService {
 	}
 
 	async snapshot(loadedPlugins: string[] = [], runtime: IAgentRuntime | null = null): Promise<ChannelsSnapshot> {
-		const out: ChannelStatus[] = [];
 		const loadedSet = new Set(loadedPlugins.map((s) => s.toLowerCase()));
-		for (const def of CHANNEL_DEFINITIONS) {
-			const platformAvailable = def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
-			const { ok, missing } = await this.hasAllKeys(def.requiredVaultKeys);
-			const pluginLoaded =
-				loadedSet.has(def.id) ||
-				loadedSet.has(def.pluginPackage.toLowerCase()) ||
-				loadedSet.has(def.pluginPackage.replace(/^@elizaos\//, "").toLowerCase());
+		const channels = await Promise.all(CHANNEL_DEFINITIONS.map((def) => this.channelStatus(def, loadedSet, runtime)));
+		return { channels };
+	}
 
-			// Token format pre-check — surfaces obviously wrong credentials
-			// before the plugin silently fails to log in.
-			let liveStatus: ChannelLiveStatus = "off";
-			let liveDetail: string | undefined;
-			if (ok && def.requiredVaultKeys.length > 0) {
-				const v = await this.vault.vault();
-				for (const key of def.requiredVaultKeys) {
-					const value = await v.get(key).catch(() => "");
-					if (def.id === "discord" && key === "DISCORD_API_TOKEN" && !looksLikeDiscordBotToken(value)) {
-						liveStatus = "invalid-token";
-						liveDetail = `${key} doesn't look like a Discord bot token (expected ~70 chars with two dots; got ${value.length} chars, ${value.split(".").length - 1} dots).`;
-					}
-					if (def.id === "telegram" && key === "TELEGRAM_BOT_TOKEN" && !looksLikeTelegramBotToken(value)) {
-						liveStatus = "invalid-token";
-						liveDetail = `${key} doesn't look like a Telegram bot token (expected <id>:<35-char secret>).`;
-					}
-				}
-			}
+	private async channelStatus(def: ChannelDefinition, loadedSet: Set<string>, runtime: IAgentRuntime | null): Promise<ChannelStatus> {
+		const platformAvailable = this.platformAvailable(def);
+		const { ok, missing } = await this.hasAllKeys(def.requiredVaultKeys);
+		const pluginLoaded = this.pluginLoaded(def, loadedSet);
+		const live = await this.channelLive(def, ok, pluginLoaded, runtime);
+		return {
+			id: def.id,
+			label: def.label,
+			description: def.description,
+			platform: def.platform,
+			requiredVaultKeys: def.requiredVaultKeys,
+			optionalVaultKeys: def.optionalVaultKeys,
+			pluginPackage: def.pluginPackage,
+			configured: ok && platformAvailable,
+			missingKeys: missing,
+			platformAvailable,
+			pluginLoaded,
+			liveStatus: live.liveStatus,
+			...(live.liveDetail ? { liveDetail: live.liveDetail } : {}),
+			...this.channelRuntimeSettings(def, runtime),
+		};
+	}
 
-			// Real connection probe via the runtime service.
-			if (liveStatus !== "invalid-token" && pluginLoaded && runtime) {
-				const probed = probeChannelLive(runtime, def.id);
-				liveStatus = probed.status;
-				if (probed.detail) liveDetail = probed.detail;
-			} else if (liveStatus !== "invalid-token" && pluginLoaded) {
-				liveStatus = "loaded";
-			}
+	private platformAvailable(def: ChannelDefinition): boolean {
+		return def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
+	}
 
-			out.push({
-				id: def.id,
-				label: def.label,
-				description: def.description,
-				platform: def.platform,
-				requiredVaultKeys: def.requiredVaultKeys,
-				optionalVaultKeys: def.optionalVaultKeys,
-				pluginPackage: def.pluginPackage,
-				configured: ok && platformAvailable,
-				missingKeys: missing,
-				platformAvailable,
-				pluginLoaded,
-				liveStatus,
-				...(liveDetail ? { liveDetail } : {}),
-				...(def.id === "discord"
-					? {
-							...(this.boolSetting(runtime, "DISCORD_AUTO_REPLY") !== undefined
-								? { autoReply: this.boolSetting(runtime, "DISCORD_AUTO_REPLY") }
-								: {}),
-							...(this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS") !== undefined
-								? { respondOnlyToMentions: this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS") }
-								: {}),
-						}
-					: {}),
-				...(def.id === "telegram" && this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY") !== undefined
-					? { autoReply: this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY") }
-					: {}),
-			});
+	private pluginLoaded(def: ChannelDefinition, loadedSet: Set<string>): boolean {
+		return loadedSet.has(def.id)
+			|| loadedSet.has(def.pluginPackage.toLowerCase())
+			|| loadedSet.has(def.pluginPackage.replace(/^@elizaos\//, "").toLowerCase());
+	}
+
+	private async channelLive(
+		def: ChannelDefinition,
+		keysOk: boolean,
+		pluginLoaded: boolean,
+		runtime: IAgentRuntime | null,
+	): Promise<ChannelLiveSnapshot> {
+		const invalid = keysOk ? await this.invalidCredentialStatus(def) : null;
+		if (invalid) return invalid;
+		if (pluginLoaded && runtime) {
+			const probed = probeChannelLive(runtime, def.id);
+			return { liveStatus: probed.status, ...(probed.detail ? { liveDetail: probed.detail } : {}) };
 		}
-		return { channels: out };
+		return { liveStatus: pluginLoaded ? "loaded" : "off" };
+	}
+
+	private async invalidCredentialStatus(def: ChannelDefinition): Promise<ChannelLiveSnapshot | null> {
+		const v = await this.vault.vault();
+		for (const key of def.requiredVaultKeys) {
+			const value = await v.get(key).catch(() => "");
+			const invalid = invalidChannelCredential(def.id, key, value);
+			if (invalid) return invalid;
+		}
+		return null;
+	}
+
+	private channelRuntimeSettings(def: ChannelDefinition, runtime: IAgentRuntime | null): Partial<ChannelStatus> {
+		if (def.id === "discord") {
+			return {
+				...settingField("autoReply", this.boolSetting(runtime, "DISCORD_AUTO_REPLY")),
+				...settingField("respondOnlyToMentions", this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS")),
+			};
+		}
+		if (def.id === "telegram") return settingField("autoReply", this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY"));
+		return {};
 	}
 
 	/** Read every required + optional vault credential for a channel.

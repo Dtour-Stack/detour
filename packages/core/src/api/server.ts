@@ -99,6 +99,90 @@ function parseBackendIds(values: string[]): BackendId[] | null {
 	return enabled;
 }
 
+function recordValue(body: unknown): Record<string, unknown> | null {
+	return body && typeof body === "object" && !Array.isArray(body)
+		? body as Record<string, unknown>
+		: null;
+}
+
+function optionalString(bag: Record<string, unknown>, key: string): string | undefined {
+	return typeof bag[key] === "string" ? bag[key] : undefined;
+}
+
+function optionalNumber(bag: Record<string, unknown>, key: string): number | undefined {
+	return typeof bag[key] === "number" ? bag[key] : undefined;
+}
+
+function optionalBoolean(bag: Record<string, unknown>, key: string): boolean | undefined {
+	return typeof bag[key] === "boolean" ? bag[key] : undefined;
+}
+
+function parseBrowserOpenCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
+	const url = optionalString(bag, "url")?.trim() ?? "";
+	if (!url || url.length > 2048) return null;
+	return {
+		kind: "open",
+		url,
+		...(optionalBoolean(bag, "newTab") !== undefined ? { newTab: optionalBoolean(bag, "newTab") } : {}),
+		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
+		source: "api",
+	};
+}
+
+function parseBrowserInspectCommand(bag: Record<string, unknown>): BrowserCommandInput {
+	return {
+		kind: "inspect",
+		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
+		...(optionalNumber(bag, "timeoutMs") !== undefined ? { timeoutMs: optionalNumber(bag, "timeoutMs") } : {}),
+		source: "api",
+	};
+}
+
+function parseBrowserScriptCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
+	const script = optionalString(bag, "script")?.trim() ?? "";
+	if (!script || script.length > 100_000) return null;
+	return {
+		kind: "script",
+		script,
+		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
+		...(optionalNumber(bag, "timeoutMs") !== undefined ? { timeoutMs: optionalNumber(bag, "timeoutMs") } : {}),
+		source: "api",
+	};
+}
+
+function parseBrowserLoginCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
+	const source = bag.source;
+	const identifier = optionalString(bag, "identifier")?.trim() ?? "";
+	if ((source !== "in-house" && source !== "1password" && source !== "bitwarden") || !identifier) return null;
+	const targetUrl = optionalString(bag, "targetUrl")?.trim();
+	return {
+		kind: "fill-login",
+		source,
+		identifier,
+		...(targetUrl ? { targetUrl } : {}),
+		...(optionalBoolean(bag, "newTab") !== undefined ? { newTab: optionalBoolean(bag, "newTab") } : {}),
+		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
+		...(optionalNumber(bag, "timeoutMs") !== undefined ? { timeoutMs: optionalNumber(bag, "timeoutMs") } : {}),
+	};
+}
+
+function parseBrowserCommandInput(body: unknown): BrowserCommandInput | null {
+	const bag = recordValue(body);
+	if (!bag) return null;
+	switch (bag.kind) {
+		case "open":
+			return parseBrowserOpenCommand(bag);
+		case "inspect":
+			return parseBrowserInspectCommand(bag);
+		case "script":
+			return parseBrowserScriptCommand(bag);
+		case "fill-login":
+			return parseBrowserLoginCommand(bag);
+		default:
+			return null;
+	}
+}
+
 type BrowserControlGlobal = {
 	enqueue(command: BrowserCommandInput): BrowserCommand;
 	enqueueAndWait(command: BrowserCommandInput, timeoutMs?: number): Promise<BrowserCommandResult>;
@@ -207,58 +291,7 @@ export class ApiServer {
 	}
 
 	private parseBrowserCommand(body: unknown): BrowserCommandInput | null {
-		if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-		const bag = body as Record<string, unknown>;
-			if (bag.kind === "open") {
-			const url = typeof bag.url === "string" ? bag.url.trim() : "";
-			if (!url || url.length > 2048) return null;
-			return {
-				kind: "open",
-				url,
-				...(typeof bag.newTab === "boolean" ? { newTab: bag.newTab } : {}),
-				...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
-				source: "api",
-			};
-			}
-			if (bag.kind === "inspect") {
-				return {
-					kind: "inspect",
-					...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
-					...(typeof bag.timeoutMs === "number" ? { timeoutMs: bag.timeoutMs } : {}),
-					source: "api",
-				};
-			}
-			if (bag.kind === "script") {
-				const script = typeof bag.script === "string" ? bag.script.trim() : "";
-				if (!script || script.length > 100_000) return null;
-				return {
-					kind: "script",
-					script,
-					...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
-					...(typeof bag.timeoutMs === "number" ? { timeoutMs: bag.timeoutMs } : {}),
-					source: "api",
-				};
-			}
-			if (bag.kind === "fill-login") {
-			const source = bag.source;
-			const identifier = typeof bag.identifier === "string" ? bag.identifier.trim() : "";
-			if ((source !== "in-house" && source !== "1password" && source !== "bitwarden") || !identifier) {
-				return null;
-			}
-			const targetUrl = typeof bag.targetUrl === "string" && bag.targetUrl.trim().length > 0
-				? bag.targetUrl.trim()
-				: undefined;
-			return {
-				kind: "fill-login",
-				source,
-				identifier,
-					...(targetUrl ? { targetUrl } : {}),
-					...(typeof bag.newTab === "boolean" ? { newTab: bag.newTab } : {}),
-					...(typeof bag.tabId === "string" ? { tabId: bag.tabId } : {}),
-					...(typeof bag.timeoutMs === "number" ? { timeoutMs: bag.timeoutMs } : {}),
-				};
-			}
-		return null;
+		return parseBrowserCommandInput(body);
 	}
 
 	setWindowController(fn: WindowController | null): void {
@@ -2260,8 +2293,18 @@ export class ApiServer {
  * network reachable but bad token).
  */
 type CredentialValidationResult = { ok: true; info?: string } | { ok: false; error: string };
+type CredentialValidator = (key: string, trimmed: string) => Promise<CredentialValidationResult>;
 
 const CREDENTIAL_VALIDATION_TIMEOUT_MS = 5000;
+const CREDENTIAL_VALIDATORS: Record<string, CredentialValidator> = {
+	DISCORD_API_TOKEN: (_key, trimmed) => validateDiscordCredential(trimmed),
+	DISCORD_BOT_TOKEN: (_key, trimmed) => validateDiscordCredential(trimmed),
+	TELEGRAM_BOT_TOKEN: (_key, trimmed) => validateTelegramCredential(trimmed),
+	OPENAI_EMBEDDING_API_KEY: (_key, trimmed) => validateOpenAICredential(trimmed),
+	OPENAI_API_KEY: (_key, trimmed) => validateOpenAICredential(trimmed),
+	X_AUTH_TOKEN: validateXCredential,
+	X_CT0: validateXCredential,
+};
 
 async function fetchCredentialValidation(url: string, init: RequestInit = {}): Promise<Response> {
 	const ctl = new AbortController();
@@ -2276,20 +2319,8 @@ async function fetchCredentialValidation(url: string, init: RequestInit = {}): P
 async function validateChannelCredential(key: string, value: string): Promise<CredentialValidationResult> {
 	const trimmed = value.trim();
 	if (trimmed.length === 0) return { ok: false, error: `${key} is empty` };
-	if (key === "DISCORD_API_TOKEN" || key === "DISCORD_BOT_TOKEN") {
-		return validateDiscordCredential(trimmed);
-	}
-	if (key === "TELEGRAM_BOT_TOKEN") {
-		return validateTelegramCredential(trimmed);
-	}
-	if (key === "OPENAI_EMBEDDING_API_KEY" || key === "OPENAI_API_KEY") {
-		return validateOpenAICredential(trimmed);
-	}
-	if (key === "X_AUTH_TOKEN" || key === "X_CT0") {
-		return validateXCredential(key, trimmed);
-	}
-	// Unknown / non-validatable key — accept silently.
-	return { ok: true };
+	const validate = CREDENTIAL_VALIDATORS[key];
+	return validate ? validate(key, trimmed) : { ok: true };
 }
 
 async function validateDiscordCredential(trimmed: string): Promise<CredentialValidationResult> {

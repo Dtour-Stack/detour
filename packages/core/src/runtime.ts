@@ -104,66 +104,93 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 	const space = trimmed.search(/\s/);
 	const command = (space < 0 ? trimmed : trimmed.slice(0, space)).toLowerCase();
 	const tail = space < 0 ? "" : trimmed.slice(space + 1).trim();
-	if (command === "/help" || command === "/commands") {
-		return {
-			kind: "reply",
-			text: [
-				"Native commands:",
-				"/browser <url or search>",
-				"/open <url or search>",
-				"/inspect",
-				"/script <javascript>",
-				"/logins [domain]",
-				"/login <source> <identifier> [url]",
-				"/1password <identifier> [url]",
-				"/pet [name]",
-				"/hatch <concept>",
-			].join("\n"),
-		};
+	switch (command) {
+		case "/help":
+		case "/commands":
+			return slashHelp();
+		case "/browser":
+		case "/open":
+		case "/web":
+		case "/internet":
+			return slashBrowser(tail);
+		case "/logins":
+		case "/passwords":
+			return { kind: "action", action: loginListAction, options: tail ? { domain: tail } : {} };
+		case "/inspect":
+		case "/read-page":
+			return { kind: "action", action: browserInspectAction, options: {} };
+		case "/script":
+		case "/js":
+			return slashScript(tail);
+		case "/login":
+		case "/fill-login":
+			return slashLogin(tail);
+		case "/1password":
+		case "/op":
+			return slashOnePassword(tail);
+		case "/pet":
+			return { kind: "action", action: codexPetAction, options: {} };
+		case "/hatch":
+			return { kind: "action", action: codexHatchAction, options: {} };
+		default:
+			return null;
 	}
-	if (command === "/browser" || command === "/open" || command === "/web" || command === "/internet") {
-		if (!tail) return { kind: "reply", text: "Usage: /browser <url or search>" };
-		return { kind: "action", action: browserOpenAction, options: { url: tail, newTab: true } };
+}
+
+function slashHelp(): NativeSlashDispatch {
+	return {
+		kind: "reply",
+		text: [
+			"Native commands:",
+			"/browser <url or search>",
+			"/open <url or search>",
+			"/inspect",
+			"/script <javascript>",
+			"/logins [domain]",
+			"/login <source> <identifier> [url]",
+			"/1password <identifier> [url]",
+			"/pet [name]",
+			"/hatch <concept>",
+		].join("\n"),
+	};
+}
+
+function slashBrowser(tail: string): NativeSlashDispatch {
+	if (!tail) return { kind: "reply", text: "Usage: /browser <url or search>" };
+	return { kind: "action", action: browserOpenAction, options: { url: tail, newTab: true } };
+}
+
+function slashScript(tail: string): NativeSlashDispatch {
+	if (!tail) return { kind: "reply", text: "Usage: /script <javascript>" };
+	return { kind: "action", action: browserScriptAction, options: { script: tail } };
+}
+
+function slashLogin(tail: string): NativeSlashDispatch {
+	const parts = tail.split(/\s+/).filter(Boolean);
+	const source = parts[0];
+	const identifier = parts[1];
+	if (source !== "in-house" && source !== "1password" && source !== "bitwarden") {
+		return { kind: "reply", text: "Usage: /login <in-house|1password|bitwarden> <identifier> [url]" };
 	}
-	if (command === "/logins" || command === "/passwords") {
-		return { kind: "action", action: loginListAction, options: tail ? { domain: tail } : {} };
-	}
-	if (command === "/inspect" || command === "/read-page") {
-		return { kind: "action", action: browserInspectAction, options: {} };
-	}
-	if (command === "/script" || command === "/js") {
-		if (!tail) return { kind: "reply", text: "Usage: /script <javascript>" };
-		return { kind: "action", action: browserScriptAction, options: { script: tail } };
-	}
-	if (command === "/login" || command === "/fill-login") {
-		const parts = tail.split(/\s+/).filter(Boolean);
-		const source = parts[0];
-		const identifier = parts[1];
-		if (source !== "in-house" && source !== "1password" && source !== "bitwarden") {
-			return { kind: "reply", text: "Usage: /login <in-house|1password|bitwarden> <identifier> [url]" };
-		}
-		if (!identifier) return { kind: "reply", text: "Usage: /login <source> <identifier> [url]" };
-		const targetUrl = parts.slice(2).join(" ");
-		return {
-			kind: "action",
-			action: browserFillLoginAction,
-			options: { source, identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
-		};
-	}
-	if (command === "/1password" || command === "/op") {
-		const parts = tail.split(/\s+/).filter(Boolean);
-		const identifier = parts[0];
-		if (!identifier) return { kind: "reply", text: "Usage: /1password <identifier> [url]" };
-		const targetUrl = parts.slice(1).join(" ");
-		return {
-			kind: "action",
-			action: browserFillLoginAction,
-			options: { source: "1password", identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
-		};
-	}
-	if (command === "/pet") return { kind: "action", action: codexPetAction, options: {} };
-	if (command === "/hatch") return { kind: "action", action: codexHatchAction, options: {} };
-	return null;
+	if (!identifier) return { kind: "reply", text: "Usage: /login <source> <identifier> [url]" };
+	const targetUrl = parts.slice(2).join(" ");
+	return {
+		kind: "action",
+		action: browserFillLoginAction,
+		options: { source, identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
+	};
+}
+
+function slashOnePassword(tail: string): NativeSlashDispatch {
+	const parts = tail.split(/\s+/).filter(Boolean);
+	const identifier = parts[0];
+	if (!identifier) return { kind: "reply", text: "Usage: /1password <identifier> [url]" };
+	const targetUrl = parts.slice(1).join(" ");
+	return {
+		kind: "action",
+		action: browserFillLoginAction,
+		options: { source: "1password", identifier, ...(targetUrl ? { targetUrl, newTab: true } : {}) },
+	};
 }
 
 type RuntimeState = {

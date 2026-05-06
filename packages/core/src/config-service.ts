@@ -52,6 +52,15 @@ const KEY_MODELS = "config.models";
 const KEY_WINDOW = "config.window";
 const KEY_CHRONICLER = "config.chronicler";
 
+function configuredString(raw: Record<string, unknown>, key: keyof ModelConfig): string | null {
+	const value = raw[key];
+	return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function modelString(raw: Record<string, unknown>, key: keyof ModelConfig): string {
+	return configuredString(raw, key) ?? String(DEFAULT_MODELS[key]);
+}
+
 export class ConfigService {
 	constructor(private readonly vault: VaultService) {}
 
@@ -116,17 +125,15 @@ export class ConfigService {
 		const raw = await this.readJson(KEY_MODELS);
 		if (!raw) return { ...DEFAULT_MODELS };
 		return {
-			codexLarge: typeof raw.codexLarge === "string" && raw.codexLarge ? raw.codexLarge : DEFAULT_MODELS.codexLarge,
-			codexSmall: typeof raw.codexSmall === "string" && raw.codexSmall ? raw.codexSmall : DEFAULT_MODELS.codexSmall,
-			codexImage: typeof raw.codexImage === "string" && raw.codexImage ? raw.codexImage : DEFAULT_MODELS.codexImage,
-			openRouterTextLarge: typeof raw.openRouterTextLarge === "string" && raw.openRouterTextLarge ? raw.openRouterTextLarge : DEFAULT_MODELS.openRouterTextLarge,
-			openRouterTextSmall: typeof raw.openRouterTextSmall === "string" && raw.openRouterTextSmall ? raw.openRouterTextSmall : DEFAULT_MODELS.openRouterTextSmall,
-			openRouterEmbedding: typeof raw.openRouterEmbedding === "string" && raw.openRouterEmbedding ? raw.openRouterEmbedding : DEFAULT_MODELS.openRouterEmbedding,
-			openRouterImage: typeof raw.openRouterImage === "string" && raw.openRouterImage ? raw.openRouterImage : DEFAULT_MODELS.openRouterImage,
-			openRouterVision: typeof raw.openRouterVision === "string" && raw.openRouterVision ? raw.openRouterVision : DEFAULT_MODELS.openRouterVision,
-			providerPriority: Array.isArray(raw.providerPriority) && raw.providerPriority.length > 0
-				? this.cleanProviderPriority(raw.providerPriority)
-				: DEFAULT_MODELS.providerPriority,
+			codexLarge: modelString(raw, "codexLarge"),
+			codexSmall: modelString(raw, "codexSmall"),
+			codexImage: modelString(raw, "codexImage"),
+			openRouterTextLarge: modelString(raw, "openRouterTextLarge"),
+			openRouterTextSmall: modelString(raw, "openRouterTextSmall"),
+			openRouterEmbedding: modelString(raw, "openRouterEmbedding"),
+			openRouterImage: modelString(raw, "openRouterImage"),
+			openRouterVision: modelString(raw, "openRouterVision"),
+			providerPriority: this.providerPriority(raw.providerPriority),
 		};
 	}
 
@@ -144,6 +151,12 @@ export class ConfigService {
 		process.env.OPENROUTER_MODEL_EMBEDDING = cfg.openRouterEmbedding;
 		process.env.OPENROUTER_MODEL_IMAGE = cfg.openRouterImage;
 		process.env.OPENROUTER_MODEL_VISION = cfg.openRouterVision;
+	}
+
+	private providerPriority(value: unknown): ModelConfig["providerPriority"] {
+		return Array.isArray(value) && value.length > 0
+			? this.cleanProviderPriority(value)
+			: DEFAULT_MODELS.providerPriority;
 	}
 
 	// ── Window ─────────────────────────────────────────────────────────

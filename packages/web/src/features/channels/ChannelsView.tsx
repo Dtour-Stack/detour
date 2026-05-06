@@ -138,73 +138,7 @@ function ChannelCard({
 	onToggleExpand: () => void;
 	onChanged: () => Promise<void> | void;
 }) {
-	const [draft, setDraft] = useState<Record<string, string>>({});
-	const [busy, setBusy] = useState<string | null>(null);
-	const [actionError, setActionError] = useState<string | null>(null);
-	const [reloading, setReloading] = useState(false);
-
-	const setKey = useCallback(async (key: string) => {
-		const value = draft[key];
-		if (!value) return;
-		setBusy(key);
-		setActionError(null);
-		try {
-			await client.channelSetCredential(key, value);
-			setDraft((d) => ({ ...d, [key]: "" }));
-			await onChanged();
-		} catch (e) {
-			setActionError(e instanceof Error ? e.message : String(e));
-		} finally {
-			setBusy(null);
-		}
-	}, [client, draft, onChanged]);
-
-	const clearKey = useCallback(async (key: string) => {
-		if (!confirm(`Clear credential ${key}?`)) return;
-		setBusy(key);
-		setActionError(null);
-		try {
-			await client.channelClearCredential(key);
-			await onChanged();
-		} catch (e) {
-			setActionError(e instanceof Error ? e.message : String(e));
-		} finally {
-			setBusy(null);
-		}
-	}, [client, onChanged]);
-
-	const reload = useCallback(async () => {
-		setReloading(true);
-		setActionError(null);
-		try {
-			await client.channelsReload();
-			// Reload runs in the background (telegram retries can take
-			// minutes); poll for ~6s so the UI shows the new state.
-			let i = 0;
-			const tick = () => {
-				i += 1;
-				void onChanged();
-				if (i < 6) setTimeout(tick, 1000);
-				else setReloading(false);
-			};
-			setTimeout(tick, 1000);
-		} catch (e) {
-			setActionError(e instanceof Error ? e.message : String(e));
-			setReloading(false);
-		}
-	}, [client, onChanged]);
-
-	const toggleEnabled = useCallback(async () => {
-		await toggleChannelEnabled({
-			channel,
-			client,
-			expanded,
-			onChanged,
-			onToggleExpand,
-			setActionError,
-			setBusy,
-		});
-	}, [channel, client, expanded, onChanged, onToggleExpand]);
+	const actions = useChannelCardActions({ channel, client, expanded, onChanged, onToggleExpand });
 
 	const allKeys = [...channel.requiredVaultKeys, ...channel.optionalVaultKeys];
 	const isEnabled = channel.configured;
@@ -215,27 +149,150 @@ function ChannelCard({
 				channel={channel}
 				expanded={expanded}
 				isEnabled={isEnabled}
-				toggleBusy={busy === "toggle"}
+				toggleBusy={actions.busy === "toggle"}
 				onToggleExpand={onToggleExpand}
-				onToggleEnabled={toggleEnabled}
+				onToggleEnabled={actions.toggleEnabled}
 			/>
 			{expanded && (
 				<ChannelCardBody
 					client={client}
 					channel={channel}
-					actionError={actionError}
+					actionError={actions.actionError}
 					allKeys={allKeys}
-					busy={busy}
-					draft={draft}
-					reloading={reloading}
-					onClearKey={clearKey}
-					onDraftChange={setDraft}
-					onReload={reload}
-					onSetKey={setKey}
+					busy={actions.busy}
+					draft={actions.draft}
+					reloading={actions.reloading}
+					onClearKey={actions.clearKey}
+					onDraftChange={actions.setDraft}
+					onReload={actions.reload}
+					onSetKey={actions.setKey}
 				/>
 			)}
 		</div>
 	);
+}
+
+function useChannelCardActions({
+	channel,
+	client,
+	expanded,
+	onChanged,
+	onToggleExpand,
+}: {
+	channel: ChannelStatus;
+	client: WebClient;
+	expanded: boolean;
+	onChanged: () => Promise<void> | void;
+	onToggleExpand: () => void;
+}) {
+	const [draft, setDraft] = useState<Record<string, string>>({});
+	const [busy, setBusy] = useState<string | null>(null);
+	const [actionError, setActionError] = useState<string | null>(null);
+	const [reloading, setReloading] = useState(false);
+	const setKey = useCallback((key: string) => {
+		void saveChannelKey({ key, client, draft, onChanged, setActionError, setBusy, setDraft });
+	}, [client, draft, onChanged]);
+	const clearKey = useCallback((key: string) => {
+		void clearChannelKey({ key, client, onChanged, setActionError, setBusy });
+	}, [client, onChanged]);
+	const reload = useCallback(() => {
+		void reloadChannelPlugins({ client, onChanged, setActionError, setReloading });
+	}, [client, onChanged]);
+	const toggleEnabled = useCallback(() => {
+		void toggleChannelEnabled({ channel, client, expanded, onChanged, onToggleExpand, setActionError, setBusy });
+	}, [channel, client, expanded, onChanged, onToggleExpand]);
+	return { actionError, busy, clearKey, draft, reload, reloading, setDraft, setKey, toggleEnabled };
+}
+
+async function saveChannelKey({
+	key,
+	client,
+	draft,
+	onChanged,
+	setActionError,
+	setBusy,
+	setDraft,
+}: {
+	key: string;
+	client: WebClient;
+	draft: Record<string, string>;
+	onChanged: () => Promise<void> | void;
+	setActionError: (value: string | null) => void;
+	setBusy: (value: string | null) => void;
+	setDraft: Dispatch<SetStateAction<Record<string, string>>>;
+}) {
+	const value = draft[key];
+	if (!value) return;
+	setBusy(key);
+	setActionError(null);
+	try {
+		await client.channelSetCredential(key, value);
+		setDraft((d) => ({ ...d, [key]: "" }));
+		await onChanged();
+	} catch (e) {
+		setActionError(e instanceof Error ? e.message : String(e));
+	} finally {
+		setBusy(null);
+	}
+}
+
+async function clearChannelKey({
+	key,
+	client,
+	onChanged,
+	setActionError,
+	setBusy,
+}: {
+	key: string;
+	client: WebClient;
+	onChanged: () => Promise<void> | void;
+	setActionError: (value: string | null) => void;
+	setBusy: (value: string | null) => void;
+}) {
+	if (!confirm(`Clear credential ${key}?`)) return;
+	setBusy(key);
+	setActionError(null);
+	try {
+		await client.channelClearCredential(key);
+		await onChanged();
+	} catch (e) {
+		setActionError(e instanceof Error ? e.message : String(e));
+	} finally {
+		setBusy(null);
+	}
+}
+
+async function reloadChannelPlugins({
+	client,
+	onChanged,
+	setActionError,
+	setReloading,
+}: {
+	client: WebClient;
+	onChanged: () => Promise<void> | void;
+	setActionError: (value: string | null) => void;
+	setReloading: (value: boolean) => void;
+}) {
+	setReloading(true);
+	setActionError(null);
+	try {
+		await client.channelsReload();
+		pollChannelReload(onChanged, setReloading);
+	} catch (e) {
+		setActionError(e instanceof Error ? e.message : String(e));
+		setReloading(false);
+	}
+}
+
+function pollChannelReload(onChanged: () => Promise<void> | void, setReloading: (value: boolean) => void): void {
+	let i = 0;
+	const tick = () => {
+		i += 1;
+		void onChanged();
+		if (i < 6) setTimeout(tick, 1000);
+		else setReloading(false);
+	};
+	setTimeout(tick, 1000);
 }
 
 async function toggleChannelEnabled({

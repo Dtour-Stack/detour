@@ -29,6 +29,148 @@ function parseExamples(value: string): AgentCharacterMessageExample[][] {
 	return parsed as AgentCharacterMessageExample[][];
 }
 
+function draftFromCharacter(character: AgentCharacterConfig): Record<string, string> {
+	return {
+		name: character.name,
+		username: character.username,
+		system: character.system,
+		bio: lines(character.bio),
+		lore: lines(character.lore),
+		adjectives: lines(character.adjectives),
+		topics: lines(character.topics),
+		styleAll: lines(character.style.all),
+		styleChat: lines(character.style.chat),
+		stylePost: lines(character.style.post),
+		postExamples: lines(character.postExamples),
+		messageExamples: JSON.stringify(character.messageExamples, null, 2),
+	};
+}
+
+function draftCharacter(cfg: AgentCharacterConfig, draft: Record<string, string>): AgentCharacterConfig {
+	return {
+		name: draft.name ?? cfg.name,
+		username: draft.username ?? cfg.username,
+		system: draft.system ?? cfg.system,
+		bio: splitLines(draft.bio ?? ""),
+		lore: splitLines(draft.lore ?? ""),
+		adjectives: splitLines(draft.adjectives ?? ""),
+		topics: splitLines(draft.topics ?? ""),
+		style: {
+			all: splitLines(draft.styleAll ?? ""),
+			chat: splitLines(draft.styleChat ?? ""),
+			post: splitLines(draft.stylePost ?? ""),
+		},
+		postExamples: splitLines(draft.postExamples ?? ""),
+		messageExamples: cfg.messageExamples,
+	};
+}
+
+type DraftSetter = (key: string, value: string) => void;
+
+function CharacterHeader({ saving, onSave }: { saving: boolean; onSave: () => void }) {
+	return (
+		<div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+			<div>
+				<h3 style={{ margin: "0 0 4px" }}>Agent character</h3>
+				<p className="hint" style={{ margin: 0 }}>
+					Customize the elizaOS character fields that shape the runtime persona: system prompt, bio, lore, topics, style, posts, and examples.
+				</p>
+			</div>
+			<button type="button" className="btn small" disabled={saving} onClick={onSave}>
+				{saving ? "Saving..." : "Save and reload"}
+			</button>
+		</div>
+	);
+}
+
+function BasicFields({ draft, set }: { draft: Record<string, string>; set: DraftSetter }) {
+	return (
+		<div className="card">
+			<div className="agent-character-grid">
+				<div>
+					<label>Name</label>
+					<input type="text" value={draft.name ?? ""} onChange={(e) => set("name", e.target.value)} />
+				</div>
+				<div>
+					<label>Username</label>
+					<input type="text" value={draft.username ?? ""} onChange={(e) => set("username", e.target.value)} />
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function SystemField({ draft, set }: { draft: Record<string, string>; set: DraftSetter }) {
+	return (
+		<div className="card">
+			<label>System prompt</label>
+			<textarea
+				className="pensieve-textarea agent-character-system"
+				value={draft.system ?? ""}
+				onChange={(e) => set("system", e.target.value)}
+			/>
+		</div>
+	);
+}
+
+function TextAreaCard({
+	field,
+	label,
+	rows,
+	draft,
+	set,
+}: {
+	field: string;
+	label: string;
+	rows: number;
+	draft: Record<string, string>;
+	set: DraftSetter;
+}) {
+	return (
+		<div className="card">
+			<label>{label}</label>
+			<textarea className="pensieve-textarea" rows={rows} value={draft[field] ?? ""} onChange={(e) => set(field, e.target.value)} />
+		</div>
+	);
+}
+
+function ListFields({ draft, set }: { draft: Record<string, string>; set: DraftSetter }) {
+	return (
+		<div className="agent-character-grid">
+			<TextAreaCard field="bio" label="Bio" rows={8} draft={draft} set={set} />
+			<TextAreaCard field="lore" label="Lore" rows={8} draft={draft} set={set} />
+			<TextAreaCard field="topics" label="Topics" rows={8} draft={draft} set={set} />
+			<TextAreaCard field="adjectives" label="Adjectives" rows={8} draft={draft} set={set} />
+		</div>
+	);
+}
+
+function StyleFields({ draft, set }: { draft: Record<string, string>; set: DraftSetter }) {
+	return (
+		<div className="agent-character-grid">
+			<TextAreaCard field="styleAll" label="Style: all" rows={7} draft={draft} set={set} />
+			<TextAreaCard field="styleChat" label="Style: chat" rows={7} draft={draft} set={set} />
+			<TextAreaCard field="stylePost" label="Style: post" rows={7} draft={draft} set={set} />
+		</div>
+	);
+}
+
+function ExamplesFields({ draft, set }: { draft: Record<string, string>; set: DraftSetter }) {
+	return (
+		<>
+			<TextAreaCard field="postExamples" label="Post examples" rows={8} draft={draft} set={set} />
+			<div className="card">
+				<label>Message examples JSON</label>
+				<textarea
+					className="pensieve-textarea agent-character-examples"
+					value={draft.messageExamples ?? ""}
+					onChange={(e) => set("messageExamples", e.target.value)}
+				/>
+			</div>
+		</>
+	);
+}
+
 export function AgentCharacterTab({ client }: { client: WebClient }) {
 	const [cfg, setCfg] = useState<AgentCharacterConfig | null>(null);
 	const [draft, setDraft] = useState<Record<string, string>>({});
@@ -39,41 +181,13 @@ export function AgentCharacterTab({ client }: { client: WebClient }) {
 	useEffect(() => {
 		void client.getAgentCharacter().then((character) => {
 			setCfg(character);
-			setDraft({
-				name: character.name,
-				username: character.username,
-				system: character.system,
-				bio: lines(character.bio),
-				lore: lines(character.lore),
-				adjectives: lines(character.adjectives),
-				topics: lines(character.topics),
-				styleAll: lines(character.style.all),
-				styleChat: lines(character.style.chat),
-				stylePost: lines(character.style.post),
-				postExamples: lines(character.postExamples),
-				messageExamples: JSON.stringify(character.messageExamples, null, 2),
-			});
+			setDraft(draftFromCharacter(character));
 		});
 	}, [client]);
 
 	const nextCharacter = useMemo<AgentCharacterConfig | null>(() => {
 		if (!cfg) return null;
-		return {
-			name: draft.name ?? cfg.name,
-			username: draft.username ?? cfg.username,
-			system: draft.system ?? cfg.system,
-			bio: splitLines(draft.bio ?? ""),
-			lore: splitLines(draft.lore ?? ""),
-			adjectives: splitLines(draft.adjectives ?? ""),
-			topics: splitLines(draft.topics ?? ""),
-			style: {
-				all: splitLines(draft.styleAll ?? ""),
-				chat: splitLines(draft.styleChat ?? ""),
-				post: splitLines(draft.stylePost ?? ""),
-			},
-			postExamples: splitLines(draft.postExamples ?? ""),
-			messageExamples: cfg.messageExamples,
-		};
+		return draftCharacter(cfg, draft);
 	}, [cfg, draft]);
 
 	async function save() {
@@ -101,90 +215,14 @@ export function AgentCharacterTab({ client }: { client: WebClient }) {
 
 	return (
 		<div className="agent-character-settings">
-			<div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-				<div>
-					<h3 style={{ margin: "0 0 4px" }}>Agent character</h3>
-					<p className="hint" style={{ margin: 0 }}>
-						Customize the elizaOS character fields that shape the runtime persona: system prompt, bio, lore, topics, style, posts, and examples.
-					</p>
-				</div>
-				<button type="button" className="btn small" disabled={saving} onClick={save}>
-					{saving ? "Saving..." : "Save and reload"}
-				</button>
-			</div>
-
+			<CharacterHeader saving={saving} onSave={save} />
 			{error && <div className="banner error" style={{ marginBottom: 10 }}>{error}</div>}
 			{!error && savedAt && <div className="banner success" style={{ marginBottom: 10 }}>Saved. Runtime reloaded.</div>}
-
-			<div className="card">
-				<div className="agent-character-grid">
-					<div>
-						<label>Name</label>
-						<input type="text" value={draft.name ?? ""} onChange={(e) => set("name", e.target.value)} />
-					</div>
-					<div>
-						<label>Username</label>
-						<input type="text" value={draft.username ?? ""} onChange={(e) => set("username", e.target.value)} />
-					</div>
-				</div>
-			</div>
-
-			<div className="card">
-				<label>System prompt</label>
-				<textarea
-					className="pensieve-textarea agent-character-system"
-					value={draft.system ?? ""}
-					onChange={(e) => set("system", e.target.value)}
-				/>
-			</div>
-
-			<div className="agent-character-grid">
-				<div className="card">
-					<label>Bio</label>
-					<textarea className="pensieve-textarea" rows={8} value={draft.bio ?? ""} onChange={(e) => set("bio", e.target.value)} />
-				</div>
-				<div className="card">
-					<label>Lore</label>
-					<textarea className="pensieve-textarea" rows={8} value={draft.lore ?? ""} onChange={(e) => set("lore", e.target.value)} />
-				</div>
-				<div className="card">
-					<label>Topics</label>
-					<textarea className="pensieve-textarea" rows={8} value={draft.topics ?? ""} onChange={(e) => set("topics", e.target.value)} />
-				</div>
-				<div className="card">
-					<label>Adjectives</label>
-					<textarea className="pensieve-textarea" rows={8} value={draft.adjectives ?? ""} onChange={(e) => set("adjectives", e.target.value)} />
-				</div>
-			</div>
-
-			<div className="agent-character-grid">
-				<div className="card">
-					<label>Style: all</label>
-					<textarea className="pensieve-textarea" rows={7} value={draft.styleAll ?? ""} onChange={(e) => set("styleAll", e.target.value)} />
-				</div>
-				<div className="card">
-					<label>Style: chat</label>
-					<textarea className="pensieve-textarea" rows={7} value={draft.styleChat ?? ""} onChange={(e) => set("styleChat", e.target.value)} />
-				</div>
-				<div className="card">
-					<label>Style: post</label>
-					<textarea className="pensieve-textarea" rows={7} value={draft.stylePost ?? ""} onChange={(e) => set("stylePost", e.target.value)} />
-				</div>
-			</div>
-
-			<div className="card">
-				<label>Post examples</label>
-				<textarea className="pensieve-textarea" rows={8} value={draft.postExamples ?? ""} onChange={(e) => set("postExamples", e.target.value)} />
-			</div>
-
-			<div className="card">
-				<label>Message examples JSON</label>
-				<textarea
-					className="pensieve-textarea agent-character-examples"
-					value={draft.messageExamples ?? ""}
-					onChange={(e) => set("messageExamples", e.target.value)}
-				/>
-			</div>
+			<BasicFields draft={draft} set={set} />
+			<SystemField draft={draft} set={set} />
+			<ListFields draft={draft} set={set} />
+			<StyleFields draft={draft} set={set} />
+			<ExamplesFields draft={draft} set={set} />
 		</div>
 	);
 }
