@@ -314,7 +314,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 										Save
 									</button>
 								)}
-								{(provider?.hasKey || usableOAuth) && !provider.active && (
+								{(provider?.hasKey || usableOAuth) && !provider?.active && (
 									<button type="button" className="btn secondary small" onClick={() => activate(vendor.id)}>
 										Use this
 									</button>
