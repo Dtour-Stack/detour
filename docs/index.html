@@ -286,14 +286,33 @@ section .sub {
 }
 .mascot.in-view { opacity: 0.6; }
 
+/* Dedicated decorative band BETWEEN the hero and the next section.
+   Lives on its own row so the squirrel can never overlap the install
+   card or any other content. Height = clamp so it scales gracefully. */
+.mascot-band {
+  position: relative;
+  height: clamp(220px, 30vw, 380px);
+  margin: 0 auto;
+  max-width: 1400px;
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  /* Anchor the band's content (mascot) to the LEFT edge with a small bleed.
+     Flex-handles vertical centering so we don't need translateY in CSS,
+     leaving `transform` free for the JS parallax to drive cleanly. */
+  justify-content: flex-start;
+}
+
 .mascot-laptop {
-  /* Hero — sit at the BOTTOM of the hero, anchored bottom-left. The
-     squirrel (on the left of the asset) stays at viewport-left with
-     the branch trailing right. Doesn't fight the text since it's
-     below the headline + install card. */
-  width: clamp(360px, 50vw, 720px);
-  bottom: -40px;
-  left: -40px;
+  /* Sits inside .mascot-band — squirrel anchored at the LEFT, branch
+     trails right into the void. Position is static (not absolute) so
+     flex layout owns the vertical centering. Margin-left -40px gives
+     a tasteful bleed past the band's edge. */
+  position: static;
+  width: clamp(420px, 60vw, 880px);
+  margin-left: -40px;
+  flex-shrink: 0;
 }
 .mascot-branch {
   /* Features — anchored top-RIGHT, mirrored horizontally so the
@@ -308,6 +327,7 @@ section .sub {
 /* Hide on narrower viewports where they'd dominate */
 @media (max-width: 900px) {
   .mascot-laptop, .mascot-branch { display: none; }
+  .mascot-band { display: none; }
 }
 
 /* Honor reduced-motion */
@@ -575,16 +595,7 @@ footer a:hover { color: var(--fg); }
   </div>
 </nav>
 
-<header class="hero parallax-host">
-  <img
-    class="mascot mascot-laptop"
-    data-parallax="0.25"
-    src="assets/squirrel-laptop.png"
-    alt=""
-    aria-hidden="true"
-    loading="eager"
-    decoding="async"
-  />
+<header class="hero">
   <div class="tag">
     <span class="blip"></span>
     <span>v0.3.0 — playground edition</span>
@@ -619,6 +630,17 @@ footer a:hover { color: var(--fg); }
     <code>-s -- canary</code>.
   </p>
 </header>
+
+<aside class="mascot-band parallax-host" aria-hidden="true">
+  <img
+    class="mascot mascot-laptop"
+    data-parallax="0.2"
+    src="assets/squirrel-laptop.png"
+    alt=""
+    loading="eager"
+    decoding="async"
+  />
+</aside>
 
 <section id="hierarchy">
   <h2>Where Detour <span class="accent">fits.</span></h2>
