@@ -10,15 +10,20 @@
  * basic-capabilities feature is loaded — we resolve via runtime.getService().
  */
 
-import type { IAgentRuntime } from "@elizaos/core";
+import type { IAgentRuntime, Task, TaskMetadata, UUID } from "@elizaos/core";
+import type { ActivityXAutonomyUpdate } from "@detour/shared";
 import { CONTINUOUS_IMPROVEMENT_TASK_NAME } from "../continuous-improvement-service";
 
 const AUTONOMY_SERVICE_TYPE = "AUTONOMY";
-const AUTONOMY_TASK_NAMES = new Set(["AUTONOMY_THINK", "X_AUTONOMY", "BATCHER_DRAIN", CONTINUOUS_IMPROVEMENT_TASK_NAME]);
+const X_AUTONOMY_TASK_NAME = "X_AUTONOMY";
+const X_AUTONOMY_TASK_TAGS = ["queue", "repeat", "x-autonomy"];
+const AUTONOMY_TASK_NAMES = new Set(["AUTONOMY_THINK", X_AUTONOMY_TASK_NAME, "BATCHER_DRAIN", CONTINUOUS_IMPROVEMENT_TASK_NAME]);
 const AUTONOMY_TASK_TAGS = new Set(["autonomy", "x-autonomy", "batcher", "continuous-improvement"]);
 const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
 const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
+const X_AUTONOMY_DEFAULT_MAX_REPLIES = 2;
+const X_AUTONOMY_DEFAULT_MAX_DISCOVERY = 2;
 const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"elizaOS",
 	"Dexploarer",
@@ -67,6 +72,7 @@ export interface ActivityXAutonomySnapshot {
 	intervalMs: number;
 	statusIntervalMs: number;
 	discoveryIntervalMs: number;
+	maxRepliesPerTick: number;
 	maxDiscoveryPerTick: number;
 	discoveryQueries: string[];
 	lastRunAt?: number;
@@ -117,9 +123,13 @@ interface AutonomyServiceShape {
 }
 
 interface RuntimeTaskShape {
+	agentId?: UUID;
 	taskWorkers?: Map<string, { name: string }>;
-	getTasks?: (params: { tags?: string[]; limit?: number }) => Promise<unknown[]>;
-	getSetting?: (key: string) => string | undefined | null;
+	getTasks?: (params: { agentIds?: string[]; tags?: string[]; limit?: number }) => Promise<Task[]>;
+	createTask?: (task: Task) => Promise<UUID>;
+	updateTask?: (id: UUID, task: Partial<Task>) => Promise<void>;
+	getSetting?: (key: string) => string | boolean | number | undefined | null;
+	setSetting?: (key: string, value: string | boolean | null, secret?: boolean) => void;
 	promptBatcher?: unknown;
 }
 
@@ -142,6 +152,7 @@ const EMPTY: ActivityAutonomySnapshot = {
 		intervalMs: X_AUTONOMY_DEFAULT_INTERVAL_MS,
 		statusIntervalMs: X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS,
 		discoveryIntervalMs: X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS,
+		maxRepliesPerTick: 0,
 		maxDiscoveryPerTick: 0,
 		discoveryQueries: [],
 		lastHandledCount: 0,
@@ -192,7 +203,9 @@ function readTimestamp(value: unknown): number | undefined {
 
 function setting(runtime: RuntimeTaskShape, key: string): string | undefined {
 	const v = runtime.getSetting?.(key);
-	return typeof v === "string" && v.trim().length > 0 ? v : undefined;
+	if (typeof v === "string" && v.trim().length > 0) return v;
+	if (typeof v === "boolean" || typeof v === "number") return String(v);
+	return undefined;
 }
 
 function booleanSetting(runtime: RuntimeTaskShape, key: string, defaultValue: boolean): boolean {
@@ -216,6 +229,60 @@ function listSetting(runtime: RuntimeTaskShape, key: string, defaultValue: strin
 		.map((item) => item.trim())
 		.filter((item) => item.length > 0);
 	return parsed.length > 0 ? parsed : [...defaultValue];
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+export function xAutonomyRuntimeSettings(update: ActivityXAutonomyUpdate): Array<[string, string]> {
+	const entries: Array<[string, string]> = [];
+	const bool = (field: keyof ActivityXAutonomyUpdate, key: string) => {
+		const value = update[field];
+		if (typeof value === "boolean") entries.push([key, value ? "true" : "false"]);
+	};
+	const num = (field: keyof ActivityXAutonomyUpdate, key: string, min: number, max: number) => {
+		const value = update[field];
+		if (typeof value === "number" && Number.isFinite(value)) {
+			entries.push([key, String(clampNumber(value, min, max))]);
+		}
+	};
+	bool("enabled", "X_AUTONOMY_ENABLED");
+	bool("writeEnabled", "X_AUTONOMY_WRITE");
+	bool("statusPostingEnabled", "X_AUTONOMY_POST_STATUS_ENABLED");
+	bool("discoveryEnabled", "X_AUTONOMY_DISCOVERY_ENABLED");
+	bool("proactiveEngagementEnabled", "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED");
+	bool("followEnabled", "X_AUTONOMY_FOLLOW_ENABLED");
+	num("intervalMs", "X_AUTONOMY_INTERVAL_MS", 30_000, 30 * 60_000);
+	num("statusIntervalMs", "X_AUTONOMY_STATUS_INTERVAL_MS", 15 * 60_000, 24 * 60 * 60_000);
+	num("discoveryIntervalMs", "X_AUTONOMY_DISCOVERY_INTERVAL_MS", 5 * 60_000, 24 * 60 * 60_000);
+	num("maxRepliesPerTick", "X_AUTONOMY_MAX_REPLIES_PER_TICK", 1, 5);
+	num("maxDiscoveryPerTick", "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 0, 8);
+	if (Array.isArray(update.discoveryQueries)) {
+		const queries = update.discoveryQueries.map((item) => item.trim()).filter((item) => item.length > 0);
+		entries.push(["X_AUTONOMY_DISCOVERY_QUERIES", queries.join("\n")]);
+	}
+	return entries;
+}
+
+function xTaskMetadata(current: unknown, runtime: RuntimeTaskShape): TaskMetadata {
+	const intervalMs = Math.max(
+		30_000,
+		Math.min(30 * 60_000, numberSetting(runtime, "X_AUTONOMY_INTERVAL_MS", X_AUTONOMY_DEFAULT_INTERVAL_MS)),
+	);
+	return {
+		...asObject(current),
+		updateInterval: intervalMs,
+		baseInterval: intervalMs,
+		blocking: false,
+		xAutonomy: {
+			version: 1,
+		},
+	};
+}
+
+function isXTask(task: Task): boolean {
+	return task.name === X_AUTONOMY_TASK_NAME && Boolean(asObject(task.metadata).xAutonomy);
 }
 
 function normalizeTask(raw: unknown, knownWorkerNames: Set<string>): ActivityAutonomyTask | null {
@@ -271,7 +338,7 @@ function normalizeHandled(raw: unknown): ActivityXAutonomyHandled[] {
 }
 
 function xSnapshot(runtime: RuntimeTaskShape, tasks: ActivityAutonomyTask[], rawTasks: unknown[]): ActivityXAutonomySnapshot {
-	const rawXTask = rawTasks.find((task) => asString(asObject(task).name) === "X_AUTONOMY");
+	const rawXTask = rawTasks.find((task) => asString(asObject(task).name) === X_AUTONOMY_TASK_NAME);
 	const metadata = asObject(asObject(rawXTask).metadata);
 	const lastHandled = normalizeHandled(metadata.xAutonomyLastHandled);
 	const intervalMs = Math.max(
@@ -289,13 +356,14 @@ function xSnapshot(runtime: RuntimeTaskShape, tasks: ActivityAutonomyTask[], raw
 			numberSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS),
 		),
 	);
-	const maxDiscoveryPerTick = Math.max(0, Math.min(8, numberSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 2)));
+	const maxRepliesPerTick = Math.max(1, Math.min(5, numberSetting(runtime, "X_AUTONOMY_MAX_REPLIES_PER_TICK", X_AUTONOMY_DEFAULT_MAX_REPLIES)));
+	const maxDiscoveryPerTick = Math.max(0, Math.min(8, numberSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", X_AUTONOMY_DEFAULT_MAX_DISCOVERY)));
 	const statusTweetId = asString(metadata.xAutonomyLastStatusTweetId);
 	const lastRunAt = readTimestamp(metadata.xAutonomyLastRunAt);
 	const lastStatusAt = readTimestamp(metadata.xAutonomyLastStatusAt);
 	const lastDiscoveryAt = readTimestamp(metadata.xAutonomyLastDiscoveryAt);
 	return {
-		available: tasks.some((task) => task.name === "X_AUTONOMY") || Boolean(runtime.taskWorkers?.has("X_AUTONOMY")),
+		available: tasks.some((task) => task.name === X_AUTONOMY_TASK_NAME) || Boolean(runtime.taskWorkers?.has(X_AUTONOMY_TASK_NAME)),
 		enabled: booleanSetting(runtime, "X_AUTONOMY_ENABLED", true),
 		writeEnabled: booleanSetting(runtime, "X_AUTONOMY_WRITE", true),
 		statusPostingEnabled: booleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
@@ -305,6 +373,7 @@ function xSnapshot(runtime: RuntimeTaskShape, tasks: ActivityAutonomyTask[], raw
 		intervalMs,
 		statusIntervalMs,
 		discoveryIntervalMs,
+		maxRepliesPerTick,
 		maxDiscoveryPerTick,
 		discoveryQueries: listSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES),
 		...(lastRunAt !== undefined && { lastRunAt }),
@@ -435,5 +504,47 @@ export class ActivityAutonomyService {
 		if (!svc?.setLoopInterval) return false;
 		await svc.setLoopInterval(Math.max(5_000, Math.min(600_000, Math.round(ms))));
 		return true;
+	}
+
+	async applyXSettings(update: ActivityXAutonomyUpdate): Promise<boolean> {
+		const runtime = this.resolveRuntime() as RuntimeTaskShape | null;
+		if (!runtime) return false;
+		for (const [key, value] of xAutonomyRuntimeSettings(update)) {
+			process.env[key] = value;
+			runtime.setSetting?.(key, value);
+		}
+		await this.syncXTask(runtime);
+		return true;
+	}
+
+	private async syncXTask(runtime: RuntimeTaskShape): Promise<void> {
+		if (!runtime.getTasks || !runtime.createTask) return;
+		if (!booleanSetting(runtime, "X_AUTONOMY_ENABLED", true)) return;
+		const tasks = await runtime.getTasks({
+			...(runtime.agentId ? { agentIds: [runtime.agentId] } : {}),
+			tags: ["x-autonomy"],
+			limit: 20,
+		});
+		const primary = tasks.filter(isXTask).sort((a, b) => {
+			const aUpdated = asNumber(a.updatedAt) ?? 0;
+			const bUpdated = asNumber(b.updatedAt) ?? 0;
+			return bUpdated - aUpdated;
+		})[0];
+		const metadata = xTaskMetadata(primary?.metadata, runtime);
+		if (primary?.id) {
+			await runtime.updateTask?.(primary.id, {
+				description: "Poll X notifications and discover algorithm-fit conversations",
+				tags: [...X_AUTONOMY_TASK_TAGS],
+				metadata,
+			});
+			return;
+		}
+		await runtime.createTask({
+			name: X_AUTONOMY_TASK_NAME,
+			description: "Poll X notifications and discover algorithm-fit conversations",
+			tags: [...X_AUTONOMY_TASK_TAGS],
+			metadata,
+			dueAt: Date.now() + 15_000,
+		});
 	}
 }

@@ -166,6 +166,7 @@ function ChannelCard({
 					onDraftChange={actions.setDraft}
 					onReload={actions.reload}
 					onSetKey={actions.setKey}
+					onSetSetting={actions.setSetting}
 				/>
 			)}
 		</div>
@@ -198,10 +199,13 @@ function useChannelCardActions({
 	const reload = useCallback(() => {
 		void reloadChannelPlugins({ client, onChanged, setActionError, setReloading });
 	}, [client, onChanged]);
+	const setSetting = useCallback((key: string, value: boolean) => {
+		void saveChannelSetting({ key, value, client, onChanged, setActionError, setBusy, setReloading });
+	}, [client, onChanged]);
 	const toggleEnabled = useCallback(() => {
 		void toggleChannelEnabled({ channel, client, expanded, onChanged, onToggleExpand, setActionError, setBusy });
 	}, [channel, client, expanded, onChanged, onToggleExpand]);
-	return { actionError, busy, clearKey, draft, reload, reloading, setDraft, setKey, toggleEnabled };
+	return { actionError, busy, clearKey, draft, reload, reloading, setDraft, setKey, setSetting, toggleEnabled };
 }
 
 async function saveChannelKey({
@@ -281,6 +285,38 @@ async function reloadChannelPlugins({
 	} catch (e) {
 		setActionError(e instanceof Error ? e.message : String(e));
 		setReloading(false);
+	}
+}
+
+async function saveChannelSetting({
+	key,
+	value,
+	client,
+	onChanged,
+	setActionError,
+	setBusy,
+	setReloading,
+}: {
+	key: string;
+	value: boolean;
+	client: WebClient;
+	onChanged: () => Promise<void> | void;
+	setActionError: (value: string | null) => void;
+	setBusy: (value: string | null) => void;
+	setReloading: (value: boolean) => void;
+}) {
+	setBusy(key);
+	setActionError(null);
+	try {
+		await client.channelSetCredential(key, value ? "true" : "false");
+		await onChanged();
+		setReloading(true);
+		pollChannelReload(onChanged, setReloading);
+	} catch (e) {
+		setActionError(e instanceof Error ? e.message : String(e));
+		setReloading(false);
+	} finally {
+		setBusy(null);
 	}
 }
 
@@ -409,6 +445,7 @@ function ChannelCardBody({
 	onDraftChange,
 	onReload,
 	onSetKey,
+	onSetSetting,
 }: {
 	client: WebClient;
 	channel: ChannelStatus;
@@ -421,6 +458,7 @@ function ChannelCardBody({
 	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
 	onReload: () => void;
 	onSetKey: (key: string) => void;
+	onSetSetting: (key: string, value: boolean) => void;
 }) {
 	return (
 		<div className="channel-card-body">
@@ -430,6 +468,7 @@ function ChannelCardBody({
 				<OwnerPairingSection client={client} connector={channel.id} />
 			)}
 			{channel.id === "discord" && channel.liveStatus === "online" && <DiscordBackfillSection client={client} />}
+			<ReplySettingsSection channel={channel} busy={busy} onSetSetting={onSetSetting} />
 			<CredentialsSection
 				allKeys={allKeys}
 				busy={busy}
@@ -468,6 +507,76 @@ function ChannelAlerts({ channel, actionError }: { channel: ChannelStatus; actio
 				</div>
 			)}
 		</>
+	);
+}
+
+function ReplySettingsSection({
+	channel,
+	busy,
+	onSetSetting,
+}: {
+	channel: ChannelStatus;
+	busy: string | null;
+	onSetSetting: (key: string, value: boolean) => void;
+}) {
+	if (channel.id !== "discord" && channel.id !== "telegram") return null;
+	const rows = channel.id === "discord"
+		? [
+			{ key: "DISCORD_AUTO_REPLY", label: "Auto reply", value: channel.autoReply ?? true },
+			{ key: "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS", label: "Only when addressed", value: channel.respondOnlyToMentions ?? false },
+		]
+		: [
+			{ key: "TELEGRAM_AUTO_REPLY", label: "Auto reply", value: channel.autoReply ?? true },
+		];
+	return (
+		<section className="channel-card-section">
+			<h4 className="channel-card-section-title">Reply settings</h4>
+			<div className="channel-setting-list">
+				{rows.map((row) => (
+					<ReplySettingRow
+						key={row.key}
+						busy={busy === row.key}
+						label={row.label}
+						settingKey={row.key}
+						value={row.value}
+						onSetSetting={onSetSetting}
+					/>
+				))}
+			</div>
+		</section>
+	);
+}
+
+function ReplySettingRow({
+	busy,
+	label,
+	settingKey,
+	value,
+	onSetSetting,
+}: {
+	busy: boolean;
+	label: string;
+	settingKey: string;
+	value: boolean;
+	onSetSetting: (key: string, value: boolean) => void;
+}) {
+	return (
+		<div className="channel-setting-row">
+			<div className="channel-setting-copy">
+				<span className="channel-setting-label">{label}</span>
+				<span className="hint">{settingKey}</span>
+			</div>
+			<button
+				type="button"
+				className={`channel-toggle ${value ? "on" : "off"}`}
+				disabled={busy}
+				onClick={() => onSetSetting(settingKey, !value)}
+				aria-label={`${value ? "Disable" : "Enable"} ${label}`}
+				title={`${value ? "Disable" : "Enable"} ${label}`}
+			>
+				<span className="channel-toggle-knob" />
+			</button>
+		</div>
 	);
 }
 

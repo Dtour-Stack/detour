@@ -10,6 +10,7 @@ import { ALL_PROVIDER_IDS, PROVIDER_ENV } from "../auth";
 import type { BackendOps, InstallableBackendId } from "../backend-ops";
 import type { ConfigService } from "../config-service";
 import type { ActivityService } from "../activity";
+import { xAutonomyRuntimeSettings } from "../activity/autonomy-service";
 import type { ChannelsService } from "../channels";
 import type { ChannelGatewayService, GatewayChannel, GatewayDirection, ListOptions as GatewayListOptions } from "../channels/gateway";
 import type { CronService } from "../cron-service";
@@ -53,6 +54,7 @@ import type {
 	BrowserCommand,
 	BrowserCommandInput,
 	BrowserCommandResult,
+	ActivityXAutonomyUpdate,
 } from "@detour/shared";
 
 const VERSION = "0.0.1";
@@ -138,6 +140,115 @@ function parseChroniclerConfig(raw: unknown): { ok: true; body: Partial<Chronicl
 			...(optionalNumber(body, "intervalMs") !== undefined ? { intervalMs: optionalNumber(body, "intervalMs") } : {}),
 			...(optionalBoolean(body, "includeWindowTitles") !== undefined ? { includeWindowTitles: optionalBoolean(body, "includeWindowTitles") } : {}),
 			...(optionalNumber(body, "maxWindowsPerScreen") !== undefined ? { maxWindowsPerScreen: optionalNumber(body, "maxWindowsPerScreen") } : {}),
+		},
+	};
+}
+
+type XAutonomyUpdateParseResult =
+	| { ok: true; update: ActivityXAutonomyUpdate }
+	| { ok: false; error: string };
+type XAutonomyFieldResult<T> =
+	| { ok: true; value?: T }
+	| { ok: false; error: string };
+type XAutonomyBooleanField =
+	| "enabled"
+	| "writeEnabled"
+	| "statusPostingEnabled"
+	| "discoveryEnabled"
+	| "proactiveEngagementEnabled"
+	| "followEnabled";
+type XAutonomyNumberField =
+	| "intervalMs"
+	| "statusIntervalMs"
+	| "discoveryIntervalMs"
+	| "maxRepliesPerTick"
+	| "maxDiscoveryPerTick";
+
+const X_AUTONOMY_BOOLEAN_FIELDS: XAutonomyBooleanField[] = [
+	"enabled",
+	"writeEnabled",
+	"statusPostingEnabled",
+	"discoveryEnabled",
+	"proactiveEngagementEnabled",
+	"followEnabled",
+];
+const X_AUTONOMY_NUMBER_FIELDS: Array<{ key: XAutonomyNumberField; min: number; max: number }> = [
+	{ key: "intervalMs", min: 30_000, max: 30 * 60_000 },
+	{ key: "statusIntervalMs", min: 15 * 60_000, max: 24 * 60 * 60_000 },
+	{ key: "discoveryIntervalMs", min: 5 * 60_000, max: 24 * 60 * 60_000 },
+	{ key: "maxRepliesPerTick", min: 1, max: 5 },
+	{ key: "maxDiscoveryPerTick", min: 0, max: 8 },
+];
+
+function readBooleanUpdate(bag: Record<string, unknown>, key: string): XAutonomyFieldResult<boolean> {
+	const value = bag[key];
+	if (value === undefined) return { ok: true };
+	if (typeof value !== "boolean") return { ok: false, error: `${key} must be boolean` };
+	return { ok: true, value };
+}
+
+function readNumberUpdate(
+	bag: Record<string, unknown>,
+	key: string,
+	min: number,
+	max: number,
+): XAutonomyFieldResult<number> {
+	const value = bag[key];
+	if (value === undefined) return { ok: true };
+	if (typeof value !== "number" || !Number.isFinite(value)) return { ok: false, error: `${key} must be a finite number` };
+	return { ok: true, value: Math.max(min, Math.min(max, Math.round(value))) };
+}
+
+function readBooleanUpdates(bag: Record<string, unknown>): XAutonomyFieldResult<Partial<Record<XAutonomyBooleanField, boolean>>> {
+	const values: Partial<Record<XAutonomyBooleanField, boolean>> = {};
+	for (const key of X_AUTONOMY_BOOLEAN_FIELDS) {
+		const parsed = readBooleanUpdate(bag, key);
+		if (!parsed.ok) return parsed;
+		if (parsed.value !== undefined) values[key] = parsed.value;
+	}
+	return { ok: true, value: values };
+}
+
+function readNumberUpdates(bag: Record<string, unknown>): XAutonomyFieldResult<Partial<Record<XAutonomyNumberField, number>>> {
+	const values: Partial<Record<XAutonomyNumberField, number>> = {};
+	for (const field of X_AUTONOMY_NUMBER_FIELDS) {
+		const parsed = readNumberUpdate(bag, field.key, field.min, field.max);
+		if (!parsed.ok) return parsed;
+		if (parsed.value !== undefined) values[field.key] = parsed.value;
+	}
+	return { ok: true, value: values };
+}
+
+function readDiscoveryQueriesUpdate(bag: Record<string, unknown>): XAutonomyFieldResult<string[]> {
+	if (bag.discoveryQueries !== undefined) {
+		if (!Array.isArray(bag.discoveryQueries)) return { ok: false, error: "discoveryQueries must be an array of strings" };
+		const queries: string[] = [];
+		for (const item of bag.discoveryQueries) {
+			if (typeof item !== "string") return { ok: false, error: "discoveryQueries must be an array of strings" };
+			const query = item.trim();
+			if (query.length > 0) queries.push(query);
+		}
+		return { ok: true, value: queries.slice(0, 12) };
+	}
+	return { ok: true };
+}
+
+function parseXAutonomyUpdate(body: unknown): XAutonomyUpdateParseResult {
+	const bag = recordValue(body);
+	if (!bag) return { ok: false, error: "body must be an object" };
+	const booleans = readBooleanUpdates(bag);
+	if (!booleans.ok) return booleans;
+	const numbers = readNumberUpdates(bag);
+	if (!numbers.ok) return numbers;
+	const discoveryQueries = readDiscoveryQueriesUpdate(bag);
+	if (!discoveryQueries.ok) return discoveryQueries;
+
+	return {
+		ok: true,
+		update: {
+			...booleans.value,
+			...numbers.value,
+			...(discoveryQueries.value !== undefined ? { discoveryQueries: discoveryQueries.value } : {}),
 		},
 	};
 }
@@ -2139,6 +2250,17 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			// --- Activity autonomy ---
 			if (req.method === "GET" && path === "/api/activity/autonomy") {
+				return json(await this.activity.autonomy.snapshot());
+			}
+			if (req.method === "POST" && path === "/api/activity/autonomy/x") {
+				const parsed = parseXAutonomyUpdate(await req.json());
+				if (!parsed.ok) return error(parsed.error, 400);
+				const v = await this.vault.vault();
+				for (const [key, value] of xAutonomyRuntimeSettings(parsed.update)) {
+					await v.set(key, value);
+				}
+				const applied = await this.activity.autonomy.applyXSettings(parsed.update);
+				pensieveAudit({ action: "autonomy.x.configure", success: applied, caller: "ui-activity", ts: Date.now() });
 				return json(await this.activity.autonomy.snapshot());
 			}
 			return null;

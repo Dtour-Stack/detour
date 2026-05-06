@@ -3,6 +3,7 @@ import type {
 	ActivityAutonomySnapshot,
 	ActivityAutonomyTask,
 	ActivityXAutonomyHandled,
+	ActivityXAutonomyUpdate,
 } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 import { usePoller } from "./usePoller";
@@ -257,12 +258,150 @@ function XMetrics({ x }: { x: ActivityAutonomySnapshot["x"] }) {
 			<Metric label="Last discovery" value={fmtTime(x.lastDiscoveryAt)} />
 			<Metric label="Last tweet" value={x.lastStatusTweetId ?? "-"} />
 			<Metric label="Handled" value={String(x.lastHandledCount)} />
+			<Metric label="Reply max" value={String(x.maxRepliesPerTick)} />
 			<Metric label="Discover max" value={String(x.maxDiscoveryPerTick)} />
 		</div>
 	);
 }
 
-function XAutonomySection({ data }: { data: ActivityAutonomySnapshot }) {
+type XDraft = {
+	intervalSeconds: number;
+	statusMinutes: number;
+	discoveryMinutes: number;
+	maxRepliesPerTick: number;
+	maxDiscoveryPerTick: number;
+	discoveryQueries: string;
+};
+
+function xDraftFrom(data: ActivityAutonomySnapshot["x"]): XDraft {
+	return {
+		intervalSeconds: Math.round(data.intervalMs / 1000),
+		statusMinutes: Math.round(data.statusIntervalMs / 60_000),
+		discoveryMinutes: Math.round(data.discoveryIntervalMs / 60_000),
+		maxRepliesPerTick: data.maxRepliesPerTick,
+		maxDiscoveryPerTick: data.maxDiscoveryPerTick,
+		discoveryQueries: data.discoveryQueries.join("\n"),
+	};
+}
+
+function parseQueries(value: string): string[] {
+	return value
+		.split(/[\n,]+/)
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0)
+		.slice(0, 12);
+}
+
+function XToggle({
+	label,
+	value,
+	disabled,
+	onChange,
+}: {
+	label: string;
+	value: boolean;
+	disabled: boolean;
+	onChange: () => void;
+}) {
+	return (
+		<div className="autonomy-toggle-row">
+			<span>{label}</span>
+			<button
+				type="button"
+				className={`channel-toggle ${value ? "on" : "off"}`}
+				disabled={disabled}
+				onClick={onChange}
+				aria-label={`${value ? "Disable" : "Enable"} ${label}`}
+				title={`${value ? "Disable" : "Enable"} ${label}`}
+			>
+				<span className="channel-toggle-knob" />
+			</button>
+		</div>
+	);
+}
+
+function XNumberInput({
+	label,
+	value,
+	min,
+	max,
+	step,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	min: number;
+	max: number;
+	step: number;
+	onChange: (value: number) => void;
+}) {
+	return (
+		<label className="autonomy-setting-field">
+			<span>{label}</span>
+			<input
+				type="number"
+				min={min}
+				max={max}
+				step={step}
+				value={value}
+				onChange={(e) => {
+					const n = Number(e.target.value);
+					if (Number.isFinite(n)) onChange(Math.max(min, Math.min(max, n)));
+				}}
+				className="pensieve-input"
+			/>
+		</label>
+	);
+}
+
+function XAutonomySection({
+	client,
+	data,
+	onChanged,
+}: {
+	client: WebClient;
+	data: ActivityAutonomySnapshot;
+	onChanged: () => void;
+}) {
+	const [draft, setDraft] = useState<XDraft>(() => xDraftFrom(data.x));
+	const [dirty, setDirty] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (!dirty) setDraft(xDraftFrom(data.x));
+	}, [data.x, dirty]);
+
+	const apply = useCallback(async (update: ActivityXAutonomyUpdate, resetDirty = false) => {
+		setSaving(true);
+		setError(null);
+		try {
+			await client.activitySetXAutonomy(update);
+			if (resetDirty) setDirty(false);
+			onChanged();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setSaving(false);
+		}
+	}, [client, onChanged]);
+
+	const saveDraft = useCallback(() => {
+		void apply({
+			intervalMs: draft.intervalSeconds * 1000,
+			statusIntervalMs: draft.statusMinutes * 60_000,
+			discoveryIntervalMs: draft.discoveryMinutes * 60_000,
+			maxRepliesPerTick: draft.maxRepliesPerTick,
+			maxDiscoveryPerTick: draft.maxDiscoveryPerTick,
+			discoveryQueries: parseQueries(draft.discoveryQueries),
+		}, true);
+	}, [apply, draft]);
+
+	const editDraft = useCallback((patch: Partial<XDraft>) => {
+		setDirty(true);
+		setDraft((current) => ({ ...current, ...patch }));
+	}, []);
+
 	return (
 		<section className="autonomy-section">
 			<div className="autonomy-section-head">
@@ -270,6 +409,36 @@ function XAutonomySection({ data }: { data: ActivityAutonomySnapshot }) {
 				<XBadges x={data.x} />
 			</div>
 			<XMetrics x={data.x} />
+			{error && <div className="banner error autonomy-inline-error">{error}</div>}
+			<div className="autonomy-toggle-grid">
+				<XToggle label="Autonomy" value={data.x.enabled} disabled={saving} onChange={() => void apply({ enabled: !data.x.enabled })} />
+				<XToggle label="Writes" value={data.x.writeEnabled} disabled={saving} onChange={() => void apply({ writeEnabled: !data.x.writeEnabled })} />
+				<XToggle label="Status posts" value={data.x.statusPostingEnabled} disabled={saving} onChange={() => void apply({ statusPostingEnabled: !data.x.statusPostingEnabled })} />
+				<XToggle label="Discovery" value={data.x.discoveryEnabled} disabled={saving} onChange={() => void apply({ discoveryEnabled: !data.x.discoveryEnabled })} />
+				<XToggle label="Proactive replies" value={data.x.proactiveEngagementEnabled} disabled={saving} onChange={() => void apply({ proactiveEngagementEnabled: !data.x.proactiveEngagementEnabled })} />
+				<XToggle label="Follows" value={data.x.followEnabled} disabled={saving} onChange={() => void apply({ followEnabled: !data.x.followEnabled })} />
+			</div>
+			<div className="autonomy-settings-grid">
+				<XNumberInput label="Notify seconds" min={30} max={1800} step={30} value={draft.intervalSeconds} onChange={(value) => editDraft({ intervalSeconds: value })} />
+				<XNumberInput label="Status minutes" min={15} max={1440} step={15} value={draft.statusMinutes} onChange={(value) => editDraft({ statusMinutes: value })} />
+				<XNumberInput label="Discovery minutes" min={5} max={1440} step={5} value={draft.discoveryMinutes} onChange={(value) => editDraft({ discoveryMinutes: value })} />
+				<XNumberInput label="Replies per tick" min={1} max={5} step={1} value={draft.maxRepliesPerTick} onChange={(value) => editDraft({ maxRepliesPerTick: value })} />
+				<XNumberInput label="Discover per tick" min={0} max={8} step={1} value={draft.maxDiscoveryPerTick} onChange={(value) => editDraft({ maxDiscoveryPerTick: value })} />
+			</div>
+			<label className="autonomy-setting-field">
+				<span>Discovery queries</span>
+				<textarea
+					className="pensieve-input autonomy-query-input"
+					value={draft.discoveryQueries}
+					onChange={(e) => editDraft({ discoveryQueries: e.target.value })}
+				/>
+			</label>
+			<div className="row" style={{ gap: 8 }}>
+				<button type="button" className="btn small" disabled={saving || !dirty} onClick={saveDraft}>
+					{saving ? "Saving..." : "Save X settings"}
+				</button>
+				{dirty && <button type="button" className="btn small ghost" disabled={saving} onClick={() => { setDraft(xDraftFrom(data.x)); setDirty(false); }}>Reset</button>}
+			</div>
 			{data.x.discoveryQueries.length > 0 && (
 				<div className="hint autonomy-query-list">queries: {data.x.discoveryQueries.join(", ")}</div>
 			)}
@@ -378,7 +547,7 @@ export function AutonomyPane({ client }: { client: WebClient }) {
 					onDraft={setDraftInterval}
 				/>
 				<WorkersSection tasks={data.tasks} />
-				<XAutonomySection data={data} />
+				<XAutonomySection client={client} data={data} onChanged={refresh} />
 				<ImprovementSection data={data} />
 			</div>
 		</div>

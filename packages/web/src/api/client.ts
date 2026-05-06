@@ -11,6 +11,7 @@ import type {
 	ActivityTrajectoryDetail,
 	ActivityTrajectoryExport,
 	ActivityTrajectoryListResult,
+	ActivityXAutonomyUpdate,
 	AgentCharacterConfig,
 	AgentConfig,
 	BackendStatus,
@@ -261,6 +262,9 @@ export class WebClient {
 	}
 	activityAutonomy(): Promise<ActivityAutonomySnapshot> {
 		return this.json("GET", "/api/activity/autonomy");
+	}
+	activitySetXAutonomy(update: ActivityXAutonomyUpdate): Promise<ActivityAutonomySnapshot> {
+		return this.json("POST", "/api/activity/autonomy/x", update);
 	}
 	activityPlugins(): Promise<ActivityPluginsSnapshot> {
 		return this.json("GET", "/api/activity/plugins");

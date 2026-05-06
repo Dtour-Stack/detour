@@ -681,6 +681,7 @@ export type ActivityXAutonomySnapshot = {
 	intervalMs: number;
 	statusIntervalMs: number;
 	discoveryIntervalMs: number;
+	maxRepliesPerTick: number;
 	maxDiscoveryPerTick: number;
 	discoveryQueries: string[];
 	lastRunAt?: number;
@@ -689,6 +690,21 @@ export type ActivityXAutonomySnapshot = {
 	lastStatusTweetId?: string;
 	lastHandledCount: number;
 	lastHandled: ActivityXAutonomyHandled[];
+};
+
+export type ActivityXAutonomyUpdate = {
+	enabled?: boolean;
+	writeEnabled?: boolean;
+	statusPostingEnabled?: boolean;
+	discoveryEnabled?: boolean;
+	proactiveEngagementEnabled?: boolean;
+	followEnabled?: boolean;
+	intervalMs?: number;
+	statusIntervalMs?: number;
+	discoveryIntervalMs?: number;
+	maxRepliesPerTick?: number;
+	maxDiscoveryPerTick?: number;
+	discoveryQueries?: string[];
 };
 
 export type ActivityImprovementSnapshot = {

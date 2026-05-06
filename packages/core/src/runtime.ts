@@ -5,6 +5,8 @@ import {
 	type Character,
 	type Content,
 	createCharacter,
+	type ModelParamsMap,
+	type ModelResultMap,
 	type Memory,
 	type Plugin,
 	provisionAgent,
@@ -38,6 +40,8 @@ import {
 import { cronToolsPlugin } from "@detour/plugin-cron-tools";
 import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { makeOwnerBindPlugin } from "./owner-bind";
+import { discordMentionAliasPlugin, installDiscordMentionAliasPatch } from "./discord-mention-alias-plugin";
+import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +96,23 @@ const WORLD_ID = stringToUuid("tray-app:default-world");
 // IGNORE, which is why chat sends were producing trajectories with 0 LLM
 // calls while the inbox/cron path (which uses a stable system entity) worked.
 const USER_ID = stringToUuid("tray-app:default-user");
+const X_RUNTIME_SETTING_KEYS = [
+	"X_AUTH_TOKEN",
+	"X_CT0",
+	"X_USER_AGENT",
+	"X_AUTONOMY_ENABLED",
+	"X_AUTONOMY_WRITE",
+	"X_AUTONOMY_POST_STATUS_ENABLED",
+	"X_AUTONOMY_DISCOVERY_ENABLED",
+	"X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED",
+	"X_AUTONOMY_FOLLOW_ENABLED",
+	"X_AUTONOMY_INTERVAL_MS",
+	"X_AUTONOMY_STATUS_INTERVAL_MS",
+	"X_AUTONOMY_DISCOVERY_INTERVAL_MS",
+	"X_AUTONOMY_MAX_REPLIES_PER_TICK",
+	"X_AUTONOMY_MAX_DISCOVERY_PER_TICK",
+	"X_AUTONOMY_DISCOVERY_QUERIES",
+] as const;
 
 type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
@@ -215,7 +236,22 @@ type ProviderAttempt = {
 	prepare: () => Promise<void> | void;
 };
 
+type BuildAttemptOptions = {
+	channels: boolean;
+	modelFailover: boolean;
+};
+
 const DEFAULT_PROVIDER_PRIORITY: ProviderId[] = ["openai", "anthropic", "openrouter"];
+const MODEL_FAILOVER_TYPES = new Set<string>([
+	"TEXT_NANO",
+	"TEXT_SMALL",
+	"TEXT_MEDIUM",
+	"TEXT_LARGE",
+	"TEXT_MEGA",
+	"RESPONSE_HANDLER",
+	"ACTION_PLANNER",
+	"TEXT_COMPLETION",
+]);
 
 type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
 
@@ -596,11 +632,16 @@ export class RuntimeService {
 		throw new Error(`All configured LLM providers failed: ${errors.join(" | ")}`);
 	}
 
-	private async buildAttempt(attempt: ProviderAttempt): Promise<RuntimeState> {
+	private async buildAttempt(
+		attempt: ProviderAttempt,
+		options: BuildAttemptOptions = { channels: true, modelFailover: true },
+	): Promise<RuntimeState> {
 		await attempt.prepare();
 		const llmPlugin = await PROVIDER_PLUGINS[attempt.runtimeProvider]();
 		const character = await this.buildCharacter();
-		const channelResolved = await this.resolveChannelPlugins();
+		const channelResolved = options.channels
+			? await this.resolveChannelPlugins()
+			: { plugins: [], settings: {} as Record<string, string> };
 		const settings = await this.buildRuntimeSettings(channelResolved.settings);
 		const runtime = new AgentRuntime({
 			character,
@@ -610,20 +651,27 @@ export class RuntimeService {
 		});
 		try {
 			await runtime.initialize();
-			await this.waitForOwnerBind(runtime);
-			await this.registerChannelPlugins(runtime, channelResolved.plugins);
-			this.wirePairingCommands(runtime);
+			installDiscordMentionAliasPatch(runtime);
+			installDpeFallbackPatch(runtime);
+			if (options.modelFailover) this.installModelFailover(runtime, attempt.id);
+			if (options.channels) {
+				await this.waitForOwnerBind(runtime);
+				await this.registerChannelPlugins(runtime, channelResolved.plugins);
+				this.wirePairingCommands(runtime);
+			}
 			await this.provisionRuntime(runtime);
-			this.startTaskServiceTimer(runtime);
-			await runtime.ensureConnection({
-				entityId: USER_ID,
-				roomId: ROOM_ID,
-				worldId: WORLD_ID,
-				userName: "User",
-				source: "tray-app",
-				channelId: "chat",
-				type: ChannelType.DM,
-			});
+			if (options.channels) {
+				this.startTaskServiceTimer(runtime);
+				await runtime.ensureConnection({
+					entityId: USER_ID,
+					roomId: ROOM_ID,
+					worldId: WORLD_ID,
+					userName: "User",
+					source: "tray-app",
+					channelId: "chat",
+					type: ChannelType.DM,
+				});
+			}
 
 			return {
 				runtime,
@@ -635,6 +683,70 @@ export class RuntimeService {
 			await runtime.stop().catch(() => {});
 			throw err;
 		}
+	}
+
+	private installModelFailover(runtime: AgentRuntime, currentAttemptId: string): void {
+		const original = runtime.useModel.bind(runtime);
+		runtime.useModel = (async <
+			T extends keyof ModelParamsMap,
+			R = ModelResultMap[T],
+		>(
+			modelType: T,
+			params: ModelParamsMap[T],
+			provider?: string,
+		): Promise<R> => {
+			try {
+				return await original(modelType, params, provider);
+			} catch (err) {
+				if (provider || !MODEL_FAILOVER_TYPES.has(String(modelType))) throw err;
+				const error = err instanceof Error ? err : new Error(String(err));
+				runtime.logger.warn(
+					{
+						src: "runtime",
+						attemptId: currentAttemptId,
+						modelType: String(modelType),
+						error: error.message,
+					},
+					"Model provider failed; trying configured fallback",
+				);
+				return await this.useFallbackModel<T, R>(
+					new Set([currentAttemptId]),
+					modelType,
+					params,
+					error,
+				);
+			}
+		}) as AgentRuntime["useModel"];
+	}
+
+	private async useFallbackModel<
+		T extends keyof ModelParamsMap,
+		R = ModelResultMap[T],
+	>(
+		failedAttemptIds: Set<string>,
+		modelType: T,
+		params: ModelParamsMap[T],
+		firstError: Error,
+	): Promise<R> {
+		const errors = [firstError.message];
+		const attempts = await this.providerAttempts();
+		for (const attempt of attempts) {
+			if (failedAttemptIds.has(attempt.id)) continue;
+			let state: RuntimeState | null = null;
+			try {
+				state = await this.buildAttempt(attempt, {
+					channels: false,
+					modelFailover: false,
+				});
+				return await state.runtime.useModel<T, R>(modelType, params);
+			} catch (err) {
+				failedAttemptIds.add(attempt.id);
+				errors.push(`${attempt.label}: ${err instanceof Error ? err.message : String(err)}`);
+			} finally {
+				if (state) await state.runtime.stop().catch(() => {});
+			}
+		}
+		throw new Error(`All configured LLM providers failed: ${errors.join(" | ")}`);
 	}
 
 	private async buildCharacter(): Promise<Character> {
@@ -671,7 +783,7 @@ export class RuntimeService {
 		};
 		settings.TELEGRAM_AUTO_REPLY ??= "true";
 		settings.DISCORD_AUTO_REPLY ??= "true";
-		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "true";
+		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "false";
 		this.loadEmbeddingSettings(settings);
 		await this.loadXSettings(settings);
 		return settings;
@@ -690,7 +802,7 @@ export class RuntimeService {
 	private async loadXSettings(settings: Record<string, string>): Promise<void> {
 		try {
 			const v = await this.vault.vault();
-			for (const key of ["X_AUTH_TOKEN", "X_CT0", "X_USER_AGENT"]) {
+			for (const key of X_RUNTIME_SETTING_KEYS) {
 				if (await v.has(key)) {
 					const val = await v.get(key);
 					if (typeof val === "string" && val.length > 0) {
@@ -713,6 +825,8 @@ export class RuntimeService {
 			vaultToolsPlugin,
 			pensieveToolsPlugin,
 			codexPetsPlugin,
+			discordMentionAliasPlugin,
+			dpeFallbackPlugin,
 			xTweetsPlugin,
 			cronToolsPlugin,
 			...(this.ownerBind ? [makeOwnerBindPlugin(this.ownerBind)] : []),
