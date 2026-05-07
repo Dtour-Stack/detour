@@ -1184,6 +1184,13 @@ export class ApiServer {
 	private browserCommands: BrowserCommand[] = [];
 	private browserResults = new Map<string, BrowserCommandResult>();
 	private agentStreamTimers = new Map<string, ReturnType<typeof setInterval>>();
+	private activeChatTurns = new Map<
+		string,
+		{
+			traceId: string;
+			cancel: () => void;
+		}
+	>();
 	private browserWaiters = new Map<
 		string,
 		{
@@ -1660,6 +1667,10 @@ export class ApiServer {
 						});
 						return;
 					}
+					if (msg.kind === "chat:cancel") {
+						this.activeChatTurns.get(msg.convId)?.cancel();
+						return;
+					}
 					if (msg.kind === "chat:send") {
 						const { convId, text } = msg;
 						// One trace id per chat send. Stamps every log line emitted
@@ -1670,19 +1681,36 @@ export class ApiServer {
 						const traceId = newTraceId();
 						let completeFired = false;
 						let idleTimer: ReturnType<typeof setTimeout> | null = null;
+						let cancelled = false;
+						const clearActive = () => {
+							const active = this.activeChatTurns.get(convId);
+							if (active?.traceId === traceId) this.activeChatTurns.delete(convId);
+						};
 						const fireComplete = () => {
-							if (completeFired) return;
+							if (cancelled || completeFired) return;
 							completeFired = true;
 							if (idleTimer) clearTimeout(idleTimer);
+							clearActive();
+							this.broadcast({ kind: "chat:complete", convId, traceId });
+						};
+						const cancel = () => {
+							if (cancelled || completeFired) return;
+							cancelled = true;
+							completeFired = true;
+							if (idleTimer) clearTimeout(idleTimer);
+							clearActive();
 							this.broadcast({ kind: "chat:complete", convId, traceId });
 						};
 						const armIdle = () => {
 							if (idleTimer) clearTimeout(idleTimer);
 							idleTimer = setTimeout(fireComplete, 1500);
 						};
+						this.activeChatTurns.get(convId)?.cancel();
+						this.activeChatTurns.set(convId, { traceId, cancel });
 						await traceScope(traceId, async () => {
 							try {
 								await this.runtime.sendMessage(text, (delta) => {
+									if (cancelled) return;
 									this.broadcast({
 										kind: "chat:delta",
 										convId,
@@ -1693,7 +1721,9 @@ export class ApiServer {
 								});
 								fireComplete();
 							} catch (err) {
+								if (cancelled) return;
 								if (idleTimer) clearTimeout(idleTimer);
+								clearActive();
 								const message =
 									err instanceof Error ? err.message : String(err);
 								this.broadcast({

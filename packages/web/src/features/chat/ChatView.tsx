@@ -125,8 +125,33 @@ export function ChatView({
 		client.send({ kind: "chat:send", convId: CONV_ID, text: text.trim() });
 	}
 
+	function stopMessage() {
+		if (!pending) return;
+		const stoppedId = assistantId.current;
+		client.send({ kind: "chat:cancel", convId: CONV_ID });
+		setBubbles((bs) =>
+			bs.map((b) =>
+				b.id === stoppedId && b.thinking
+					? { ...b, thinking: false, text: b.text || "(stopped)" }
+					: b,
+			),
+		);
+		assistantId.current = null;
+		setPending(false);
+	}
+
 	function insertSlash(command: SlashCommand) {
 		setDraft(command.insert);
+	}
+
+	function selectedSlash(): SlashCommand | null {
+		return slashMatches[slashIndex] ?? slashMatches[0] ?? null;
+	}
+
+	function shouldInsertSlash(command: SlashCommand) {
+		const trimmed = draft.trim();
+		if (!/^\/\S*$/.test(trimmed)) return false;
+		return trimmed !== command.name || command.insert !== command.name;
 	}
 
 	return (
@@ -171,40 +196,53 @@ export function ChatView({
 						))}
 					</div>
 				)}
-				<textarea
-					placeholder={activeProvider ? "Message Detour…" : "Configure a provider in Configuration to start"}
-					disabled={!activeProvider || pending}
-					value={draft}
-					rows={1}
-					onChange={(e) => setDraft(e.target.value)}
-					onKeyDown={(e) => {
-						if (slashOpen && e.key === "ArrowDown") {
-							e.preventDefault();
-							setSlashIndex((index) => (index + 1) % slashMatches.length);
-							return;
-						}
-						if (slashOpen && e.key === "ArrowUp") {
-							e.preventDefault();
-							setSlashIndex((index) => (index + slashMatches.length - 1) % slashMatches.length);
-							return;
-						}
-						if (slashOpen && e.key === "Tab") {
-							e.preventDefault();
-							insertSlash(slashMatches[slashIndex] ?? slashMatches[0]);
-							return;
-						}
-						if (e.key === "Enter" && !e.shiftKey) {
-							e.preventDefault();
-							if (slashOpen && draft.trim() === "/") {
-								insertSlash(slashMatches[slashIndex] ?? slashMatches[0]);
+				<div className="composer-row">
+					<textarea
+						placeholder={activeProvider ? "Message Detour…" : "Configure a provider in Configuration to start"}
+						disabled={!activeProvider || pending}
+						value={draft}
+						rows={1}
+						onChange={(e) => setDraft(e.target.value)}
+						onKeyDown={(e) => {
+							if (slashOpen && e.key === "ArrowDown") {
+								e.preventDefault();
+								setSlashIndex((index) => (index + 1) % slashMatches.length);
 								return;
 							}
-							const text = draft;
-							setDraft("");
-							send(text);
-						}
-					}}
-				/>
+							if (slashOpen && e.key === "ArrowUp") {
+								e.preventDefault();
+								setSlashIndex((index) => (index + slashMatches.length - 1) % slashMatches.length);
+								return;
+							}
+							if (slashOpen && (e.key === "Tab" || e.key === "ArrowRight")) {
+								e.preventDefault();
+								const command = selectedSlash();
+								if (command) insertSlash(command);
+								return;
+							}
+							if (e.key === "Enter" && !e.shiftKey) {
+								e.preventDefault();
+								const command = slashOpen ? selectedSlash() : null;
+								if (command && shouldInsertSlash(command)) {
+									insertSlash(command);
+									return;
+								}
+								const text = draft;
+								setDraft("");
+								send(text);
+							}
+						}}
+					/>
+					{pending && (
+						<button
+							type="button"
+							className="btn small ghost composer-stop"
+							onClick={stopMessage}
+						>
+							Stop
+						</button>
+					)}
+				</div>
 			</div>
 		</div>
 	);

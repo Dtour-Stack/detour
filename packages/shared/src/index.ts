@@ -152,6 +152,7 @@ export type BrowserCommandResult = {
 
 export type WsClientMessage =
 	| { kind: "chat:send"; convId: string; text: string }
+	| { kind: "chat:cancel"; convId: string }
 	| {
 			kind: "log:webview";
 			level: "trace" | "debug" | "info" | "warn" | "error";
