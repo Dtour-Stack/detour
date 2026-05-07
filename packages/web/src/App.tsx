@@ -32,20 +32,6 @@ const PROVIDER_LABELS: Record<string, string> = {
 	anthropic: "Claude",
 };
 
-const WORKBENCH_HREF = "/agents/#agents";
-const BOOT_STATS = [
-	["Runtime", "starting"],
-	["Workspace", "standing by"],
-	["Agents", "waiting"],
-	["Streams", "local"],
-];
-const BOOT_ACTIVITY = [
-	"Core API handshake pending",
-	"Workspace stream ready for logs",
-	"Preview tab waiting for a project",
-	"Terminal attached when agent starts",
-];
-
 export function App() {
 	const client = useMemo(() => new WebClient(), []);
 	const [connected, setConnected] = useState(false);
@@ -162,61 +148,7 @@ export function App() {
 
 	if (!connected) {
 		return (
-			<main className="public-landing">
-				<section className="public-workbench-shell" aria-label="Detour agent workbench">
-					<aside className="public-workbench-rail">
-						<div className="public-landing-kicker">Detour</div>
-						<h1>Agent workbench</h1>
-						<p>Live terminal, project preview, files, and activity once the local agent is online.</p>
-						<a className="btn public-landing-cta" href={WORKBENCH_HREF}>Open agents</a>
-					</aside>
-
-					<div className="public-workbench-core">
-						<div className="public-workbench-tabs">
-							<span className="active">Terminal</span>
-							<span>Preview</span>
-							<span>Code</span>
-						</div>
-						<div className="public-workbench-stage">
-							<div className="public-terminal">
-								<div>$ detour workspace status</div>
-								<div>connecting to local agent api on 127.0.0.1:2138</div>
-								<div>waiting for runtime, providers, channels, and workspace agents</div>
-								<div className="public-terminal-cursor">ready when Detour is</div>
-							</div>
-							<div className="public-preview">
-								<div className="public-preview-window">
-									<div className="public-preview-grid" />
-								</div>
-								<span>Preview mounts here after a project exposes one.</span>
-							</div>
-						</div>
-					</div>
-
-					<aside className="public-workbench-side">
-						<div className="public-widget-grid">
-							{BOOT_STATS.map(([label, value]) => (
-								<div className="public-widget" key={label}>
-									<span>{label}</span>
-									<strong>{value}</strong>
-								</div>
-							))}
-						</div>
-						<div className="public-activity-card">
-							<div className="public-activity-title">Activity</div>
-							{BOOT_ACTIVITY.map((item) => (
-								<div className="public-activity-row" key={item}>
-									<span />
-									{item}
-								</div>
-							))}
-						</div>
-					</aside>
-				</section>
-				<div className="public-landing-status">
-					Agent backend unavailable from this browser. Start Detour locally to populate the live workspace.
-				</div>
-			</main>
+			<div style={{ padding: 40, color: "var(--fg-muted)" }}>Connecting…</div>
 		);
 	}
 
@@ -274,13 +206,6 @@ export function App() {
 					)}
 				</div>
 				<div className="popup-actions" style={{ WebkitAppRegion: "no-drag" } as any}>
-					<a
-						className="link workbench-link"
-						href={WORKBENCH_HREF}
-						title="Open agent workbench"
-					>
-						Agents
-					</a>
 					<div className="appearance-wrap" ref={appearanceRef}>
 						<button
 							type="button"

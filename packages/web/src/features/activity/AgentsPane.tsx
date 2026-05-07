@@ -21,6 +21,18 @@ type AgentEndpointConfig = {
 };
 
 const DEFAULT_LOCAL_AGENT_API_BASE = "http://127.0.0.1:2138";
+const BOOT_STATS = [
+	["Runtime", "starting"],
+	["Workspace", "standing by"],
+	["Agents", "waiting"],
+	["Streams", "local"],
+] as const;
+const BOOT_ACTIVITY = [
+	"Core API handshake pending",
+	"Workspace stream ready for logs",
+	"Preview tab waiting for a project",
+	"Terminal attached when agent starts",
+];
 
 function fmtTime(ts?: number): string {
 	if (!ts) return "-";
@@ -197,6 +209,8 @@ export function AgentsPane({
 		setPanel(selected.status === "completed" && previewUrl ? "preview" : "terminal");
 	}, [previewUrl, selected?.id]);
 
+	if (standalone && error) return <PublicAgentsWorkbench status={error} />;
+	if (standalone && !agentData && !projectData) return <PublicAgentsWorkbench />;
 	if (error) return <div className="banner error">{error}</div>;
 
 	return (
@@ -351,6 +365,65 @@ export function AgentsPane({
 				</div>
 			</main>
 		</div>
+	);
+}
+
+function PublicAgentsWorkbench({ status }: { status?: string }) {
+	return (
+		<main className="public-landing">
+			<section className="public-workbench-shell" aria-label="Detour agent workbench">
+				<aside className="public-workbench-rail">
+					<div className="public-landing-kicker">Detour</div>
+					<h1>Agent workbench</h1>
+					<p>Live terminal, project preview, files, and activity once the local agent is online.</p>
+				</aside>
+
+				<div className="public-workbench-core">
+					<div className="public-workbench-tabs">
+						<span className="active">Terminal</span>
+						<span>Preview</span>
+						<span>Code</span>
+					</div>
+					<div className="public-workbench-stage">
+						<div className="public-terminal">
+							<div>$ detour workspace status</div>
+							<div>connecting to local agent api on 127.0.0.1:2138</div>
+							<div>waiting for runtime, providers, channels, and workspace agents</div>
+							<div className="public-terminal-cursor">ready when Detour is</div>
+						</div>
+						<div className="public-preview">
+							<div className="public-preview-window">
+								<div className="public-preview-grid" />
+							</div>
+							<span>Preview mounts here after a project exposes one.</span>
+						</div>
+					</div>
+				</div>
+
+				<aside className="public-workbench-side">
+					<div className="public-widget-grid">
+						{BOOT_STATS.map(([label, value]) => (
+							<div className="public-widget" key={label}>
+								<span>{label}</span>
+								<strong>{value}</strong>
+							</div>
+						))}
+					</div>
+					<div className="public-activity-card">
+						<div className="public-activity-title">Activity</div>
+						{BOOT_ACTIVITY.map((item) => (
+							<div className="public-activity-row" key={item}>
+								<span />
+								{item}
+							</div>
+						))}
+					</div>
+				</aside>
+			</section>
+			<div className="public-landing-status">
+				{status ?? "Agent backend unavailable from this browser. Start Detour locally to populate the live workspace."}
+			</div>
+		</main>
 	);
 }
 

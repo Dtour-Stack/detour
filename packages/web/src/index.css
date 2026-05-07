@@ -1391,19 +1391,6 @@ label { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 
 }
 .icon-btn:hover { background: var(--border); color: var(--fg); }
 
-.workbench-link {
-	min-height: 30px;
-	display: inline-flex;
-	align-items: center;
-	padding: 0 8px;
-	border-radius: var(--radius-sm);
-}
-
-.workbench-link:hover {
-	background: var(--border);
-	text-decoration: none;
-}
-
 .public-landing {
 	min-height: 100vh;
 	display: flex;
@@ -1445,13 +1432,6 @@ label { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 
 	color: #9aa39c;
 	font-size: 14px;
 	line-height: 1.5;
-}
-
-.public-landing-cta {
-	min-height: 42px;
-	display: inline-flex;
-	align-items: center;
-	text-decoration: none;
 }
 
 .public-workbench-rail,
