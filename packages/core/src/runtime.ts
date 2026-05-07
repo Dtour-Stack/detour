@@ -41,6 +41,7 @@ import { cronToolsPlugin } from "@detour/plugin-cron-tools";
 import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
+import { discordContextPlugin } from "./discord-context-provider";
 import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
 import { runDiscordCatchUp } from "./discord-catchup";
 import { existsSync, readFileSync } from "node:fs";
@@ -829,6 +830,7 @@ export class RuntimeService {
 			pensieveToolsPlugin,
 			codexPetsPlugin,
 			discordMentionAliasPlugin,
+			discordContextPlugin,
 			dpeFallbackPlugin,
 			xTweetsPlugin,
 			cronToolsPlugin,

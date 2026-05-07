@@ -14,6 +14,7 @@ import {
 	generatePlainTextReply,
 	runWithPlannerFallbackContext,
 } from "./dpe-fallback-plugin";
+import { discordContextForMessage } from "./discord-context-provider";
 
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
@@ -236,16 +237,14 @@ async function xNotificationContext(runtime: IAgentRuntime, conversation: string
 	}
 }
 
-async function enrichFallbackConversation(runtime: IAgentRuntime, conversation: string): Promise<string> {
+async function enrichFallbackConversation(runtime: IAgentRuntime, conversation: string, message?: Memory): Promise<string> {
 	const context = await xNotificationContext(runtime, conversation);
-	if (!context) return conversation;
+	const discordContext = message ? await discordContextForMessage(runtime, message) : "";
 	return [
 		conversation,
-		"",
-		context,
-		"",
-		"If the latest Discord message asks about X notifications, answer from the X notification context above.",
-	].join("\n");
+		...(discordContext ? ["", discordContext] : []),
+		...(context ? ["", context, "", "If the latest Discord message asks about X notifications, answer from the X notification context above."] : []),
+	].filter((part) => part.length > 0).join("\n");
 }
 
 function rawDiscordText(message: DiscordMessageLike): string {
@@ -310,7 +309,23 @@ async function rawFallbackConversation(
 				"Reply to the latest user message. Use prior turns when they clarify what the user means.",
 			].join("\n")
 		: "";
-	return enrichFallbackConversation(runtime, conversation);
+	return enrichFallbackConversation(runtime, conversation, rawDiscordMemory(runtime, message));
+}
+
+function rawDiscordMemory(runtime: IAgentRuntime, message: DiscordMessageLike): Memory {
+	const roomSeed = stringId(message.channel?.id) ?? "discord:unknown-room";
+	const entitySeed = stringId(message.author?.id) ?? "discord:unknown-author";
+	return {
+		id: createUniqueUuid(runtime, stringId(message.id) ?? `discord:raw:${Date.now()}`),
+		entityId: createUniqueUuid(runtime, `discord:user:${entitySeed}`),
+		agentId: runtime.agentId,
+		roomId: createUniqueUuid(runtime, roomSeed),
+		content: {
+			text: rawDiscordText(message),
+			source: "discord",
+		},
+		createdAt: message.createdTimestamp ?? Date.now(),
+	};
 }
 
 function readPositiveMs(runtime: IAgentRuntime, key: string, fallback: number): number {
@@ -426,7 +441,7 @@ async function emitDiscordFallbackReply(
 	reason: string,
 ): Promise<{ content: Content; memories: Memory[] } | null> {
 	const startedAt = Date.now();
-	const conversation = await enrichFallbackConversation(runtime, fallbackConversation(message));
+	const conversation = await enrichFallbackConversation(runtime, fallbackConversation(message), message);
 	const generated = await withTimeout(
 		generatePlainTextReply(
 			runtime,

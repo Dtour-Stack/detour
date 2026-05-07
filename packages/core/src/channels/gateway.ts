@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const RING_BUFFER_CAP = 2000;
+const PERSISTED_LIST_CAP = 5000;
 
 export type GatewayDirection = "in" | "out" | "deleted" | "interaction";
 export type GatewayChannel = "discord" | "telegram" | "imessage" | "chat" | "unknown";
@@ -258,6 +259,21 @@ function relationshipTags(channel: GatewayChannel): string[] {
 
 function mergeTags(a: string[] | undefined, b: string[]): string[] {
 	return Array.from(new Set([...(a ?? []), ...b]));
+}
+
+function isGatewayMessage(value: unknown): value is GatewayMessage {
+	const item = asRecord(value);
+	return Boolean(
+		item &&
+		typeof item.id === "string" &&
+		typeof item.time === "number" &&
+		typeof item.direction === "string" &&
+		typeof item.channel === "string" &&
+		typeof item.source === "string" &&
+		typeof item.roomId === "string" &&
+		typeof item.entityId === "string" &&
+		typeof item.text === "string",
+	);
 }
 
 export class ChannelGatewayService {
@@ -528,7 +544,11 @@ export class ChannelGatewayService {
 	list(opts: ListOptions = {}): { messages: GatewayMessage[]; total: number } {
 		const limit = Math.max(1, Math.min(opts.limit ?? 200, 2000));
 		const since = opts.since ?? 0;
-		const filtered = this.buffer.filter((m) => {
+		const byId = new Map<string, GatewayMessage>();
+		for (const entry of this.readPersistedEntries()) byId.set(entry.id, entry);
+		for (const entry of this.buffer) byId.set(entry.id, entry);
+		const entries = [...byId.values()].sort((a, b) => a.time - b.time);
+		const filtered = entries.filter((m) => {
 			if (m.time < since) return false;
 			if (opts.channel && m.channel !== opts.channel) return false;
 			if (opts.direction && m.direction !== opts.direction) return false;
@@ -539,6 +559,27 @@ export class ChannelGatewayService {
 		});
 		const sliced = filtered.slice(-limit);
 		return { messages: sliced, total: filtered.length };
+	}
+
+	private readPersistedEntries(): GatewayMessage[] {
+		if (!existsSync(this.logPath)) return [];
+		try {
+			const lines = readFileSync(this.logPath, "utf8").trim().split("\n").slice(-PERSISTED_LIST_CAP);
+			const out: GatewayMessage[] = [];
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				try {
+					const parsed = JSON.parse(line) as unknown;
+					if (isGatewayMessage(parsed)) out.push(parsed);
+				} catch {
+					continue;
+				}
+			}
+			return out;
+		} catch (err) {
+			logger.debug({ src: "channels:gateway", err: err instanceof Error ? err.message : err }, "persisted list read failed");
+			return [];
+		}
 	}
 
 	identityCandidates(): IdentityCandidate[] {

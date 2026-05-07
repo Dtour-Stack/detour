@@ -39,9 +39,27 @@ function canUsePlainReply(args: DynamicPromptArgs): boolean {
 
 export function conversationText(state: State | undefined): string {
 	const recent = state?.values?.recentMessages;
-	if (typeof recent === "string" && recent.trim().length > 0) return recent;
-	if (typeof state?.text === "string" && state.text.trim().length > 0) return state.text;
-	return "";
+	const base = typeof recent === "string" && recent.trim().length > 0
+		? recent
+		: typeof state?.text === "string" && state.text.trim().length > 0
+			? state.text
+			: "";
+	const discordContext = providerText(state, "DISCORD_CONTEXT");
+	return [base, discordContext].filter((text) => text.trim().length > 0).join("\n\n");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: null;
+}
+
+function providerText(state: State | undefined, name: string): string {
+	const data = asRecord(state?.data);
+	const providers = asRecord(data?.providers);
+	const provider = asRecord(providers?.[name]);
+	const text = provider?.text;
+	return typeof text === "string" ? text : "";
 }
 
 function cleanText(raw: string): string {
