@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Detour — Agent Workbench</title>
+<style>
+  :root {
+    --bg: #0a0b0e;
+    --surface: #111318;
+    --surface2: #1a1d24;
+    --border: #252830;
+    --border2: #2e3340;
+    --text: #e8eaf0;
+    --text-muted: #6b7280;
+    --text-dim: #9ca3af;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --accent-glow: rgba(99,102,241,0.15);
+    --green: #22c55e;
+    --green-dim: rgba(34,197,94,0.1);
+    --amber: #f59e0b;
+    --amber-dim: rgba(245,158,11,0.1);
+    --blue: #3b82f6;
+    --blue-dim: rgba(59,130,246,0.1);
+    --pink: #ec4899;
+    --cyan: #06b6d4;
+    --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── Layout ─── */
+  .page { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  /* ─── Nav ─── */
+  nav {
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(16px);
+    background: rgba(10,11,14,0.85);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .nav-inner {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 56px; max-width: 1180px; margin: 0 auto; padding: 0 24px;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 18px; letter-spacing: -0.3px;
+    text-decoration: none; color: var(--text);
+  }
+  .logo-mark {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, var(--accent), var(--pink));
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 800; color: #fff;
+  }
+  .nav-links { display: flex; align-items: center; gap: 6px; }
+  .nav-link {
+    font-size: 13px; color: var(--text-muted); text-decoration: none;
+    padding: 5px 12px; border-radius: 6px; transition: color .15s, background .15s;
+  }
+  .nav-link:hover { color: var(--text); background: var(--surface); }
+  .nav-cta {
+    font-size: 13px; font-weight: 600; color: #fff; text-decoration: none;
+    padding: 6px 14px; border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent), #7c3aed);
+    transition: opacity .15s, transform .1s;
+  }
+  .nav-cta:hover { opacity: .9; transform: translateY(-1px); }
+
+  /* ─── Hero ─── */
+  .hero {
+    padding: 80px 0 56px;
+    text-align: center;
+    position: relative;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 900px 500px at 50% 0%, rgba(99,102,241,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: 100px; padding: 4px 14px 4px 8px;
+    font-size: 12px; font-weight: 500; color: var(--text-dim);
+    margin-bottom: 24px;
+  }
+  .badge-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-dim);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%,100% { box-shadow: 0 0 0 3px var(--green-dim); }
+    50% { box-shadow: 0 0 0 5px var(--green-dim); }
+  }
+  .hero h1 {
+    font-size: clamp(36px, 6vw, 60px);
+    font-weight: 800; letter-spacing: -1.5px; line-height: 1.1;
+    margin-bottom: 20px;
+    background: linear-gradient(160deg, #fff 30%, #a5b4fc 80%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-sub {
+    font-size: 18px; color: var(--text-dim); max-width: 540px; margin: 0 auto 36px;
+    line-height: 1.7;
+  }
+  .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn-primary {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: linear-gradient(135deg, var(--accent), #7c3aed);
+    color: #fff; font-weight: 600; font-size: 15px;
+    padding: 11px 22px; border-radius: var(--radius);
+    text-decoration: none; transition: transform .1s, box-shadow .1s;
+    box-shadow: 0 0 0 0 rgba(99,102,241,0);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99,102,241,0.35); }
+  .btn-secondary {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border2);
+    color: var(--text); font-weight: 500; font-size: 15px;
+    padding: 11px 22px; border-radius: var(--radius);
+    text-decoration: none; transition: background .15s, border-color .15s;
+  }
+  .btn-secondary:hover { background: var(--surface2); border-color: var(--border2); }
+
+  /* ─── Workbench Mockup ─── */
+  .workbench-wrap {
+    margin: 52px 0 72px;
+    position: relative;
+  }
+  .workbench-wrap::before {
+    content: '';
+    position: absolute; inset: -40px -60px;
+    background: radial-gradient(ellipse 80% 60% at 50% 50%, rgba(99,102,241,0.07) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .workbench {
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+    box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
+    position: relative;
+  }
+
+  /* Title bar */
+  .wb-titlebar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .wb-dots { display: flex; gap: 6px; }
+  .wb-dot {
+    width: 11px; height: 11px; border-radius: 50%;
+  }
+  .wb-dot.red   { background: #ff5f57; }
+  .wb-dot.amber { background: #febc2e; }
+  .wb-dot.green { background: #28c840; }
+  .wb-title {
+    flex: 1; text-align: center;
+    font-size: 12px; color: var(--text-muted); font-family: var(--font-sans);
+    margin-left: -48px;
+  }
+  .wb-status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--green); font-family: var(--font-mono);
+  }
+  .wb-status-dot {
+    width: 5px; height: 5px; border-radius: 50%; background: var(--green);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  /* Main layout */
+  .wb-layout {
+    display: grid;
+    grid-template-columns: 220px 1fr 1fr;
+    grid-template-rows: 1fr;
+    height: 480px;
+  }
+
+  /* Sidebar */
+  .wb-sidebar {
+    border-right: 1px solid var(--border);
+    background: #0d0f13;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .wb-section-header {
+    padding: 10px 14px 6px;
+    font-size: 10px; font-weight: 600; letter-spacing: .8px;
+    color: var(--text-muted); text-transform: uppercase;
+  }
+  .wb-agent-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 14px; font-size: 12px; cursor: pointer;
+    transition: background .1s;
+    position: relative;
+  }
+  .wb-agent-item:hover { background: var(--surface); }
+  .wb-agent-item.active { background: var(--accent-glow); }
+  .wb-agent-item.active::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+    background: var(--accent2);
+  }
+  .agent-icon {
+    width: 22px; height: 22px; border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; flex-shrink: 0;
+  }
+  .icon-detour  { background: linear-gradient(135deg,#6366f1,#ec4899); }
+  .icon-codex   { background: linear-gradient(135deg,#10b981,#3b82f6); }
+  .icon-claude  { background: linear-gradient(135deg,#f59e0b,#ef4444); }
+  .icon-browser { background: linear-gradient(135deg,#06b6d4,#3b82f6); }
+  .agent-name { flex: 1; color: var(--text); font-weight: 500; }
+  .agent-status-badge {
+    font-size: 9px; padding: 2px 6px; border-radius: 100px; font-weight: 600;
+  }
+  .badge-running { background: var(--green-dim); color: var(--green); }
+  .badge-waiting { background: var(--amber-dim); color: var(--amber); }
+  .badge-idle    { background: var(--surface2); color: var(--text-muted); }
+
+  .wb-sidebar-divider {
+    height: 1px; background: var(--border); margin: 8px 14px;
+  }
+
+  .wb-task-item {
+    padding: 6px 14px; font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 7px;
+  }
+  .task-check { color: var(--green); font-size: 10px; }
+  .task-spin  { color: var(--accent2); font-size: 10px; animation: spin .8s linear infinite; }
+  .task-dot   { color: var(--text-muted); font-size: 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Center pane: terminal */
+  .wb-terminal {
+    border-right: 1px solid var(--border);
+    background: #080a0d;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .pane-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    background: #0d0f13;
+    flex-shrink: 0;
+  }
+  .pane-icon { font-size: 12px; }
+  .pane-title { font-size: 11px; color: var(--text-dim); font-weight: 500; }
+  .pane-tabs { display: flex; gap: 2px; margin-left: auto; }
+  .pane-tab {
+    font-size: 10px; padding: 2px 8px; border-radius: 4px;
+    color: var(--text-muted); cursor: pointer;
+  }
+  .pane-tab.active { background: var(--surface2); color: var(--text); }
+  .terminal-body {
+    flex: 1; padding: 12px 14px; overflow: hidden;
+    font-family: var(--font-mono); font-size: 11px; line-height: 1.65;
+  }
+  .t-prompt { color: var(--accent2); }
+  .t-cmd    { color: var(--text); }
+  .t-out    { color: var(--text-dim); }
+  .t-info   { color: var(--cyan); }
+  .t-ok     { color: var(--green); }
+  .t-warn   { color: var(--amber); }
+  .t-err    { color: #f87171; }
+  .t-agent  { color: var(--pink); font-weight: 600; }
+  .t-dim    { color: #3d4452; }
+  .t-line   { display: flex; gap: 6px; }
+  .t-cursor {
+    display: inline-block; width: 7px; height: 13px; background: var(--accent2);
+    vertical-align: middle; animation: blink 1s step-end infinite; margin-left: 2px;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* Right pane: split code + preview */
+  .wb-right {
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .wb-code {
+    flex: 1; border-bottom: 1px solid var(--border);
+    background: #0b0d11; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .code-body {
+    flex: 1; padding: 10px 14px; overflow: hidden;
+    font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7;
+  }
+  .code-line { display: flex; gap: 12px; }
+  .ln { color: #2e3340; width: 18px; flex-shrink: 0; text-align: right; }
+  .kw  { color: #c084fc; }
+  .fn  { color: #60a5fa; }
+  .str { color: #86efac; }
+  .num { color: #fb923c; }
+  .cmt { color: #374151; }
+  .var { color: var(--text); }
+  .op  { color: #94a3b8; }
+  .diff-add { background: rgba(34,197,94,0.08); display: block; width: 100%; padding: 0 4px; margin: 0 -4px; border-left: 2px solid var(--green); }
+  .diff-rem { background: rgba(248,113,113,0.07); display: block; width: 100%; padding: 0 4px; margin: 0 -4px; border-left: 2px solid #f87171; opacity: .5; }
+
+  .wb-preview {
+    height: 150px; background: #0d0f13; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .preview-body {
+    flex: 1; padding: 12px 16px; overflow: hidden;
+  }
+  .preview-card {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .preview-avatar {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg,#6366f1,#ec4899);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: #fff; flex-shrink: 0;
+  }
+  .preview-lines { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+  .preview-line {
+    height: 8px; border-radius: 4px; background: var(--border2);
+  }
+  .preview-line.w-80 { width: 80%; }
+  .preview-line.w-55 { width: 55%; }
+  .preview-tag {
+    font-size: 10px; padding: 3px 8px; border-radius: 100px;
+    background: var(--accent-glow); color: var(--accent2); font-weight: 600; flex-shrink: 0;
+  }
+
+  /* ─── Features ─── */
+  .features { padding: 0 0 80px; }
+  .section-label {
+    text-align: center;
+    font-size: 11px; font-weight: 600; letter-spacing: 1.2px;
+    text-transform: uppercase; color: var(--accent2);
+    margin-bottom: 14px;
+  }
+  .section-title {
+    text-align: center;
+    font-size: clamp(26px,4vw,38px); font-weight: 800;
+    letter-spacing: -1px; margin-bottom: 14px;
+  }
+  .section-sub {
+    text-align: center; font-size: 16px; color: var(--text-dim);
+    max-width: 500px; margin: 0 auto 48px;
+  }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .feature-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    transition: border-color .2s, transform .15s;
+  }
+  .feature-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+  .feature-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; margin-bottom: 14px;
+  }
+  .fi-purple { background: rgba(99,102,241,0.15); }
+  .fi-green  { background: rgba(34,197,94,0.12); }
+  .fi-blue   { background: rgba(59,130,246,0.12); }
+  .fi-amber  { background: rgba(245,158,11,0.12); }
+  .fi-pink   { background: rgba(236,72,153,0.12); }
+  .fi-cyan   { background: rgba(6,182,212,0.12); }
+  .feature-title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+  .feature-desc  { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+  /* ─── Agent flow diagram ─── */
+  .flow-section { padding: 0 0 80px; }
+  .flow-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 0; overflow: hidden; position: relative;
+  }
+  .flow-node {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    flex-shrink: 0;
+  }
+  .flow-bubble {
+    width: 72px; height: 72px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    position: relative;
+  }
+  .flow-bubble::after {
+    content: '';
+    position: absolute; inset: -1px;
+    border-radius: 17px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.08), transparent);
+    pointer-events: none;
+  }
+  .fb-detour { background: linear-gradient(135deg,#6366f1,#ec4899); box-shadow: 0 8px 24px rgba(99,102,241,0.3); }
+  .fb-codex  { background: linear-gradient(135deg,#10b981,#3b82f6); box-shadow: 0 8px 24px rgba(16,185,129,0.2); }
+  .fb-claude { background: linear-gradient(135deg,#f59e0b,#ef4444); box-shadow: 0 8px 24px rgba(245,158,11,0.2); }
+  .fb-result { background: linear-gradient(135deg,#06b6d4,#3b82f6); box-shadow: 0 8px 24px rgba(6,182,212,0.2); }
+  .flow-label { font-size: 12px; font-weight: 600; color: var(--text); }
+  .flow-sub   { font-size: 10px; color: var(--text-muted); }
+  .flow-arrow {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    min-width: 40px; max-width: 100px;
+  }
+  .arrow-line {
+    height: 2px; width: 100%;
+    background: linear-gradient(90deg, var(--border2), var(--accent), var(--border2));
+    position: relative;
+  }
+  .arrow-line::after {
+    content: '';
+    position: absolute; right: -1px; top: -4px;
+    border: 5px solid transparent;
+    border-left-color: var(--accent2);
+  }
+  .arrow-label { font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); }
+
+  .flow-fork {
+    display: flex; flex-direction: column; align-items: center; gap: 12px; flex-shrink: 0;
+  }
+  .fork-branch {
+    display: flex; align-items: center; gap: 0;
+  }
+
+  /* ─── CTA ─── */
+  .cta-section {
+    padding: 0 0 100px;
+  }
+  .cta-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 56px 48px;
+    text-align: center;
+    position: relative; overflow: hidden;
+  }
+  .cta-box::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 600px 300px at 50% 120%, rgba(99,102,241,0.1), transparent);
+    pointer-events: none;
+  }
+  .cta-box h2 {
+    font-size: clamp(24px,4vw,36px); font-weight: 800; letter-spacing: -1px;
+    margin-bottom: 12px;
+  }
+  .cta-box p { font-size: 16px; color: var(--text-dim); margin-bottom: 32px; }
+
+  /* ─── Footer ─── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 0;
+  }
+  .footer-inner {
+    display: flex; align-items: center; justify-content: space-between;
+    max-width: 1180px; margin: 0 auto; padding: 0 24px;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .footer-copy { font-size: 12px; color: var(--text-muted); }
+  .footer-links { display: flex; gap: 20px; }
+  .footer-link { font-size: 12px; color: var(--text-muted); text-decoration: none; }
+  .footer-link:hover { color: var(--text); }
+
+  /* ─── Scrolling terminal animation ─── */
+  .terminal-body .t-block { animation: fadeUp .3s ease both; }
+  .terminal-body .t-block:nth-child(1)  { animation-delay: .1s }
+  .terminal-body .t-block:nth-child(2)  { animation-delay: .2s }
+  .terminal-body .t-block:nth-child(3)  { animation-delay: .3s }
+  .terminal-body .t-block:nth-child(4)  { animation-delay: .4s }
+  .terminal-body .t-block:nth-child(5)  { animation-delay: .5s }
+  .terminal-body .t-block:nth-child(6)  { animation-delay: .6s }
+  .terminal-body .t-block:nth-child(7)  { animation-delay: .7s }
+  .terminal-body .t-block:nth-child(8)  { animation-delay: .8s }
+  .terminal-body .t-block:nth-child(9)  { animation-delay: .9s }
+  .terminal-body .t-block:nth-child(10) { animation-delay: 1.0s }
+  .terminal-body .t-block:nth-child(11) { animation-delay: 1.1s }
+  .terminal-body .t-block:nth-child(12) { animation-delay: 1.2s }
+  .terminal-body .t-block:nth-child(13) { animation-delay: 1.3s }
+  .terminal-body .t-block:nth-child(14) { animation-delay: 1.4s }
+  .terminal-body .t-block:nth-child(15) { animation-delay: 1.5s }
+  .terminal-body .t-block:nth-child(16) { animation-delay: 1.6s }
+  .terminal-body .t-block:nth-child(17) { animation-delay: 1.7s }
+  .terminal-body .t-block:nth-child(18) { animation-delay: 1.8s }
+  .terminal-body .t-block:nth-child(19) { animation-delay: 1.9s }
+  .terminal-body .t-block:nth-child(20) { animation-delay: 2.0s }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  @media (max-width: 900px) {
+    .wb-layout { grid-template-columns: 200px 1fr; height: auto; }
+    .wb-right  { display: none; }
+  }
+  @media (max-width: 640px) {
+    .wb-layout { grid-template-columns: 1fr; height: auto; }
+    .wb-sidebar { display: none; }
+    .flow-diagram { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); min-width: 30px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ─── Nav ─── -->
+<nav>
+  <div class="nav-inner">
+    <a class="logo" href="#">
+      <div class="logo-mark">D</div>
+      Detour
+    </a>
+    <div class="nav-links">
+      <a class="nav-link" href="#">Docs</a>
+      <a class="nav-link" href="#">Agents</a>
+      <a class="nav-link" href="#">Pricing</a>
+      <a class="nav-cta" href="#">Open Workbench</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ─── Hero ─── -->
+<div class="page">
+  <section class="hero">
+    <div class="hero-badge">
+      <span class="badge-dot"></span>
+      Public Agent Workbench — Now Live
+    </div>
+    <h1>Spawn Agents.<br>Ship Faster.</h1>
+    <p class="hero-sub">
+      Detour orchestrates Codex, Claude, and browser agents in a unified workbench — terminal, code diffing, and live preview, all in one place.
+    </p>
+    <div class="hero-actions">
+      <a class="btn-primary" href="#">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Launch Workbench
+      </a>
+      <a class="btn-secondary" href="#">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+        View on GitHub
+      </a>
+    </div>
+  </section>
+</div>
+
+<!-- ─── Workbench Mockup ─── -->
+<div class="page">
+  <div class="workbench-wrap">
+    <div class="workbench">
+
+      <!-- Title bar -->
+      <div class="wb-titlebar">
+        <div class="wb-dots">
+          <div class="wb-dot red"></div>
+          <div class="wb-dot amber"></div>
+          <div class="wb-dot green"></div>
+        </div>
+        <div class="wb-title">Detour — Agent Workbench</div>
+        <div class="wb-status"><span class="wb-status-dot"></span>3 agents running</div>
+      </div>
+
+      <!-- Main layout -->
+      <div class="wb-layout">
+
+        <!-- Sidebar -->
+        <div class="wb-sidebar">
+          <div class="wb-section-header">Active Agents</div>
+
+          <div class="wb-agent-item active">
+            <div class="agent-icon icon-detour">🎯</div>
+            <span class="agent-name">Detour</span>
+            <span class="agent-status-badge badge-running">host</span>
+          </div>
+          <div class="wb-agent-item">
+            <div class="agent-icon icon-codex">⚡</div>
+            <span class="agent-name">Codex</span>
+            <span class="agent-status-badge badge-running">run</span>
+          </div>
+          <div class="wb-agent-item">
+            <div class="agent-icon icon-claude">✦</div>
+            <span class="agent-name">Claude</span>
+            <span class="agent-status-badge badge-running">run</span>
+          </div>
+          <div class="wb-agent-item">
+            <div class="agent-icon icon-browser">🌐</div>
+            <span class="agent-name">Browser</span>
+            <span class="agent-status-badge badge-waiting">wait</span>
+          </div>
+
+          <div class="wb-sidebar-divider"></div>
+          <div class="wb-section-header">Task Queue</div>
+
+          <div class="wb-task-item"><span class="task-check">✓</span> scaffold repo</div>
+          <div class="wb-task-item"><span class="task-check">✓</span> write tests</div>
+          <div class="wb-task-item"><span class="task-spin">◌</span> implement auth</div>
+          <div class="wb-task-item"><span class="task-spin">◌</span> lint + typecheck</div>
+          <div class="wb-task-item"><span class="task-dot">○</span> deploy preview</div>
+          <div class="wb-task-item"><span class="task-dot">○</span> open PR</div>
+        </div>
+
+        <!-- Terminal pane -->
+        <div class="wb-terminal">
+          <div class="pane-header">
+            <span class="pane-icon">⌨</span>
+            <span class="pane-title">Terminal</span>
+            <div class="pane-tabs">
+              <span class="pane-tab active">bash</span>
+              <span class="pane-tab">logs</span>
+            </div>
+          </div>
+          <div class="terminal-body">
+            <div class="t-line t-block"><span class="t-agent">[detour]</span>&nbsp;<span class="t-out">Spawning subagents for task: implement auth</span></div>
+            <div class="t-line t-block"><span class="t-dim">─────────────────────────────────────</span></div>
+            <div class="t-line t-block"><span class="t-agent">[codex]</span>&nbsp;<span class="t-info">Cloning context from HEAD…</span></div>
+            <div class="t-line t-block"><span class="t-out t-block">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Reading 14 files in packages/core/</span></div>
+            <div class="t-line t-block"><span class="t-agent">[claude]</span><span class="t-info"> Planning implementation…</span></div>
+            <div class="t-line t-block"><span class="t-out">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tokens: 2,480 / 200k</span></div>
+            <div class="t-line t-block"><span class="t-dim">─────────────────────────────────────</span></div>
+            <div class="t-line t-block"><span class="t-prompt">$</span>&nbsp;<span class="t-cmd">pnpm typecheck --filter packages/core</span></div>
+            <div class="t-line t-block"><span class="t-out">&nbsp;packages/core/src/auth.ts(14,3)</span></div>
+            <div class="t-line t-block"><span class="t-err">&nbsp;TS2345 type 'undefined' not assignable</span></div>
+            <div class="t-line t-block"><span class="t-agent">[codex]</span>&nbsp;<span class="t-warn">Fixing type error → auth.ts:14</span></div>
+            <div class="t-line t-block"><span class="t-dim">─────────────────────────────────────</span></div>
+            <div class="t-line t-block"><span class="t-prompt">$</span>&nbsp;<span class="t-cmd">pnpm typecheck --filter packages/core</span></div>
+            <div class="t-line t-block"><span class="t-ok">&nbsp;✓ No errors. 1 file compiled.</span></div>
+            <div class="t-line t-block"><span class="t-agent">[codex]</span>&nbsp;<span class="t-ok">Patch applied. Running tests…</span></div>
+            <div class="t-line t-block"><span class="t-prompt">$</span>&nbsp;<span class="t-cmd">pnpm test --filter packages/core</span></div>
+            <div class="t-line t-block"><span class="t-ok">&nbsp;✓ auth.test.ts — 8 passed</span></div>
+            <div class="t-line t-block"><span class="t-agent">[detour]</span>&nbsp;<span class="t-ok">Auth complete. Handing to Browser agent.</span></div>
+            <div class="t-line t-block"><span class="t-prompt">$</span>&nbsp;<span class="t-cmd"></span><span class="t-cursor"></span></div>
+          </div>
+        </div>
+
+        <!-- Right: code + preview -->
+        <div class="wb-right">
+          <div class="wb-code">
+            <div class="pane-header">
+              <span class="pane-icon">📄</span>
+              <span class="pane-title">packages/core/src/auth.ts</span>
+              <div class="pane-tabs">
+                <span class="pane-tab active">diff</span>
+                <span class="pane-tab">raw</span>
+              </div>
+            </div>
+            <div class="code-body">
+              <div class="code-line"><span class="ln">1</span><span><span class="kw">import</span> <span class="op">{</span> <span class="var">db</span> <span class="op">}</span> <span class="kw">from</span> <span class="str">'../db'</span></span></div>
+              <div class="code-line"><span class="ln">2</span><span><span class="kw">import</span> <span class="op">{</span> <span class="var">hash</span><span class="op">,</span> <span class="var">compare</span> <span class="op">}</span> <span class="kw">from</span> <span class="str">'bcryptjs'</span></span></div>
+              <div class="code-line"><span class="ln">3</span><span class="cmt">&nbsp;</span></div>
+              <div class="code-line"><span class="ln">4</span><span><span class="kw">export async function</span> <span class="fn">createUser</span><span class="op">(</span></span></div>
+              <div class="code-line"><span class="ln">5</span><span>&nbsp;&nbsp;<span class="var">email</span><span class="op">:</span> <span class="kw">string</span><span class="op">,</span></span></div>
+              <div class="code-line"><span class="ln">6</span><span>&nbsp;&nbsp;<span class="var">password</span><span class="op">:</span> <span class="kw">string</span></span></div>
+              <div class="code-line"><span class="ln">7</span><span><span class="op">) {</span></span></div>
+              <div class="code-line"><span class="ln">8</span><span>&nbsp;&nbsp;<span class="kw">const</span> <span class="var">hashed</span> <span class="op">=</span> <span class="kw">await</span> <span class="fn">hash</span><span class="op">(</span><span class="var">password</span><span class="op">,</span> <span class="num">12</span><span class="op">)</span></span></div>
+              <div class="code-line"><span class="ln">9</span><span class="diff-rem">&nbsp;&nbsp;<span class="kw">const</span> <span class="var">user</span> <span class="op">=</span> <span class="var">db</span><span class="op">.</span><span class="fn">insert</span><span class="op">(</span><span class="var">users</span><span class="op">).</span><span class="fn">values</span><span class="op">({</span><span class="var">email</span><span class="op">,</span> <span class="var">hashed</span><span class="op">})</span></span></div>
+              <div class="code-line"><span class="ln">10</span><span class="diff-add">&nbsp;&nbsp;<span class="kw">const</span> <span class="var">user</span> <span class="op">=</span> <span class="kw">await</span> <span class="var">db</span><span class="op">.</span><span class="fn">insert</span><span class="op">(</span><span class="var">users</span><span class="op">).</span><span class="fn">values</span><span class="op">({</span><span class="var">email</span><span class="op">,</span> <span class="var">hashed</span><span class="op">})</span></span></div>
+              <div class="code-line"><span class="ln">11</span><span class="diff-add">&nbsp;&nbsp;<span class="op">.</span><span class="fn">returning</span><span class="op">()</span></span></div>
+              <div class="code-line"><span class="ln">12</span><span>&nbsp;&nbsp;<span class="kw">return</span> <span class="var">user</span><span class="op">[</span><span class="num">0</span><span class="op">]</span></span></div>
+              <div class="code-line"><span class="ln">13</span><span><span class="op">}</span></span></div>
+            </div>
+          </div>
+          <div class="wb-preview">
+            <div class="pane-header">
+              <span class="pane-icon">👁</span>
+              <span class="pane-title">Live Preview</span>
+              <div class="pane-tabs">
+                <span class="pane-tab active">component</span>
+              </div>
+            </div>
+            <div class="preview-body">
+              <div class="preview-card">
+                <div class="preview-avatar">A</div>
+                <div class="preview-lines">
+                  <div class="preview-line w-80"></div>
+                  <div class="preview-line w-55"></div>
+                </div>
+                <span class="preview-tag">auth ready</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /wb-layout -->
+    </div><!-- /workbench -->
+  </div>
+</div>
+
+<!-- ─── Features ─── -->
+<div class="page">
+  <section class="features">
+    <div class="section-label">Capabilities</div>
+    <h2 class="section-title">Everything agents need to ship</h2>
+    <p class="section-sub">
+      Detour gives hosted agents a shared workspace with persistent state, tool access, and cross-agent coordination.
+    </p>
+    <div class="feature-grid">
+
+      <div class="feature-card">
+        <div class="feature-icon fi-purple">🎯</div>
+        <div class="feature-title">Agent Orchestration</div>
+        <div class="feature-desc">Detour acts as the host agent, spawning and coordinating Codex, Claude, and browser subagents with explicit task delegation and result merging.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon fi-green">⚡</div>
+        <div class="feature-title">Codex Code Engine</div>
+        <div class="feature-desc">OpenAI Codex subagent handles diffs, type-checking, test execution, and iterative fixes inside a sandboxed workspace clone.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon fi-amber">✦</div>
+        <div class="feature-title">Claude Reasoning</div>
+        <div class="feature-desc">Claude subagent handles planning, design decisions, and prose — long-context analysis with citations fed back to Codex for implementation.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon fi-blue">🖥</div>
+        <div class="feature-title">Live Terminal</div>
+        <div class="feature-desc">Every agent action streams into a shared terminal. Watch pnpm, tsc, and test runners execute in real time with colorized, searchable output.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon fi-pink">🔀</div>
+        <div class="feature-title">Diff + Code Pane</div>
+        <div class="feature-desc">Inline diffs appear as agents write code — green additions, red removals, line numbers, and syntax highlighting across all touched files.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon fi-cyan">👁</div>
+        <div class="feature-title">Preview Renderer</div>
+        <div class="feature-desc">UI components and API responses render live in the preview pane. Browser agent screenshots are inlined alongside terminal output.</div>
+      </div>
+
+    </div>
+  </section>
+</div>
+
+<!-- ─── Flow Diagram ─── -->
+<div class="page">
+  <section class="flow-section">
+    <div class="section-label">Architecture</div>
+    <h2 class="section-title">How Detour orchestrates agents</h2>
+    <p class="section-sub">A single task fans out to specialized subagents and merges back through the host.</p>
+
+    <div class="flow-diagram">
+
+      <div class="flow-node">
+        <div class="flow-bubble fb-detour">🎯</div>
+        <div class="flow-label">Detour</div>
+        <div class="flow-sub">host agent</div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="arrow-line"></div>
+        <div class="arrow-label">dispatch</div>
+      </div>
+
+      <div class="flow-fork">
+        <div class="fork-branch">
+          <div class="flow-node" style="margin-bottom:12px">
+            <div class="flow-bubble fb-codex">⚡</div>
+            <div class="flow-label">Codex</div>
+            <div class="flow-sub">write + fix code</div>
+          </div>
+        </div>
+        <div class="fork-branch">
+          <div class="flow-node">
+            <div class="flow-bubble fb-claude">✦</div>
+            <div class="flow-label">Claude</div>
+            <div class="flow-sub">plan + reason</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="arrow-line"></div>
+        <div class="arrow-label">results</div>
+      </div>
+
+      <div class="flow-node">
+        <div class="flow-bubble fb-result">🚀</div>
+        <div class="flow-label">Output</div>
+        <div class="flow-sub">diff · PR · deploy</div>
+      </div>
+
+    </div>
+  </section>
+</div>
+
+<!-- ─── CTA ─── -->
+<div class="page">
+  <section class="cta-section">
+    <div class="cta-box">
+      <h2>Ready to build with agents?</h2>
+      <p>Open the Detour workbench and spawn your first Codex + Claude pair in under 60 seconds.</p>
+      <div class="hero-actions">
+        <a class="btn-primary" href="#">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Open Workbench
+        </a>
+        <a class="btn-secondary" href="#">Read the Docs</a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ─── Footer ─── -->
+<footer>
+  <div class="footer-inner">
+    <span class="footer-copy">© 2026 Detour. All rights reserved.</span>
+    <div class="footer-links">
+      <a class="footer-link" href="#">Privacy</a>
+      <a class="footer-link" href="#">Terms</a>
+      <a class="footer-link" href="#">GitHub</a>
+      <a class="footer-link" href="#">Discord</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

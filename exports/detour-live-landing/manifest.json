@@ -1,0 +1,42 @@
+{
+  "name": "Detour Agent Workbench Landing Page",
+  "version": "1.0.0",
+  "generated": "2026-05-07",
+  "generator": "detour-subagent",
+  "type": "static-landing",
+  "files": [
+    {
+      "path": "index.html",
+      "type": "text/html",
+      "description": "Self-contained landing page — no external dependencies",
+      "size_hint": "~22kb"
+    },
+    {
+      "path": "manifest.json",
+      "type": "application/json",
+      "description": "Project manifest"
+    },
+    {
+      "path": "README.md",
+      "type": "text/markdown",
+      "description": "Deployment and customization notes"
+    }
+  ],
+  "features": [
+    "macOS-style window chrome mockup",
+    "Animated terminal with Detour→Codex→Claude agent flow",
+    "Inline code diff pane with syntax highlighting",
+    "Live preview pane",
+    "Sidebar agent roster with status badges",
+    "Agent flow architecture diagram",
+    "Feature grid",
+    "CTA section",
+    "Responsive layout (mobile-aware)",
+    "Zero external dependencies — single file"
+  ],
+  "deploy": {
+    "static_host": true,
+    "cdn_ready": true,
+    "no_build_step": true
+  }
+}
