@@ -28,6 +28,11 @@ const SLASH_COMMANDS: SlashCommand[] = [
 	{ name: "/1password", usage: "/1password <identifier> [url]", description: "Fill a 1Password login in the browser.", insert: "/1password ", aliases: ["/op"] },
 	{ name: "/pet", usage: "/pet [name]", description: "List or inspect Codex pets.", insert: "/pet " },
 	{ name: "/hatch", usage: "/hatch <concept>", description: "Prepare a Codex pet hatch run.", insert: "/hatch " },
+	{ name: "/codex", usage: "/codex [cwd=/path] <task>", description: "Run a Codex coding subagent and wait for the result.", insert: "/codex " },
+	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude " },
+	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex " },
+	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude " },
+	{ name: "/task", usage: "/task [cwd=/path] <task>", description: "Alias for a Codex coding subagent.", insert: "/task " },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help" },
 ];
 
