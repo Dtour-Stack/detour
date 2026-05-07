@@ -40,7 +40,7 @@ import {
 import { cronToolsPlugin } from "@detour/plugin-cron-tools";
 import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { makeOwnerBindPlugin } from "./owner-bind";
-import { discordMentionAliasPlugin, installDiscordMentionAliasPatch } from "./discord-mention-alias-plugin";
+import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
 import { runDiscordCatchUp } from "./discord-catchup";
 import { existsSync, readFileSync } from "node:fs";
@@ -658,6 +658,7 @@ export class RuntimeService {
 			if (options.channels) {
 				await this.waitForOwnerBind(runtime);
 				await this.registerChannelPlugins(runtime, channelResolved.plugins);
+				installDiscordMessageManagerGuard(runtime);
 				this.wirePairingCommands(runtime);
 			}
 			await this.provisionRuntime(runtime);

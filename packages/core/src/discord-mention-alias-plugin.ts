@@ -9,6 +9,7 @@ import type {
 	Plugin,
 	State,
 } from "@elizaos/core";
+import { createUniqueUuid, EventType } from "@elizaos/core";
 import {
 	generatePlainTextReply,
 	runWithPlannerFallbackContext,
@@ -16,6 +17,7 @@ import {
 
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
+const MANAGER_WRAPPED = Symbol.for("detour.discordMessageManagerGuard.wrapped");
 const DISCORD_FALLBACK_TEXT = "I saw it. Reply pipeline tripped, but I am still here.";
 const DEFAULT_REPLY_GUARD_MS = 12_000;
 const DEFAULT_FALLBACK_GENERATION_MS = 10_000;
@@ -57,6 +59,49 @@ type WrappedMessageService = IMessageService & {
 	[WRAPPED]?: true;
 };
 
+type DiscordUserLike = {
+	id?: string;
+	username?: string | null;
+	globalName?: string | null;
+	tag?: string | null;
+	bot?: boolean;
+};
+
+type DiscordCollectionLike<T> = {
+	has?: (id: string) => boolean;
+	values?: () => IterableIterator<T> | Iterable<T>;
+};
+
+type DiscordMessageLike = {
+	id?: string;
+	content?: string;
+	createdTimestamp?: number;
+	author?: DiscordUserLike;
+	mentions?: {
+		users?: DiscordCollectionLike<DiscordUserLike>;
+		repliedUser?: DiscordUserLike | null;
+	};
+	reference?: { messageId?: string };
+	channel?: {
+		id?: string;
+		send?: (payload: unknown) => Promise<unknown>;
+		messages?: {
+			fetch?: (options: { limit: number }) => Promise<DiscordCollectionLike<DiscordMessageLike>>;
+		};
+	};
+	reply?: (payload: unknown) => Promise<unknown>;
+};
+
+type DiscordMessageManagerLike = {
+	[MANAGER_WRAPPED]?: true;
+	handleMessage: (message: DiscordMessageLike) => Promise<unknown>;
+};
+
+type DiscordServiceLike = {
+	client?: { user?: DiscordUserLike | null };
+	messageManager?: DiscordMessageManagerLike;
+};
+
 function escapeRegex(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -78,14 +123,35 @@ function configuredAliases(runtime: IAgentRuntime): string[] {
 	].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
+function configuredDiscordAliases(runtime: IAgentRuntime, user: DiscordUserLike | null | undefined): string[] {
+	return [
+		...configuredAliases(runtime),
+		user?.username,
+		user?.globalName,
+		user?.tag,
+	].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 function mentionsAlias(text: string | undefined, aliases: string[]): boolean {
 	if (!text) return false;
 	return aliases.some((alias) => aliasPattern(alias.trim()).test(text));
 }
 
+function isDiscordMessage(message: Memory): boolean {
+	if (message.content.source === "discord") return true;
+	const meta = message.metadata;
+	if (!meta || typeof meta !== "object" || Array.isArray(meta)) return false;
+	const bag = meta as Record<string, unknown>;
+	return bag.source === "discord"
+		|| bag.provider === "discord"
+		|| bag.discord !== undefined
+		|| bag.discordMessageId !== undefined
+		|| bag.discordChannelId !== undefined;
+}
+
 function markMention(runtime: IAgentRuntime, message: Memory): boolean {
 	const content = message.content;
-	if (content.source !== "discord") return false;
+	if (!isDiscordMessage(message)) return false;
 	if (content.mentionContext?.isMention === true) return false;
 	if (content.mentionContext?.isReply === true) return false;
 	if (!mentionsAlias(content.text, configuredAliases(runtime))) return false;
@@ -100,7 +166,7 @@ function markMention(runtime: IAgentRuntime, message: Memory): boolean {
 
 function isAddressedDiscordMessage(runtime: IAgentRuntime, message: Memory): boolean {
 	const mentionContext = message.content.mentionContext;
-	return message.content.source === "discord" && (
+	return isDiscordMessage(message) && (
 		mentionContext?.isMention === true ||
 		mentionContext?.isReply === true ||
 		mentionsAlias(message.content.text, configuredAliases(runtime))
@@ -109,6 +175,11 @@ function isAddressedDiscordMessage(runtime: IAgentRuntime, message: Memory): boo
 
 function fallbackConversation(message: Memory): string {
 	const text = typeof message.content.text === "string" ? message.content.text.trim() : "";
+	return text ? `Latest Discord message:\n${text}` : "";
+}
+
+function rawFallbackConversation(message: DiscordMessageLike): string {
+	const text = typeof message.content === "string" ? message.content.trim() : "";
 	return text ? `Latest Discord message:\n${text}` : "";
 }
 
@@ -159,6 +230,22 @@ function trajectoryLogger(runtime: IAgentRuntime): TrajectoryLogger | null {
 	const all = runtime.getServicesByType("trajectories");
 	for (const service of all) {
 		if (isTrajectoryLogger(service)) return service;
+	}
+	return null;
+}
+
+function isDiscordService(value: unknown): value is DiscordServiceLike {
+	if (!value || typeof value !== "object") return false;
+	const service = value as DiscordServiceLike;
+	return typeof service.messageManager?.handleMessage === "function";
+}
+
+function discordService(runtime: IAgentRuntime): DiscordServiceLike | null {
+	const direct = runtime.getService("discord");
+	if (isDiscordService(direct)) return direct;
+	const all = runtime.getServicesByType("discord");
+	for (const service of all) {
+		if (isDiscordService(service)) return service;
 	}
 	return null;
 }
@@ -243,6 +330,129 @@ async function emitDiscordFallbackReply(
 		"Sending direct Discord fallback reply",
 	);
 	return { content, memories: await callback(content) };
+}
+
+function rawMessageAddressesBot(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+	botUser: DiscordUserLike | null | undefined,
+): boolean {
+	const botId = stringId(botUser?.id);
+	if (message.author?.bot || (botId && message.author?.id === botId)) return false;
+	const mentionsBot = botId
+		? message.mentions?.users?.has?.(botId) === true ||
+			message.content?.includes(`<@${botId}>`) === true ||
+			message.content?.includes(`<@!${botId}>`) === true
+		: false;
+	const repliesToBot = botId && message.reference?.messageId && message.mentions?.repliedUser?.id === botId;
+	return mentionsBot || repliesToBot === true || mentionsAlias(message.content, configuredDiscordAliases(runtime, botUser));
+}
+
+function collectionValues<T>(collection: DiscordCollectionLike<T> | undefined): T[] {
+	if (!collection?.values) return [];
+	return Array.from(collection.values());
+}
+
+async function hasRecentBotReply(message: DiscordMessageLike, botId: string | undefined): Promise<boolean> {
+	if (!botId || !message.channel?.messages?.fetch) return false;
+	const fetched = await message.channel.messages.fetch({ limit: 25 }).catch(() => null);
+	const createdAt = message.createdTimestamp ?? 0;
+	for (const candidate of collectionValues(fetched ?? undefined)) {
+		if (candidate.author?.id !== botId) continue;
+		if (candidate.reference?.messageId === message.id) return true;
+		const replyAt = candidate.createdTimestamp ?? 0;
+		if (createdAt > 0 && replyAt > createdAt && replyAt - createdAt <= 5 * 60_000) return true;
+	}
+	return false;
+}
+
+async function directDiscordFallbackContent(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+	reason: string,
+): Promise<Content> {
+	const generated = await withTimeout(
+		generatePlainTextReply(
+			runtime,
+			rawFallbackConversation(message),
+			`discord-manager-visible-reply:${reason}`,
+		),
+		readPositiveMs(runtime, "DISCORD_FALLBACK_GENERATION_MS", DEFAULT_FALLBACK_GENERATION_MS),
+	);
+	const text = generated === "timeout" ? null : generated;
+	return {
+		thought: "Discord manager visible reply guard",
+		actions: ["REPLY"],
+		text: text ?? DISCORD_FALLBACK_TEXT,
+		simple: true,
+	};
+}
+
+async function sendDirectDiscordFallback(message: DiscordMessageLike, content: Content): Promise<void> {
+	const text = typeof content.text === "string" ? content.text.trim() : "";
+	if (!text) return;
+	const payload = {
+		content: text,
+		allowedMentions: { repliedUser: false },
+	};
+	if (typeof message.reply === "function") {
+		await message.reply(payload);
+		return;
+	}
+	await message.channel?.send?.({
+		...payload,
+		...(message.id ? { reply: { messageReference: message.id, failIfNotExists: false } } : {}),
+	});
+}
+
+function emitDirectDiscordFallbackSent(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+	content: Content,
+): void {
+	const channelId = stringId(message.channel?.id);
+	const messageId = stringId(message.id);
+	if (!channelId || !messageId) return;
+	const roomId = createUniqueUuid(runtime, channelId);
+	const reply: Memory = {
+		id: createUniqueUuid(runtime, `discord-manager-fallback:${messageId}:${Date.now()}`),
+		entityId: runtime.agentId,
+		agentId: runtime.agentId,
+		roomId,
+		content: {
+			...content,
+			source: "discord",
+			inReplyTo: createUniqueUuid(runtime, messageId),
+		},
+		createdAt: Date.now(),
+	} as Memory;
+	void runtime.emitEvent(EventType.MESSAGE_SENT, {
+		runtime,
+		message: reply,
+		source: "discord",
+	});
+}
+
+async function handleManagerFallback(
+	runtime: IAgentRuntime,
+	service: DiscordServiceLike,
+	message: DiscordMessageLike,
+	reason: string,
+): Promise<void> {
+	const botId = stringId(service.client?.user?.id);
+	if (await hasRecentBotReply(message, botId)) return;
+	const content = await directDiscordFallbackContent(runtime, message, reason);
+	await sendDirectDiscordFallback(message, content);
+	emitDirectDiscordFallbackSent(runtime, message, content);
+	runtime.logger.warn(
+		{
+			src: "detour:discord-manager-guard",
+			reason,
+			messageId: message.id,
+			channelId: message.channel?.id,
+		},
+		"Sent direct Discord manager fallback reply",
+	);
 }
 
 function logLateHandlerFailure(runtime: IAgentRuntime, message: Memory, error: unknown): void {
@@ -339,6 +549,51 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 		}
 	};
 	service[WRAPPED] = true;
+}
+
+export function installDiscordMessageManagerGuard(runtime: IAgentRuntime): void {
+	const service = discordService(runtime);
+	const manager = service?.messageManager;
+	if (!service || !manager || manager[MANAGER_WRAPPED]) return;
+	const handleMessage = manager.handleMessage.bind(manager);
+	manager.handleMessage = async (message: DiscordMessageLike): Promise<unknown> => {
+		if (!rawMessageAddressesBot(runtime, message, service.client?.user)) {
+			return await handleMessage(message);
+		}
+		const original = handleMessage(message);
+		try {
+			const result = await withTimeout(
+				original,
+				readPositiveMs(runtime, "DISCORD_ADDRESSED_REPLY_GUARD_MS", DEFAULT_REPLY_GUARD_MS),
+			);
+			if (result === "timeout") {
+				void original.catch((error) =>
+					runtime.logger.warn(
+						{
+							src: "detour:discord-manager-guard",
+							error: error instanceof Error ? error.message : String(error),
+							messageId: message.id,
+							channelId: message.channel?.id,
+						},
+						"Original Discord manager handler failed after fallback reply",
+					),
+				);
+				await handleManagerFallback(runtime, service, message, "timeout");
+				return undefined;
+			}
+			await handleManagerFallback(runtime, service, message, "empty-manager-result");
+			return result;
+		} catch (error) {
+			await handleManagerFallback(
+				runtime,
+				service,
+				message,
+				error instanceof Error ? error.message : String(error),
+			);
+			return undefined;
+		}
+	};
+	manager[MANAGER_WRAPPED] = true;
 }
 
 export const discordMentionAliasPlugin: Plugin = {

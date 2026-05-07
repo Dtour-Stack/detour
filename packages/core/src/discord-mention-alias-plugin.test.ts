@@ -8,7 +8,7 @@ import type {
 	MessageProcessingOptions,
 	MessageProcessingResult,
 } from "@elizaos/core";
-import { installDiscordMentionAliasPatch } from "./discord-mention-alias-plugin";
+import { installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 
 type HandleMessage = (
 	runtime: IAgentRuntime,
@@ -24,6 +24,23 @@ function discordMessage(): Memory {
 		entityId: "user-id",
 		content: { source: "discord", text: "@Detour hello" },
 		metadata: {
+			trajectoryId: "trajectory-id",
+			trajectoryStepId: "step-id",
+		},
+	} as never;
+}
+
+function metadataOnlyDiscordMessage(): Memory {
+	return {
+		id: "message-id",
+		roomId: "room-id",
+		entityId: "user-id",
+		content: {
+			text: "Detour hello",
+			mentionContext: { isMention: true },
+		},
+		metadata: {
+			source: "discord",
 			trajectoryId: "trajectory-id",
 			trajectoryStepId: "step-id",
 		},
@@ -64,6 +81,51 @@ function makeRuntime(handleMessage: HandleMessage) {
 	return { runtime, service, callback, replies, llmCalls, steps };
 }
 
+function makeManagerRuntime() {
+	const sent: unknown[] = [];
+	const events: unknown[] = [];
+	const messageManager: { handleMessage: (message: unknown) => Promise<unknown> } = {
+		handleMessage: async () => undefined,
+	};
+	const runtime: IAgentRuntime = {
+		agentId: "agent-id",
+		character: { name: "Detour Squirrel", username: "detour_squirrel" },
+		getSetting: (key: string) => {
+			if (key === "DISCORD_ADDRESSED_REPLY_GUARD_MS") return "5";
+			if (key === "DISCORD_FALLBACK_GENERATION_MS") return "100";
+			return undefined;
+		},
+		getService: (type: string) => type === "discord"
+			? {
+					client: { user: { id: "bot-id", username: "Detour" } },
+					messageManager,
+				}
+			: null,
+		getServicesByType: () => [],
+		useModel: async () => "manager fallback",
+		emitEvent: async (_event: unknown, payload: unknown) => {
+			events.push(payload);
+		},
+		logger: { warn: () => undefined },
+	} as never;
+	const message = {
+		id: "discord-message-id",
+		content: "Detour hello",
+		createdTimestamp: Date.now(),
+		author: { id: "user-id", bot: false },
+		mentions: { users: { has: (id: string) => id === "bot-id" } },
+		channel: {
+			id: "channel-id",
+			messages: { fetch: async () => ({ values: () => [][Symbol.iterator]() }) },
+		},
+		reply: async (payload: unknown) => {
+			sent.push(payload);
+		},
+	};
+	installDiscordMessageManagerGuard(runtime);
+	return { runtime, messageManager, message, sent, events };
+}
+
 describe("discord mention alias reply guard", () => {
 	test("addressed Discord messages fall back when the normal handler hangs", async () => {
 		const { runtime, service, callback, replies, llmCalls, steps } = makeRuntime(
@@ -101,5 +163,34 @@ describe("discord mention alias reply guard", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(replies.map((reply) => reply.text)).toEqual(["fallback reply"]);
+	});
+
+	test("Discord metadata is enough when content.source is missing", async () => {
+		const { runtime, service, callback, replies } = makeRuntime(
+			async () => ({
+				didRespond: false,
+				responseContent: null,
+				responseMessages: [],
+				mode: "none",
+			}),
+		);
+
+		const result = await service.handleMessage(runtime, metadataOnlyDiscordMessage(), callback);
+
+		expect(result.didRespond).toBe(true);
+		expect(replies.map((reply) => reply.text)).toEqual(["fallback reply"]);
+	});
+
+	test("raw Discord manager guard sends when addressed handling returns silent", async () => {
+		const { messageManager, message, sent, events } = makeManagerRuntime();
+
+		await messageManager.handleMessage(message);
+
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toEqual({
+			content: "manager fallback",
+			allowedMentions: { repliedUser: false },
+		});
+		expect(events).toHaveLength(1);
 	});
 });
