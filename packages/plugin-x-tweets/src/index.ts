@@ -10,6 +10,7 @@
 
 import {
 	type Action,
+	type ActionResult,
 	type Handler,
 	type HandlerCallback,
 	type IAgentRuntime,
@@ -156,6 +157,8 @@ const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
 const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
 const X_AUTONOMY_SEEN_LIMIT = 500;
+const X_STATUS_DEFAULT_DETOUR_REPO = "Dexploarer/detour";
+const X_STATUS_DEFAULT_DEVELOPER_LOGIN = "Dexploarer";
 const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"elizaOS",
 	"Dexploarer",
@@ -880,8 +883,8 @@ async function decideXRequiredReply(
 	return parseToonKeyValue<XRequiredReplyDecision>(String(raw)) ?? { reason: "unparseable model output" };
 }
 
-async function buildRecentAutonomyContext(runtime: IAgentRuntime, task: Task): Promise<string> {
-	const roomId = task.roomId ?? runtime.agentId;
+async function buildRecentAutonomyContext(runtime: IAgentRuntime, task?: Task): Promise<string> {
+	const roomId = task?.roomId ?? runtime.agentId;
 	const memories = await runtime.getMemories({
 		roomId,
 		tableName: "memories",
@@ -895,20 +898,178 @@ async function buildRecentAutonomyContext(runtime: IAgentRuntime, task: Task): P
 		.join("\n");
 }
 
+type GitHubIdentity = "agent" | "user";
+type GitHubResult = { ok: true; data: unknown } | { ok: false; error: string };
+
+function githubToken(runtime: IAgentRuntime, identity: GitHubIdentity): string | undefined {
+	if (identity === "agent") {
+		return pickSetting(runtime, "GITHUB_AGENT_PAT") ?? pickSetting(runtime, "GITHUB_TOKEN") ?? pickSetting(runtime, "GITHUB_USER_PAT");
+	}
+	return pickSetting(runtime, "GITHUB_USER_PAT") ?? pickSetting(runtime, "GITHUB_TOKEN") ?? pickSetting(runtime, "GITHUB_AGENT_PAT");
+}
+
+async function githubGet(runtime: IAgentRuntime, identity: GitHubIdentity, path: string, params: Record<string, string> = {}): Promise<GitHubResult> {
+	const token = githubToken(runtime, identity);
+	if (!token) return { ok: false, error: `${identity} GitHub token unavailable` };
+	const url = new URL(`https://api.github.com${path}`);
+	for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+	try {
+		const res = await fetch(url, {
+			headers: {
+				Authorization: `Bearer ${token}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+				"user-agent": "detour-x-status",
+			},
+		});
+		if (!res.ok) return { ok: false, error: `GitHub ${path} HTTP ${res.status}` };
+		return { ok: true, data: await res.json() };
+	} catch (err) {
+		return { ok: false, error: `GitHub ${path} failed: ${err instanceof Error ? err.message : String(err)}` };
+	}
+}
+
+function asRecords(value: unknown): Record<string, unknown>[] {
+	return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function recordValue(record: Record<string, unknown>, key: string): Record<string, unknown> {
+	const value = record[key];
+	return isRecord(value) ? value : {};
+}
+
+function stringValue(record: Record<string, unknown>, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(record: Record<string, unknown>, key: string): number | undefined {
+	const value = record[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseRepoRef(repoRef: string): { owner: string; repo: string } {
+	const [owner, repo] = repoRef.split("/", 2).map((part) => part.trim());
+	if (!owner || !repo) throw new Error(`invalid GitHub repo: ${repoRef}`);
+	return { owner, repo };
+}
+
+function githubDate(value: string | undefined): string {
+	if (!value) return "unknown";
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : value;
+}
+
+function formatCommit(record: Record<string, unknown>): string {
+	const commit = recordValue(record, "commit");
+	const author = recordValue(commit, "author");
+	const sha = compactText(stringValue(record, "sha"), 7);
+	const message = compactText(stringValue(commit, "message")?.split("\n")[0], 120);
+	const name = stringValue(author, "name") ?? "unknown";
+	const date = githubDate(stringValue(author, "date"));
+	return `${sha || "commit"} ${date} ${name}: ${message || "no message"}`;
+}
+
+function formatPull(record: Record<string, unknown>): string {
+	const number = numberValue(record, "number");
+	const title = compactText(stringValue(record, "title"), 140);
+	const state = stringValue(record, "state") ?? "unknown";
+	const updated = githubDate(stringValue(record, "updated_at"));
+	return `#${number ?? "?"} ${state} ${updated}: ${title || "untitled"}`;
+}
+
+function formatIssue(record: Record<string, unknown>): string {
+	const number = numberValue(record, "number");
+	const title = compactText(stringValue(record, "title"), 140);
+	const updated = githubDate(stringValue(record, "updated_at"));
+	return `#${number ?? "?"} ${updated}: ${title || "untitled"}`;
+}
+
+function formatRepo(record: Record<string, unknown>): string {
+	const name = stringValue(record, "full_name") ?? stringValue(record, "name") ?? "unknown";
+	const pushed = githubDate(stringValue(record, "pushed_at"));
+	const description = compactText(stringValue(record, "description"), 100);
+	return `${name} pushed ${pushed}${description ? ` — ${description}` : ""}`;
+}
+
+function formatEvent(record: Record<string, unknown>): string {
+	const type = stringValue(record, "type") ?? "Event";
+	const repo = stringValue(recordValue(record, "repo"), "name") ?? "unknown repo";
+	const created = githubDate(stringValue(record, "created_at"));
+	const payload = recordValue(record, "payload");
+	const commits = asRecords(payload.commits).slice(0, 2).map((commit) => compactText(stringValue(commit, "message")?.split("\n")[0], 90));
+	const action = stringValue(payload, "action");
+	return `${created} ${type}${action ? `/${action}` : ""} on ${repo}${commits.length > 0 ? `: ${commits.join(" | ")}` : ""}`;
+}
+
+async function buildDetourProjectStatusContext(runtime: IAgentRuntime, repoRef: string): Promise<string> {
+	const { owner, repo } = parseRepoRef(repoRef);
+	const lines = [`lane: Detour project status`, `repo: ${owner}/${repo}`];
+	const repoInfo = await githubGet(runtime, "agent", `/repos/${owner}/${repo}`);
+	if (repoInfo.ok && isRecord(repoInfo.data)) {
+		lines.push(`repo status: pushed ${githubDate(stringValue(repoInfo.data, "pushed_at"))}, updated ${githubDate(stringValue(repoInfo.data, "updated_at"))}, open issues ${numberValue(repoInfo.data, "open_issues_count") ?? "unknown"}, stars ${numberValue(repoInfo.data, "stargazers_count") ?? "unknown"}`);
+	} else if (!repoInfo.ok) lines.push(`repo status unavailable: ${repoInfo.error}`);
+	const commits = await githubGet(runtime, "agent", `/repos/${owner}/${repo}/commits`, { per_page: "5" });
+	if (commits.ok) lines.push(...asRecords(commits.data).slice(0, 5).map((commit, i) => `commit[${i}]: ${formatCommit(commit)}`));
+	else lines.push(`commits unavailable: ${commits.error}`);
+	const pulls = await githubGet(runtime, "agent", `/repos/${owner}/${repo}/pulls`, { state: "all", sort: "updated", direction: "desc", per_page: "5" });
+	if (pulls.ok) lines.push(...asRecords(pulls.data).slice(0, 5).map((pull, i) => `pr[${i}]: ${formatPull(pull)}`));
+	else lines.push(`pulls unavailable: ${pulls.error}`);
+	const issues = await githubGet(runtime, "agent", `/repos/${owner}/${repo}/issues`, { state: "open", sort: "updated", direction: "desc", per_page: "5" });
+	if (issues.ok) {
+		lines.push(...asRecords(issues.data)
+			.filter((issue) => !isRecord(issue.pull_request))
+			.slice(0, 5)
+			.map((issue, i) => `issue[${i}]: ${formatIssue(issue)}`));
+	} else lines.push(`issues unavailable: ${issues.error}`);
+	const recent = await buildRecentAutonomyContext(runtime);
+	if (recent) lines.push(`recent internal context:\n${recent}`);
+	return lines.join("\n");
+}
+
+async function buildDexploarerActivityContext(runtime: IAgentRuntime, username: string): Promise<string> {
+	const lines = [`lane: Dexploarer activity and project status`, `developer: ${username}`];
+	const events = await githubGet(runtime, "user", `/users/${username}/events`, { per_page: "12" });
+	if (events.ok) lines.push(...asRecords(events.data).slice(0, 8).map((event, i) => `event[${i}]: ${formatEvent(event)}`));
+	else lines.push(`events unavailable: ${events.error}`);
+	const repos = await githubGet(runtime, "user", `/users/${username}/repos`, { sort: "pushed", per_page: "8" });
+	if (repos.ok) lines.push(...asRecords(repos.data).slice(0, 6).map((repo, i) => `repo[${i}]: ${formatRepo(repo)}`));
+	else lines.push(`repos unavailable: ${repos.error}`);
+	return lines.join("\n");
+}
+
+type XStatusLane = "generic" | "detour_project" | "dexploarer_activity";
+
 async function decideXStatusPost(
 	runtime: IAgentRuntime,
 	params: {
 		viewerScreenName: string;
+		lane: XStatusLane;
 		context: string;
 		recentReplyTexts?: string[];
 	},
 ): Promise<XStatusDecision> {
+	const laneGuidance: Record<typeof params.lane, string[]> = {
+		generic: [
+			"- Use internal context only when it contains a useful, public-safe update.",
+		],
+		detour_project: [
+			"- This lane posts about Detour, the Squirrel's own project, and its GitHub status.",
+			"- Use concrete GitHub facts from commits, PRs, issues, repo status, or recent autonomy context.",
+			"- Do not invent releases, dates, shipped features, or production status that the context does not support.",
+		],
+		dexploarer_activity: [
+			"- This lane posts about Dexploarer's GitHub activity and the projects he is actively touching.",
+			"- Mention specific repos or activity only when the context supports it.",
+			"- Keep it builder-coded and do not turn it into personal surveillance or private-detail leakage.",
+		],
+	};
 	const prompt = [
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
-		...xTemplateGuidance(runtime, "post", `status:${Date.now()}`),
-		...replyVariationGuidance(`status:${Date.now()}`, params.context, params.recentReplyTexts),
+		...xTemplateGuidance(runtime, "post", `${params.lane}:${Date.now()}`),
+		...replyVariationGuidance(`${params.lane}:${Date.now()}`, params.context, params.recentReplyTexts),
 		"Write only if there is a useful, public-safe status update to share.",
 		"Rules:",
 		"- The status must be under 240 characters.",
@@ -916,6 +1077,7 @@ async function decideXStatusPost(
 		"- Do not include private names, message contents, secrets, tokens, file paths, screenshots, or internal logs.",
 		"- Do not claim launches, production readiness, financial results, or guarantees.",
 		"- No hashtags unless truly useful. No engagement bait.",
+		...laneGuidance[params.lane],
 		"",
 		params.context ? `Recent internal context:\n${params.context}` : "Recent internal context: (none)",
 		"",
@@ -1676,7 +1838,7 @@ async function processXStatusPost(
 ): Promise<void> {
 	if (!shouldRunStatus(settings, state, Date.now())) return;
 	const context = await buildRecentAutonomyContext(runtime, task);
-	const decision = await safeXStatusDecision(runtime, { viewerScreenName, context, recentReplyTexts: state.recentReplyTexts });
+	const decision = await safeXStatusDecision(runtime, { viewerScreenName, lane: "generic", context, recentReplyTexts: state.recentReplyTexts });
 	const text = sanitizeXOutputText(decision.text, 260);
 	if (!readModelBoolean(decision.should_post) || text.length === 0) {
 		rememberHandled(state, { action: "post_status_skip", reason: decision.reason ?? "model declined" });
@@ -1883,6 +2045,66 @@ export class XAutonomyService extends Service {
 	}
 }
 
+function configuredStatusString(
+	runtime: IAgentRuntime,
+	opts: Record<string, unknown> | undefined,
+	keys: string[],
+	settingKey: string,
+	defaultValue: string,
+): string {
+	const option = pickString(opts, keys)?.trim();
+	if (option) return option;
+	const setting = pickSetting(runtime, settingKey)?.trim();
+	return setting || defaultValue;
+}
+
+async function postGeneratedXStatus(
+	runtime: IAgentRuntime,
+	client: XClient,
+	callback: HandlerCallback | undefined,
+	actionName: string,
+	lane: XStatusLane,
+	context: string,
+): Promise<ActionResult> {
+	try {
+		const viewer = await client.viewer();
+		const decision = await decideXStatusPost(runtime, {
+			viewerScreenName: viewer.screenName,
+			lane,
+			context,
+			recentReplyTexts: [],
+		});
+		const text = sanitizeXOutputText(decision.text, 260);
+		if (!readModelBoolean(decision.should_post) || text.length === 0) {
+			const reason = decision.reason ?? "model declined";
+			logger.info({ src: "x-tweets", actionName, lane, reason }, "generated X status skipped");
+			await emit(callback, `${actionName} skipped: ${reason}`, actionName);
+			return { success: true, text: `${actionName} skipped: ${reason}`, values: { skipped: true, reason } };
+		}
+		if (!readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true)) {
+			logger.info({ src: "x-tweets", actionName, lane, text }, "generated X status dry run");
+			await emit(callback, `${actionName} dry run: ${text}`, actionName);
+			return { success: true, text, values: { dryRun: true } };
+		}
+		const result = await client.tweet(text);
+		if (!result.success) {
+			const error = result.error ?? "unknown";
+			logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status post failed");
+			await emit(callback, `${actionName} failed: ${error}`, actionName);
+			return { success: false, error };
+		}
+		const url = result.url ?? `https://x.com/i/web/status/${result.tweetId}`;
+		logger.info({ src: "x-tweets", actionName, lane, tweetId: result.tweetId, url }, "generated X status posted");
+		await emit(callback, `Posted: ${url}`, actionName);
+		return { success: true, text: `Posted: ${url}`, data: { tweetId: result.tweetId, url, statusText: text } };
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status failed");
+		await emit(callback, `${actionName} failed: ${error}`, actionName);
+		return { success: false, error };
+	}
+}
+
 // ── X_POST ──────────────────────────────────────────────────────────────────
 
 const postHandler: Handler = async (runtime, _m, _s, options, callback) => {
@@ -1919,6 +2141,56 @@ export const xPostAction: Action = {
 	examples: [],
 	parameters: [
 		{ name: "text", description: "Tweet body.", required: true, schema: { type: "string" as const } },
+	],
+} as Action;
+
+// ── X_POST_DETOUR_STATUS ────────────────────────────────────────────────────
+
+const detourStatusHandler: Handler = async (runtime, _m, _s, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const repo = configuredStatusString(runtime, opts, ["repo", "repoRef", "repository"], "X_STATUS_DETOUR_REPO", X_STATUS_DEFAULT_DETOUR_REPO);
+	return withClient(runtime, callback, "X_POST_DETOUR_STATUS", async (client) => {
+		const context = await buildDetourProjectStatusContext(runtime, repo);
+		return postGeneratedXStatus(runtime, client, callback, "X_POST_DETOUR_STATUS", "detour_project", context);
+	});
+};
+
+export const xPostDetourStatusAction: Action = {
+	name: "X_POST_DETOUR_STATUS",
+	similes: ["POST_DETOUR_STATUS", "POST_PROJECT_STATUS", "TWEET_DETOUR_STATUS"],
+	description:
+		"Fetch GitHub context for Detour's repository, compose one public-safe project status update, " +
+		"and post it to X as the logged-in account.",
+	validate: alwaysValid,
+	handler: detourStatusHandler,
+	examples: [],
+	parameters: [
+		{ name: "repo", description: "Optional owner/repo. Defaults to Dexploarer/detour.", required: false, schema: { type: "string" as const } },
+	],
+} as Action;
+
+// ── X_POST_DEXPLOARER_STATUS ────────────────────────────────────────────────
+
+const dexploarerStatusHandler: Handler = async (runtime, _m, _s, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const developer = configuredStatusString(runtime, opts, ["developer", "login", "username"], "X_STATUS_DEVELOPER_LOGIN", X_STATUS_DEFAULT_DEVELOPER_LOGIN);
+	return withClient(runtime, callback, "X_POST_DEXPLOARER_STATUS", async (client) => {
+		const context = await buildDexploarerActivityContext(runtime, developer);
+		return postGeneratedXStatus(runtime, client, callback, "X_POST_DEXPLOARER_STATUS", "dexploarer_activity", context);
+	});
+};
+
+export const xPostDexploarerStatusAction: Action = {
+	name: "X_POST_DEXPLOARER_STATUS",
+	similes: ["POST_DEVELOPER_STATUS", "POST_DEXPLOARER_ACTIVITY", "TWEET_DEXPLOARER_STATUS"],
+	description:
+		"Fetch public GitHub context for Dexploarer's recent activity, compose one public-safe builder status update, " +
+		"and post it to X as the logged-in account.",
+	validate: alwaysValid,
+	handler: dexploarerStatusHandler,
+	examples: [],
+	parameters: [
+		{ name: "developer", description: "Optional GitHub username. Defaults to Dexploarer.", required: false, schema: { type: "string" as const } },
 	],
 } as Action;
 
@@ -2440,11 +2712,13 @@ export const xTweetsPlugin: Plugin = {
 	description:
 		"Full agent-callable surface on X (Twitter) via cookie auth. Includes post, reply, like, " +
 		"retweet, bookmark, delete, follow, search, get-user, get-tweet, user-tweets, home-timeline, " +
-		"notifications, algorithm playbook, and algorithm-fit discovery. Reads X_AUTH_TOKEN + X_CT0 " +
+		"notifications, GitHub-backed status posts, algorithm playbook, and algorithm-fit discovery. Reads X_AUTH_TOKEN + X_CT0 " +
 		"from the vault. Autonomy handles direct notifications by default and performs read-only " +
 		"discovery unless proactive public engagement is explicitly enabled.",
 	actions: [
 		xPostAction,
+		xPostDetourStatusAction,
+		xPostDexploarerStatusAction,
 		xReplyAction,
 		xNotificationsAction,
 		xAlgorithmPlaybookAction,
