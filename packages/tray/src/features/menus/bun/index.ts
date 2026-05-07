@@ -36,6 +36,7 @@ export const menusFeature: Feature = {
 				submenu: [
 					{ label: "Toggle Chat", action: "chat:toggle", accelerator: "CommandOrControl+Shift+Space" },
 					{ label: "Open Chat", action: "chat:open" },
+					{ label: "Command Palette", action: "command-palette:open", accelerator: "CommandOrControl+K" },
 					{ type: "separator" },
 					{ label: "Open Settings", action: "app:settings" },
 				],
@@ -65,6 +66,12 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
+				label: "Agents",
+				submenu: [
+					{ label: "Open Agents", action: "agents:open" },
+				],
+			},
+			{
 				label: "Window",
 				submenu: [
 					{ role: "minimize" },
@@ -85,6 +92,9 @@ export const menusFeature: Feature = {
 				case "chat:open":
 					deps.events.emit("ui:open-chat", {});
 					break;
+				case "command-palette:open":
+					deps.events.emit("ui:open-command-palette", {});
+					break;
 				case "pensieve:open":
 					deps.events.emit("ui:open-pensieve", {});
 					break;
@@ -96,6 +106,9 @@ export const menusFeature: Feature = {
 					break;
 				case "channels:open":
 					deps.events.emit("ui:open-channels", {});
+					break;
+				case "agents:open":
+					deps.events.emit("ui:open-agents", {});
 					break;
 			}
 		});

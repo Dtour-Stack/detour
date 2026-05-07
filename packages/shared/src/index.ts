@@ -16,6 +16,16 @@ export type ChatCommandInfo = {
 	source: "native" | "skill";
 };
 
+export type WindowOpenTarget =
+	| "chat"
+	| "command-palette"
+	| "settings"
+	| "pensieve"
+	| "activity"
+	| "channels"
+	| "browser"
+	| "agents";
+
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
 export type BackendId = "in-house" | "1password" | "protonpass" | "bitwarden";
@@ -179,7 +189,13 @@ export type WsServerMessage =
 	| { kind: "provider:changed"; activeProvider: ProviderId | null }
 	| { kind: "auth:flow-update"; sessionId: string; state: AuthFlowState }
 	| { kind: "backend:changed"; backendId: string }
+	| { kind: "ui:open-chat" }
 	| { kind: "ui:open-settings" }
+	| { kind: "ui:open-command-palette" }
+	| { kind: "ui:open-pensieve" }
+	| { kind: "ui:open-activity" }
+	| { kind: "ui:open-channels" }
+	| { kind: "ui:open-agents" }
 	| { kind: "ui:open-browser" }
 	| { kind: "browser:command"; command: BrowserCommand }
 	| { kind: "ui:preferences-changed"; preferences: UiPreferences }

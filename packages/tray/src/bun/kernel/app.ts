@@ -25,6 +25,20 @@ export function createKernel(opts: {
 	opts.api.on((msg) => {
 		if (msg.kind === "provider:changed") {
 			events.emit("provider:changed", { activeProvider: msg.activeProvider });
+		} else if (msg.kind === "ui:open-chat") {
+			events.emit("ui:open-chat", {});
+		} else if (msg.kind === "ui:open-command-palette") {
+			events.emit("ui:open-command-palette", {});
+		} else if (msg.kind === "ui:open-settings") {
+			events.emit("ui:open-settings", {});
+		} else if (msg.kind === "ui:open-pensieve") {
+			events.emit("ui:open-pensieve", {});
+		} else if (msg.kind === "ui:open-activity") {
+			events.emit("ui:open-activity", {});
+		} else if (msg.kind === "ui:open-channels") {
+			events.emit("ui:open-channels", {});
+		} else if (msg.kind === "ui:open-agents") {
+			events.emit("ui:open-agents", {});
 		} else if (msg.kind === "ui:open-browser" || msg.kind === "browser:command") {
 			events.emit("ui:open-browser", {});
 		}

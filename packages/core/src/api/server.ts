@@ -23,6 +23,7 @@ import type {
 	SetActiveProviderBody,
 	SetEnabledBackendsBody,
 	SetProviderKeyBody,
+	WindowOpenTarget,
 	WorkspaceAgentRecord,
 	WorkspaceAgentStatus,
 	WorkspaceProjectFile,
@@ -166,6 +167,16 @@ const INBOX_STATUSES = new Set([
 	"dismissed",
 ]);
 const MEMORY_TABLES = new Set<string>(KNOWN_MEMORY_TABLES);
+const WINDOW_OPEN_TARGETS = new Set<WindowOpenTarget>([
+	"chat",
+	"command-palette",
+	"settings",
+	"pensieve",
+	"activity",
+	"channels",
+	"browser",
+	"agents",
+]);
 
 function corsHeaders(contentType?: string): HeadersInit {
 	return {
@@ -201,6 +212,35 @@ function chatCommands(): ChatCommandInfo[] {
 		if (!byName.has(command.name)) byName.set(command.name, command);
 	}
 	return [...byName.values()];
+}
+
+function windowMessageForTarget(target: WindowOpenTarget): WsServerMessage {
+	switch (target) {
+		case "command-palette":
+			return { kind: "ui:open-command-palette" };
+		case "settings":
+			return { kind: "ui:open-settings" };
+		case "pensieve":
+			return { kind: "ui:open-pensieve" };
+		case "activity":
+			return { kind: "ui:open-activity" };
+		case "channels":
+			return { kind: "ui:open-channels" };
+		case "browser":
+			return { kind: "ui:open-browser" };
+		case "agents":
+			return { kind: "ui:open-agents" };
+		case "chat":
+			return { kind: "ui:open-chat" };
+	}
+}
+
+function parseWindowOpenTarget(value: unknown): WindowOpenTarget | null {
+	if (typeof value !== "string") return null;
+	for (const target of WINDOW_OPEN_TARGETS) {
+		if (target === value) return target;
+	}
+	return null;
 }
 
 function parseInboxStatus(value: unknown): InboxStatus | null {
@@ -2042,6 +2082,13 @@ export class ApiServer {
 					width: Math.max(320, Math.min(2000, Number(body.width) || 0)),
 					height: Math.max(320, Math.min(2000, Number(body.height) || 0)),
 				});
+				return ok();
+			}
+			if (req.method === "POST" && path === "/api/window/open") {
+				const body = (await req.json()) as { target?: unknown };
+				const target = parseWindowOpenTarget(body.target);
+				if (!target) return error("invalid window target", 400);
+				this.broadcast(windowMessageForTarget(target));
 				return ok();
 			}
 			return null;

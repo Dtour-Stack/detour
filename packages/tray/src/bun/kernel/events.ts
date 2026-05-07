@@ -22,11 +22,13 @@ export type KernelEvents = {
 	"runtime:ready": Record<string, never>;
 	"runtime:error": { message: string };
 	"ui:open-settings": Record<string, never>;
+	"ui:open-command-palette": Record<string, never>;
 	"ui:open-chat": Record<string, never>;
 	"ui:toggle-chat": Record<string, never>;
 	"ui:open-pensieve": Record<string, never>;
 	"ui:open-activity": Record<string, never>;
 	"ui:open-channels": Record<string, never>;
+	"ui:open-agents": Record<string, never>;
 	"ui:open-browser": Record<string, never>;
 	notify: { title: string; body?: string; subtitle?: string };
 };

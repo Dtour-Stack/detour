@@ -44,6 +44,7 @@ import type {
 	SigninResult,
 	UiPreferences,
 	WindowConfig,
+	WindowOpenTarget,
 	WorkspaceAgentLog,
 	WorkspaceAgentsSnapshot,
 	WorkspaceProjectFile,
@@ -845,6 +846,10 @@ export class WebClient {
 	}
 	async resizeWindow(width: number, height: number): Promise<void> {
 		await this.json("POST", "/api/window/resize", { width, height });
+	}
+
+	async openWindow(target: WindowOpenTarget): Promise<void> {
+		await this.json("POST", "/api/window/open", { target });
 	}
 
 	// --- routing ---

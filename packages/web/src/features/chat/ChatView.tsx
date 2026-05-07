@@ -35,9 +35,11 @@ function uid() {
 export function ChatView({
 	client,
 	onOpenSettings,
+	commandRequest,
 }: {
 	client: WebClient;
 	onOpenSettings: () => void;
+	commandRequest?: { id: number; text: string; submit: boolean } | null;
 }) {
 	const [bubbles, setBubbles] = useState<Bubble[]>([]);
 	const [activeProvider, setActiveProvider] = useState<ProviderId | null>(null);
@@ -47,6 +49,7 @@ export function ChatView({
 	const [slashCommands, setSlashCommands] = useState<ChatCommandInfo[]>(FALLBACK_SLASH_COMMANDS);
 	const assistantId = useRef<string | null>(null);
 	const bottomRef = useRef<HTMLDivElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 	const slashMatches = useMemo(() => {
 		if (!draft.startsWith("/")) return [];
@@ -106,6 +109,16 @@ export function ChatView({
 	useEffect(() => {
 		setSlashIndex(0);
 	}, [slashMatches.length]);
+
+	useEffect(() => {
+		if (!commandRequest) return;
+		if (commandRequest.submit) {
+			send(commandRequest.text);
+		} else {
+			setDraft(commandRequest.text);
+			requestAnimationFrame(() => textareaRef.current?.focus());
+		}
+	}, [commandRequest]);
 
 	function send(text: string) {
 		if (!text.trim()) return;
@@ -195,6 +208,7 @@ export function ChatView({
 				)}
 				<div className="composer-row">
 					<textarea
+						ref={textareaRef}
 						placeholder={activeProvider ? "Message Detour…" : "Configure a provider in Configuration to start"}
 						disabled={!activeProvider || pending}
 						value={draft}
