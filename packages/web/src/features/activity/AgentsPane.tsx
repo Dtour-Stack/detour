@@ -91,12 +91,12 @@ function agentEndpoints(): AgentEndpointConfig {
 	const env = import.meta.env as Record<string, string | undefined>;
 	const explicitApiBase = cleanBase(urlParam("agentApi") ?? env.VITE_DETOUR_AGENT_API_URL);
 	const explicitStreamBase = cleanBase(urlParam("agentWs") ?? env.VITE_DETOUR_AGENT_WS_URL);
-	const localApiBase = isLocalHost(window.location.hostname) ? DEFAULT_LOCAL_AGENT_API_BASE : "";
-	const streamBase = explicitStreamBase || wsBaseFromHttp(explicitApiBase || localApiBase);
+	const apiBase = explicitApiBase || DEFAULT_LOCAL_AGENT_API_BASE;
+	const streamBase = explicitStreamBase || wsBaseFromHttp(apiBase);
 	return {
-		apiBase: explicitApiBase,
+		apiBase,
 		streamBase,
-		remote: Boolean(explicitApiBase || explicitStreamBase),
+		remote: !isLocalHost(window.location.hostname) || Boolean(explicitApiBase || explicitStreamBase),
 	};
 }
 

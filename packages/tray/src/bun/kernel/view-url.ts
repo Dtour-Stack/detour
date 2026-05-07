@@ -43,16 +43,16 @@ function resolveBundledIndex(): string | null {
 
 /**
  * Resolve the URL for a hash-routed React window.
- *   resolveViewUrl()           → chat (no hash)
- *   resolveViewUrl("pensieve") → "#pensieve"
- *   resolveViewUrl("activity") → "#activity"
- *   resolveViewUrl("channels") → "#channels"
+ *   resolveViewUrl()           → chat
+ *   resolveViewUrl("pensieve") → pensieve view
+ *   resolveViewUrl("activity") → activity view
+ *   resolveViewUrl("channels") → channels view
  */
-export function resolveViewUrl(hash?: string): string {
-	const fragment = hash ? `#${hash}` : "";
+export function resolveViewUrl(view?: string): string {
+	const route = view ? `?view=${encodeURIComponent(view)}#${view}` : "";
 	const bundled = resolveBundledIndex();
 	if (bundled) {
-		return `views://web/index.html${fragment}`;
+		return `views://web/index.html${route}`;
 	}
-	return `${DEV_URL}/${fragment}`;
+	return `${DEV_URL}/${route}`;
 }

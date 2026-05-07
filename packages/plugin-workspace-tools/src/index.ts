@@ -147,11 +147,15 @@ function numberOption(options: Record<string, unknown> | undefined, keys: readon
 
 function workspaceRoot(): string {
 	const root = process.env.DETOUR_WORKSPACE_ROOT;
-	const resolved = typeof root === "string" && root.length > 0
+	const resolved = typeof root === "string" && root.length > 0 && !isAppBundlePath(root)
 		? resolve(root)
 		: AGENT_PROJECTS_DIR;
 	mkdirSync(resolved, { recursive: true });
 	return resolved;
+}
+
+function isAppBundlePath(value: string): boolean {
+	return /\/[^/]+\.app\/Contents(?:\/|$)/.test(resolve(value));
 }
 
 function projectSlug(value: string): string {
@@ -164,8 +168,9 @@ function projectSlug(value: string): string {
 }
 
 function resolveCwd(cwd: string | undefined, projectSeed: string): string {
-	const resolved = cwd
-		? isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot(), cwd)
+	const requested = cwd && !isAppBundlePath(cwd) ? cwd : undefined;
+	const resolved = requested
+		? isAbsolute(requested) ? resolve(requested) : resolve(workspaceRoot(), requested)
 		: resolve(workspaceRoot(), projectSlug(projectSeed));
 	mkdirSync(resolved, { recursive: true });
 	return resolved;

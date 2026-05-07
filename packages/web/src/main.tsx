@@ -8,20 +8,35 @@ import { ChannelsView } from "./features/channels/ChannelsView";
 import { BrowserView } from "./features/browser/BrowserView";
 import "./index.css";
 
-// Hash-routing: the same Vite bundle serves four windows.
-//   #pensieve → memory + relationship browser (own window)
-//   #activity → trajectories + logs + runtime introspection (own window)
-//   #agents   → coding-agent terminal sessions
-//   #channels → connected messaging surfaces (Discord/Telegram/iMessage)
-//   #browser  → isolated multi-tab agent browser
-//   default   → chat popup (App)
-const hash = typeof window !== "undefined" ? window.location.hash.split("?")[0] : "";
+type ViewRoute = "chat" | "pensieve" | "activity" | "agents" | "channels" | "browser";
+
+const VIEW_ROUTES = new Set<ViewRoute>([
+	"chat",
+	"pensieve",
+	"activity",
+	"agents",
+	"channels",
+	"browser",
+]);
+
+function routeFromLocation(): ViewRoute {
+	if (typeof window === "undefined") return "chat";
+	const searchView = new URLSearchParams(window.location.search).get("view");
+	if (searchView && VIEW_ROUTES.has(searchView as ViewRoute)) return searchView as ViewRoute;
+	const hashView = window.location.hash.split("?")[0]?.replace(/^#/, "");
+	if (hashView && VIEW_ROUTES.has(hashView as ViewRoute)) return hashView as ViewRoute;
+	const pathView = window.location.pathname.split("/").filter(Boolean).pop();
+	if (pathView && VIEW_ROUTES.has(pathView as ViewRoute)) return pathView as ViewRoute;
+	return "chat";
+}
+
+const route = routeFromLocation();
 const root =
-	hash === "#pensieve" ? <PensieveView /> :
-	hash === "#activity" ? <ActivityView /> :
-	hash === "#agents" ? <AgentsView /> :
-	hash === "#channels" ? <ChannelsView /> :
-	hash === "#browser" ? <BrowserView /> :
+	route === "pensieve" ? <PensieveView /> :
+	route === "activity" ? <ActivityView /> :
+	route === "agents" ? <AgentsView /> :
+	route === "channels" ? <ChannelsView /> :
+	route === "browser" ? <BrowserView /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);
