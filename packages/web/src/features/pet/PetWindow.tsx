@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import type { CodexPetActivity, CodexPetAnimationState, CodexPetSummary } from "@detour/shared";
+import type { CodexPetActivity, CodexPetAnimationState, CodexPetSummary, WindowOpenTarget } from "@detour/shared";
 import { WebClient } from "../../api/client";
 
 type AnimationSpec = {
@@ -11,22 +11,43 @@ type AnimationSpec = {
 };
 
 const ANIMATIONS: AnimationSpec[] = [
-	{ state: "idle", label: "idle", row: 0, frames: 6, durationMs: 1200 },
-	{ state: "waiting", label: "watching", row: 6, frames: 6, durationMs: 1400 },
-	{ state: "review", label: "reviewing", row: 8, frames: 6, durationMs: 1200 },
-	{ state: "waving", label: "checking in", row: 3, frames: 4, durationMs: 900 },
-	{ state: "running", label: "moving", row: 7, frames: 6, durationMs: 850 },
-	{ state: "jumping", label: "shipping", row: 4, frames: 5, durationMs: 900 },
-	{ state: "running-right", label: "sprinting", row: 1, frames: 8, durationMs: 800 },
-	{ state: "running-left", label: "looping back", row: 2, frames: 8, durationMs: 800 },
+	{ state: "idle", label: "idle", row: 0, frames: 6, durationMs: 2200 },
+	{ state: "waiting", label: "watching", row: 6, frames: 6, durationMs: 2600 },
+	{ state: "review", label: "reviewing", row: 8, frames: 6, durationMs: 1900 },
+	{ state: "waving", label: "checking in", row: 3, frames: 4, durationMs: 1800 },
+	{ state: "running", label: "moving", row: 7, frames: 6, durationMs: 1500 },
+	{ state: "jumping", label: "shipping", row: 4, frames: 5, durationMs: 1700 },
+	{ state: "running-right", label: "sprinting", row: 1, frames: 8, durationMs: 1400 },
+	{ state: "running-left", label: "looping back", row: 2, frames: 8, durationMs: 1400 },
 ];
 
-const FAILED: AnimationSpec = { state: "failed", label: "needs attention", row: 5, frames: 8, durationMs: 1200 };
+const FAILED: AnimationSpec = { state: "failed", label: "needs attention", row: 5, frames: 8, durationMs: 2100 };
+const IDLE_ANIMATION_STATES: CodexPetAnimationState[] = ["idle", "idle", "idle", "waiting", "idle", "waving"];
+
+type PetMenuItem =
+	| { label: string; target: WindowOpenTarget }
+	| { label: string; action: "spawn" };
+
+const PET_MENU_ITEMS: PetMenuItem[] = [
+	{ label: "Chat", target: "chat" },
+	{ label: "Commands", target: "command-palette" },
+	{ label: "Settings", target: "settings" },
+	{ label: "Activity", target: "activity" },
+	{ label: "Agents", target: "agents" },
+	{ label: "Pensieve", target: "pensieve" },
+	{ label: "Channels", target: "channels" },
+	{ label: "Browser", target: "browser" },
+	{ label: "Spawn Pet", action: "spawn" },
+];
 
 type SpriteStyle = CSSProperties & {
 	"--pet-row": number;
 	"--pet-frames": number;
 	"--pet-duration": string;
+};
+
+type PetMenuItemStyle = CSSProperties & {
+	"--pet-menu-index": number;
 };
 
 function clampText(value: string | undefined, max = 92): string {
@@ -45,6 +66,8 @@ export function PetWindow() {
 	const [activity, setActivity] = useState<CodexPetActivity | null>(null);
 	const [manualState, setManualState] = useState<CodexPetAnimationState | null>(null);
 	const [dragging, setDragging] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
+	const [idleIndex, setIdleIndex] = useState(0);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -57,6 +80,22 @@ export function PetWindow() {
 		const timer = setTimeout(() => setManualState(null), 9000);
 		return () => clearTimeout(timer);
 	}, [manualState]);
+
+	useEffect(() => {
+		const timer = setInterval(() => {
+			setIdleIndex((index) => (index + 1) % IDLE_ANIMATION_STATES.length);
+		}, 12_000);
+		return () => clearInterval(timer);
+	}, []);
+
+	useEffect(() => {
+		if (!menuOpen) return;
+		const close = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setMenuOpen(false);
+		};
+		window.addEventListener("keydown", close);
+		return () => window.removeEventListener("keydown", close);
+	}, [menuOpen]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -93,7 +132,9 @@ export function PetWindow() {
 	if (error) return <div className="pet-window pet-window-message">{error}</div>;
 	if (!pet) return <div className="pet-window pet-window-message">Hatching...</div>;
 
-	const animation = animationForState(manualState ?? activity?.state ?? "idle");
+	const activityState = activity?.state ?? "idle";
+	const animationState = manualState ?? (activityState === "idle" ? IDLE_ANIMATION_STATES[idleIndex] ?? "idle" : activityState);
+	const animation = animationForState(animationState);
 	const style: SpriteStyle = {
 		backgroundImage: `url(${pet.spritesheetUrl})`,
 		backgroundSize: `${pet.atlas.width}px ${pet.atlas.height}px`,
@@ -102,6 +143,16 @@ export function PetWindow() {
 		"--pet-duration": `${animation.durationMs}ms`,
 	};
 	const detail = clampText(activity?.detail);
+	const openMenuItem = async (item: PetMenuItem) => {
+		setMenuOpen(false);
+		if ("target" in item) {
+			await client.openWindow(item.target);
+			return;
+		}
+		const spawned = await client.spawnPet();
+		setPet(spawned.pet);
+		setManualState(spawned.state);
+	};
 
 	return (
 		<div
@@ -120,14 +171,38 @@ export function PetWindow() {
 				</div>
 			</div>
 			<div className="pet-stage">
-				<div
-					key={animation.state}
-					className="pet-sprite"
-					style={style}
-					aria-label={`${pet.displayName} ${animation.label}`}
-				/>
+				<button
+					type="button"
+					className="pet-character-button electrobun-webkit-app-region-no-drag"
+					onClick={() => setMenuOpen((open) => !open)}
+					aria-expanded={menuOpen}
+					aria-label={`${pet.displayName} menu`}
+				>
+					<div
+						key={animation.state}
+						className="pet-sprite"
+						style={style}
+						aria-label={`${pet.displayName} ${animation.label}`}
+					/>
+				</button>
 				<div className="pet-name">{pet.displayName}</div>
 			</div>
+			{menuOpen && (
+				<div className="pet-goo-menu electrobun-webkit-app-region-no-drag" role="menu">
+					{PET_MENU_ITEMS.map((item, index) => (
+						<button
+							key={item.label}
+							type="button"
+							className="pet-goo-menu-item"
+							style={{ "--pet-menu-index": index } as PetMenuItemStyle}
+							onClick={() => void openMenuItem(item)}
+							role="menuitem"
+						>
+							{item.label}
+						</button>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }
