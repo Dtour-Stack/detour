@@ -54,6 +54,7 @@ import type {
 
 type Listener = (msg: WsServerMessage) => void;
 type DetourFetchInit = RequestInit & { targetAddressSpace?: "local" };
+const LOCAL_API_BASE = "http://127.0.0.1:2138";
 
 export type DiscordCatchUpResult = {
 	channelsScanned: number;
@@ -84,12 +85,19 @@ function isLoopbackBase(base: string): boolean {
 	}
 }
 
+function defaultApiBase(): string {
+	if (typeof window === "undefined") return "";
+	return location.protocol === "http:" || location.protocol === "https:"
+		? ""
+		: LOCAL_API_BASE;
+}
+
 export class WebClient {
 	private ws: WebSocket | null = null;
 	private listeners = new Set<Listener>();
 	private outbox: WsClientMessage[] = [];
 
-	constructor(private readonly base = "") {}
+	constructor(private readonly base = defaultApiBase()) {}
 
 	private fetchInit(init: RequestInit): DetourFetchInit {
 		return isLoopbackBase(this.base)
