@@ -2079,29 +2079,29 @@ async function postGeneratedXStatus(
 			const reason = decision.reason ?? "model declined";
 			logger.info({ src: "x-tweets", actionName, lane, reason }, "generated X status skipped");
 			await emit(callback, `${actionName} skipped: ${reason}`, actionName);
-			return { success: true, text: `${actionName} skipped: ${reason}`, values: { skipped: true, reason } };
+			return { success: true, text: `${actionName} skipped: ${reason}`, values: { skipped: true, reason }, continueChain: false };
 		}
 		if (!readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true)) {
 			logger.info({ src: "x-tweets", actionName, lane, text }, "generated X status dry run");
 			await emit(callback, `${actionName} dry run: ${text}`, actionName);
-			return { success: true, text, values: { dryRun: true } };
+			return { success: true, text, values: { dryRun: true }, continueChain: false };
 		}
 		const result = await client.tweet(text);
 		if (!result.success) {
 			const error = result.error ?? "unknown";
 			logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status post failed");
 			await emit(callback, `${actionName} failed: ${error}`, actionName);
-			return { success: false, error };
+			return { success: false, error, continueChain: false };
 		}
 		const url = result.url ?? `https://x.com/i/web/status/${result.tweetId}`;
 		logger.info({ src: "x-tweets", actionName, lane, tweetId: result.tweetId, url }, "generated X status posted");
 		await emit(callback, `Posted: ${url}`, actionName);
-		return { success: true, text: `Posted: ${url}`, data: { tweetId: result.tweetId, url, statusText: text } };
+		return { success: true, text: `Posted: ${url}`, data: { tweetId: result.tweetId, url, statusText: text }, continueChain: false };
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
 		logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status failed");
 		await emit(callback, `${actionName} failed: ${error}`, actionName);
-		return { success: false, error };
+		return { success: false, error, continueChain: false };
 	}
 }
 
