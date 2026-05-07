@@ -54,15 +54,38 @@ function cleanText(raw: string): string {
 	return text.length > 2000 ? text.slice(0, 2000).trim() : text;
 }
 
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function characterReplyContext(runtime: IAgentRuntime): string {
+	const character = runtime.character as {
+		system?: unknown;
+		bio?: unknown;
+		lore?: unknown;
+		style?: { all?: unknown; chat?: unknown };
+	};
+	const lines = [
+		typeof character.system === "string" ? character.system.trim() : "",
+		...stringArray(character.bio).slice(0, 4),
+		...stringArray(character.lore).slice(0, 3),
+		...stringArray(character.style?.all).slice(0, 4),
+		...stringArray(character.style?.chat).slice(0, 4),
+	].filter((line) => line.length > 0);
+	return lines.join("\n").slice(0, 5_000);
+}
+
 export async function generatePlainTextReply(
 	runtime: IAgentRuntime,
 	conversation: string,
 	reason: string,
 ): Promise<string | null> {
 	if (!conversation.trim()) return null;
+	const characterContext = characterReplyContext(runtime);
 	const prompt = [
 		`You are ${runtime.character.name}. Reply to the latest user message in plain text.`,
 		"Return only the message to send. No labels, no JSON, no TOON, no markdown fence, no hidden reasoning.",
+		...(characterContext ? ["", "Character context:", characterContext] : []),
 		"",
 		"Recent conversation:",
 		conversation.slice(-12_000),

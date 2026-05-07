@@ -19,18 +19,19 @@ const plannerArgs = {
 
 function makeRuntime(
 	original: () => Promise<unknown>,
-	useModel: () => Promise<string> = async () => "plain reply",
+	useModel: (modelType: unknown, params: unknown) => Promise<string> = async () => "plain reply",
+	character: Record<string, unknown> = { name: "Detour Squirrel" },
 ): { runtime: IAgentRuntime; calls: string[] } {
 	const calls: string[] = [];
 	const runtime = {
-		character: { name: "Detour Squirrel" },
+		character,
 		dynamicPromptExecFromState: async () => {
 			calls.push("original");
 			return await original();
 		},
-		useModel: async () => {
+		useModel: async (modelType: unknown, params: unknown) => {
 			calls.push("model");
-			return await useModel();
+			return await useModel(modelType, params);
 		},
 		logger: { warn: () => undefined },
 	} as never;
@@ -81,5 +82,34 @@ describe("dpe fallback patch", () => {
 
 		expect(calls).toEqual(["original"]);
 		expect(result).toBeNull();
+	});
+
+	test("plain text replies include character context", async () => {
+		const prompts: string[] = [];
+		const { runtime } = makeRuntime(
+			async () => {
+				throw new Error("planner failed");
+			},
+			async (_modelType, params) => {
+				prompts.push((params as { prompt?: string }).prompt ?? "");
+				return "plain reply";
+			},
+			{
+				name: "Detour Squirrel",
+				system: "Dexploarer is your dev; carry prior Discord context.",
+				bio: ["protector of cozy devs"],
+				style: { chat: ["answer like a sharp dev friend"] },
+			},
+		);
+
+		await runWithPlannerFallbackContext(
+			{ source: "discord", addressed: true },
+			() => runtime.dynamicPromptExecFromState(plannerArgs),
+		);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain("Dexploarer is your dev");
+		expect(prompts[0]).toContain("protector of cozy devs");
+		expect(prompts[0]).toContain("answer like a sharp dev friend");
 	});
 });

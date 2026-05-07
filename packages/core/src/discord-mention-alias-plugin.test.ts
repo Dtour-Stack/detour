@@ -18,6 +18,21 @@ type HandleMessage = (
 ) => Promise<MessageProcessingResult>;
 
 const INTERNAL_FALLBACK_TERMS = ["pipeline", "tripped", "fallback", "provider", "llm", "runtime", "generation"];
+type TestUseModel = (modelType: unknown, params: unknown) => Promise<string | null>;
+type ManagerRuntimeOptions = {
+	useModel?: TestUseModel;
+	history?: Array<{
+		id: string;
+		content: string;
+		createdTimestamp: number;
+		author: { id: string; username?: string; displayName?: string; globalName?: string; bot?: boolean };
+	}>;
+	message?: {
+		id?: string;
+		content?: string;
+		createdTimestamp?: number;
+	};
+};
 
 function expectPublicDiscordText(text: unknown): asserts text is string {
 	expect(typeof text).toBe("string");
@@ -61,7 +76,7 @@ function metadataOnlyDiscordMessage(): Memory {
 
 function makeRuntime(
 	handleMessage: HandleMessage,
-	useModel: () => Promise<string | null> = async () => "fallback reply",
+	useModel: TestUseModel = async () => "fallback reply",
 ) {
 	const replies: Content[] = [];
 	const llmCalls: unknown[] = [];
@@ -96,7 +111,8 @@ function makeRuntime(
 	return { runtime, service, callback, replies, llmCalls, steps };
 }
 
-function makeManagerRuntime(useModel: () => Promise<string | null> = async () => "manager fallback") {
+function makeManagerRuntime(options: ManagerRuntimeOptions = {}) {
+	const useModel = options.useModel ?? (async () => "manager fallback");
 	const sent: unknown[] = [];
 	const events: unknown[] = [];
 	const messageManager: { handleMessage: (message: unknown) => Promise<unknown> } = {
@@ -124,14 +140,14 @@ function makeManagerRuntime(useModel: () => Promise<string | null> = async () =>
 		logger: { warn: () => undefined },
 	} as never;
 	const message = {
-		id: "discord-message-id",
-		content: "Detour hello",
-		createdTimestamp: Date.now(),
+		id: options.message?.id ?? "discord-message-id",
+		content: options.message?.content ?? "Detour hello",
+		createdTimestamp: options.message?.createdTimestamp ?? Date.now(),
 		author: { id: "user-id", bot: false },
 		mentions: { users: { has: (id: string) => id === "bot-id" } },
 		channel: {
 			id: "channel-id",
-			messages: { fetch: async () => ({ values: () => [][Symbol.iterator]() }) },
+			messages: { fetch: async () => ({ values: () => (options.history ?? [])[Symbol.iterator]() }) },
 		},
 		reply: async (payload: unknown) => {
 			sent.push(payload);
@@ -226,8 +242,10 @@ describe("discord mention alias reply guard", () => {
 	});
 
 	test("raw Discord manager guard hides internal wording when generation fails", async () => {
-		const { messageManager, message, sent } = makeManagerRuntime(async () => {
-			throw new Error("model unavailable");
+		const { messageManager, message, sent } = makeManagerRuntime({
+			useModel: async () => {
+				throw new Error("model unavailable");
+			},
 		});
 
 		await messageManager.handleMessage(message);
@@ -236,5 +254,49 @@ describe("discord mention alias reply guard", () => {
 		const payload = sent[0] as { content?: unknown };
 		expectPublicDiscordText(payload.content);
 		expect(payload.content).not.toBe("I saw it. Reply pipeline tripped, but I am still here.");
+	});
+
+	test("raw Discord manager guard gives generated replies recent channel context", async () => {
+		const prompts: string[] = [];
+		const { messageManager, message, sent } = makeManagerRuntime({
+			message: {
+				id: "current",
+				content: "Detour i was specifically asking about in your notifications",
+				createdTimestamp: 3,
+			},
+			history: [
+				{
+					id: "previous",
+					content: "Detour any fud on X lately?",
+					createdTimestamp: 1,
+					author: { id: "user-id", username: "Dexploarer" },
+				},
+				{
+					id: "bot-reply",
+					content: "Always. Send me the post and I will sniff-test it.",
+					createdTimestamp: 2,
+					author: { id: "bot-id", username: "Detour", bot: true },
+				},
+				{
+					id: "current",
+					content: "Detour i was specifically asking about in your notifications",
+					createdTimestamp: 3,
+					author: { id: "user-id", username: "Dexploarer" },
+				},
+			],
+			useModel: async (_modelType, params) => {
+				const prompt = (params as { prompt?: string }).prompt ?? "";
+				prompts.push(prompt);
+				return "checking notifications";
+			},
+		});
+
+		await messageManager.handleMessage(message);
+
+		expect(sent).toHaveLength(1);
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain("Detour any fud on X lately?");
+		expect(prompts[0]).toContain("Always. Send me the post");
+		expect(prompts[0]).toContain("specifically asking about in your notifications");
 	});
 });

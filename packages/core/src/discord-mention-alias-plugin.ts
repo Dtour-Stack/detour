@@ -68,6 +68,7 @@ type WrappedMessageService = IMessageService & {
 type DiscordUserLike = {
 	id?: string;
 	username?: string | null;
+	displayName?: string | null;
 	globalName?: string | null;
 	tag?: string | null;
 	bot?: boolean;
@@ -184,9 +185,68 @@ function fallbackConversation(message: Memory): string {
 	return text ? `Latest Discord message:\n${text}` : "";
 }
 
-function rawFallbackConversation(message: DiscordMessageLike): string {
+function rawDiscordText(message: DiscordMessageLike): string {
 	const text = typeof message.content === "string" ? message.content.trim() : "";
-	return text ? `Latest Discord message:\n${text}` : "";
+	return text.length > 0 ? text : "";
+}
+
+function discordAuthorName(message: DiscordMessageLike, botUser: DiscordUserLike | null | undefined): string {
+	if (botUser?.id && message.author?.id === botUser.id) return "Detour Squirrel";
+	return message.author?.displayName
+		?? message.author?.globalName
+		?? message.author?.username
+		?? message.author?.tag
+		?? message.author?.id
+		?? "Unknown";
+}
+
+function rawDiscordLine(message: DiscordMessageLike, botUser: DiscordUserLike | null | undefined): string | null {
+	const text = rawDiscordText(message);
+	if (!text) return null;
+	return `${discordAuthorName(message, botUser)}: ${text}`;
+}
+
+async function rawFallbackConversation(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+	botUser: DiscordUserLike | null | undefined,
+): Promise<string> {
+	const seen = new Set<string>();
+	const messages: DiscordMessageLike[] = [];
+	try {
+		const fetched = await message.channel?.messages?.fetch?.({ limit: 12 });
+		for (const item of collectionValues(fetched)) {
+			if (item.id && seen.has(item.id)) continue;
+			if (item.id) seen.add(item.id);
+			messages.push(item);
+		}
+	} catch (error) {
+		runtime.logger.warn(
+			{
+				src: "detour:discord-manager-guard",
+				messageId: message.id,
+				channelId: message.channel?.id,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			"Could not fetch Discord history for generated reply context",
+		);
+	}
+	if (!message.id || !seen.has(message.id)) messages.push(message);
+	const lines = messages
+		.sort((a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0))
+		.flatMap((item) => {
+			const line = rawDiscordLine(item, botUser);
+			return line ? [line] : [];
+		})
+		.slice(-12);
+	return lines.length > 0
+		? [
+				"Recent Discord channel context:",
+				...lines,
+				"",
+				"Reply to the latest user message. Use prior turns when they clarify what the user means.",
+			].join("\n")
+		: "";
 }
 
 function readPositiveMs(runtime: IAgentRuntime, key: string, fallback: number): number {
@@ -396,13 +456,15 @@ async function hasRecentBotReply(message: DiscordMessageLike, botId: string | un
 
 async function directDiscordFallbackContent(
 	runtime: IAgentRuntime,
+	service: DiscordServiceLike,
 	message: DiscordMessageLike,
 	reason: string,
 ): Promise<Content> {
+	const conversation = await rawFallbackConversation(runtime, message, service.client?.user);
 	const generated = await withTimeout(
 		generatePlainTextReply(
 			runtime,
-			rawFallbackConversation(message),
+			conversation,
 			`discord-manager-visible-reply:${reason}`,
 		),
 		readPositiveMs(runtime, "DISCORD_FALLBACK_GENERATION_MS", DEFAULT_FALLBACK_GENERATION_MS),
@@ -469,7 +531,7 @@ async function handleManagerFallback(
 ): Promise<void> {
 	const botId = stringId(service.client?.user?.id);
 	if (await hasRecentBotReply(message, botId)) return;
-	const content = await directDiscordFallbackContent(runtime, message, reason);
+	const content = await directDiscordFallbackContent(runtime, service, message, reason);
 	await sendDirectDiscordFallback(message, content);
 	emitDirectDiscordFallbackSent(runtime, message, content);
 	runtime.logger.warn(
