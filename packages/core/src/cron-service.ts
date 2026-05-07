@@ -157,6 +157,7 @@ export class CronService {
 		this.runtime = runtime;
 		const r = runtime as unknown as {
 			getTaskWorker?: (name: string) => unknown;
+			getTask?: (id: UUID) => Promise<Task | null>;
 			registerTaskWorker: (worker: {
 				name: string;
 				execute: (rt: IAgentRuntime, options: unknown, task: Task) => Promise<undefined | { nextInterval?: number }>;
@@ -193,7 +194,18 @@ export class CronService {
 		// Reconcile: every persisted job that's enabled should have a Task row.
 		for (const job of this.jobs.values()) {
 			if (!job.enabled) continue;
-			if (!job.taskId) {
+			let needsTask = !job.taskId;
+			if (job.taskId && r.getTask) {
+				const task = await r.getTask(job.taskId as UUID).catch((err) => {
+					logger.warn({ src: "cron", jobId: job.id, taskId: job.taskId, err: err instanceof Error ? err.message : err }, "task mirror lookup failed");
+					return undefined;
+				});
+				if (task === null) {
+					job.taskId = undefined;
+					needsTask = true;
+				}
+			}
+			if (needsTask) {
 				try {
 					const taskId = await this.createElizaTask(job);
 					job.taskId = taskId;
