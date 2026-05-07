@@ -367,10 +367,24 @@ export class XClient {
 			if (tweetId) {
 				return { success: true, tweetId, url: `https://x.com/i/web/status/${tweetId}` };
 			}
+			const recovered = await this.recoverCreatedTweet(variables);
+			if (recovered) return recovered;
 			return { success: false, error: "Tweet created but no ID returned" };
 		} catch (err) {
 			return { success: false, error: err instanceof Error ? err.message : String(err) };
 		}
+	}
+
+	private async recoverCreatedTweet(variables: Record<string, unknown>): Promise<XPostResult | null> {
+		const text = typeof variables.tweet_text === "string" ? variables.tweet_text.trim() : "";
+		if (!text) return null;
+		const viewer = await this.viewer();
+		const tweets = await this.getUserTweets(viewer.userId, 10);
+		const match = tweets.find((tweet) => {
+			const candidate = tweet.text.trim();
+			return candidate === text || candidate.endsWith(text);
+		});
+		return match ? { success: true, tweetId: match.tweetId, url: match.url } : null;
 	}
 
 	/**

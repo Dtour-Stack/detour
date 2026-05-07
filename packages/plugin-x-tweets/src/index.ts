@@ -1698,6 +1698,10 @@ async function processXStatusPost(
 
 async function updateXAutonomyTask(runtime: IAgentRuntime, task: Task, state: XAutonomyState): Promise<void> {
 	if (!task.id) return;
+	const lastHandled = lastHandledForMetadata(state);
+	const lastActionAt = state.handled.length > 0
+		? Date.now()
+		: readTimestamp(state.metadata.xAutonomyLastActionAt) || state.lastStatusAt;
 	await runtime.updateTask(task.id, {
 		metadata: {
 			...state.metadata,
@@ -1705,8 +1709,10 @@ async function updateXAutonomyTask(runtime: IAgentRuntime, task: Task, state: XA
 			xAutonomyLastRunAt: Date.now(),
 			xAutonomyLastStatusAt: state.lastStatusAt,
 			xAutonomyLastDiscoveryAt: state.lastDiscoveryAt,
+			xAutonomyLastTickHandledCount: state.handled.length,
+			...(lastActionAt > 0 ? { xAutonomyLastActionAt: lastActionAt } : {}),
 			...(state.lastStatusTweetId ? { xAutonomyLastStatusTweetId: state.lastStatusTweetId } : {}),
-			xAutonomyLastHandled: state.handled,
+			xAutonomyLastHandled: lastHandled,
 			xAutonomyRecentReplyTexts: state.recentReplyTexts,
 		},
 	}).catch(() => {});
@@ -1721,6 +1727,19 @@ function xTrajectoryService(runtime: IAgentRuntime): XTrajectoryService | null {
 
 function xHandledSuccess(handled: Array<Record<string, unknown>>): boolean {
 	return handled.every((entry) => entry.success !== false);
+}
+
+function lastHandledForMetadata(state: XAutonomyState): Array<Record<string, unknown>> {
+	if (state.handled.length > 0) return state.handled;
+	const previous = state.metadata.xAutonomyLastHandled;
+	if (Array.isArray(previous)) {
+		const valid = previous.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object" && !Array.isArray(entry)));
+		if (valid.length > 0) return valid;
+	}
+	const text = state.recentReplyTexts.at(-1);
+	return state.lastStatusTweetId && text
+		? [{ action: "post_status", success: true, tweetId: state.lastStatusTweetId, text, recovered: true }]
+		: [];
 }
 
 async function completeXAutonomyTrajectoryStep(
