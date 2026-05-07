@@ -32,9 +32,9 @@ export function runWithPlannerFallbackContext<T>(
 	return plannerContext.run(context, run);
 }
 
-function shouldUsePlainReply(args: DynamicPromptArgs): boolean {
+function canUsePlainReply(args: DynamicPromptArgs): boolean {
 	const context = plannerContext.getStore();
-	return isResponsePlanner(args) && context?.source === "discord" && context.addressed;
+	return isResponsePlanner(args) && (!context || (context.source === "discord" && context.addressed));
 }
 
 export function conversationText(state: State | undefined): string {
@@ -118,16 +118,13 @@ export function installDpeFallbackPatch(runtime: IAgentRuntime): void {
 	wrapped.dynamicPromptExecFromState = async (
 		args: DynamicPromptArgs,
 	): Promise<DynamicPromptResult> => {
-		if (shouldUsePlainReply(args)) {
-			const fallback = await fallbackPlannerReply(runtime, args, "discord-addressed");
-			if (fallback) return fallback;
-		}
+		const canFallback = canUsePlainReply(args);
 		try {
 			const result = await original(args);
-			if (result || !isResponsePlanner(args)) return result;
+			if (result || !canFallback) return result;
 			return await fallbackPlannerReply(runtime, args, "structured-null");
 		} catch (error) {
-			if (!isResponsePlanner(args)) throw error;
+			if (!canFallback) throw error;
 			const fallback = await fallbackPlannerReply(
 				runtime,
 				args,

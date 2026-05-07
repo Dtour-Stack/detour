@@ -25,7 +25,7 @@ const DISCORD_FALLBACK_TEXTS = [
 	"I saw the callout. The quiet part is over.",
 	"I caught it. Took the scenic route back, but I am not missing this.",
 ] as const;
-const DEFAULT_REPLY_GUARD_MS = 12_000;
+const DEFAULT_REPLY_GUARD_MS = 45_000;
 const DEFAULT_FALLBACK_GENERATION_MS = 10_000;
 
 type TimeoutResult = "timeout";
