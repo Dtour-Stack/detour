@@ -53,7 +53,7 @@ import type {
 } from "@detour/shared";
 
 type Listener = (msg: WsServerMessage) => void;
-type DetourAddressSpace = "local";
+type DetourAddressSpace = "local" | "loopback";
 type DetourFetchInit = RequestInit & { targetAddressSpace?: DetourAddressSpace };
 const LOCAL_API_BASE = "http://127.0.0.1:2138";
 
@@ -81,7 +81,7 @@ function targetAddressSpace(base: string): DetourAddressSpace | null {
 			url.hostname === "localhost" ||
 			url.hostname === "::1"
 		) {
-			return "local";
+			return "loopback";
 		}
 		return null;
 	} catch {
@@ -108,6 +108,16 @@ export class WebClient {
 		return addressSpace
 			? { ...init, targetAddressSpace: addressSpace }
 			: init;
+	}
+
+	private localNetworkError(error: unknown): Error {
+		const addressSpace = targetAddressSpace(this.base);
+		if (addressSpace && error instanceof TypeError) {
+			return new Error(
+				"Could not reach the local Detour daemon. Start Detour locally, allow local network access for detour.ninja if Chrome asks, then refresh.",
+			);
+		}
+		return error instanceof Error ? error : new Error(String(error));
 	}
 
 	async connect(): Promise<void> {
@@ -410,11 +420,16 @@ export class WebClient {
 		ids?: string[],
 	): Promise<{ blob: Blob; filename: string }> {
 		const path = "/api/activity/trajectories/export.zip";
-		const res = await fetch(`${this.base}${path}`, this.fetchInit({
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(ids?.length ? { ids } : {}),
-		}));
+		let res: Response;
+		try {
+			res = await fetch(`${this.base}${path}`, this.fetchInit({
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(ids?.length ? { ids } : {}),
+			}));
+		} catch (error) {
+			throw this.localNetworkError(error);
+		}
 		if (!res.ok) {
 			const err = await res.text().catch(() => res.statusText);
 			throw new Error(`API POST ${path}: ${err}`);
@@ -940,11 +955,16 @@ export class WebClient {
 		path: string,
 		body?: unknown,
 	): Promise<T> {
-		const res = await fetch(`${this.base}${path}`, this.fetchInit({
-			method,
-			headers: body ? { "content-type": "application/json" } : undefined,
-			body: body ? JSON.stringify(body) : undefined,
-		}));
+		let res: Response;
+		try {
+			res = await fetch(`${this.base}${path}`, this.fetchInit({
+				method,
+				headers: body ? { "content-type": "application/json" } : undefined,
+				body: body ? JSON.stringify(body) : undefined,
+			}));
+		} catch (error) {
+			throw this.localNetworkError(error);
+		}
 		if (!res.ok) {
 			const err = await res.text().catch(() => res.statusText);
 			throw new Error(`API ${method} ${path}: ${err}`);
