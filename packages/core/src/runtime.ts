@@ -46,7 +46,7 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // otherwise embedding-stub keeps the runtime alive with zero vectors.
 import { embeddingOpenAIPlugin } from "@detour/plugin-embedding-openai";
 import { decodeCodexJwt } from "@detour/plugin-codex-chatgpt";
-import { codexHatchAction, codexPetAction, codexPetsPlugin } from "@detour/plugin-codex-pets";
+import { codexHatchAction, codexPetAction, codexPetAnimateAction, codexPetsPlugin } from "@detour/plugin-codex-pets";
 import {
 	codexSkillInvocationPrompt,
 	codexSkillsListText,
@@ -529,17 +529,20 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 			return { kind: "action", action: codexPetAction, options: {} };
 		case "/hatch":
 			return { kind: "action", action: codexHatchAction, options: {} };
-		case "/codex":
-		case "/task":
-			return slashWorkspaceAgent(tail, "codex", false);
+			case "/codex":
+			case "/task":
+				return slashWorkspaceAgent(tail, "codex", false);
 		case "/claude":
 			return slashWorkspaceAgent(tail, "claude", false);
 		case "/spawn-codex":
-			return slashWorkspaceAgent(tail, "codex", true);
-		case "/spawn-claude":
-			return slashWorkspaceAgent(tail, "claude", true);
-		default:
-			return slashNamedSkill(command, tail);
+				return slashWorkspaceAgent(tail, "codex", true);
+			case "/spawn-claude":
+				return slashWorkspaceAgent(tail, "claude", true);
+			case "/pet-animate":
+			case "/animate-pet":
+				return { kind: "action", action: codexPetAnimateAction, options: { raw: tail } };
+			default:
+				return slashNamedSkill(command, tail);
 	}
 }
 
@@ -557,10 +560,11 @@ function slashHelp(): NativeSlashDispatch {
 			"/1password <identifier> [url]",
 			"/pet [name]",
 			"/hatch <concept>",
-			"/codex [cwd=/path] <task>",
+				"/codex [cwd=/path] <task>",
 			"/claude [cwd=/path] <task>",
 			"/spawn-codex [cwd=/path] <task>",
 			"/spawn-claude [cwd=/path] <task>",
+			"/pet-animate <pet> <state> <motion>",
 			"/skills",
 			"/skill <name> <task>",
 		].join("\n"),

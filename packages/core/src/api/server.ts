@@ -19,6 +19,8 @@ import type {
 	BrowserCommandResult,
 	ChatCommandInfo,
 	ChroniclerConfig,
+	CodexPetActivity,
+	CodexPetAnimationState,
 	CodexPetSpawnResponse,
 	CodexPetSummary,
 	CodexPetsResponse,
@@ -171,6 +173,17 @@ const PET_ATLAS = {
 	width: 1536,
 	height: 1872,
 };
+const PET_STATES = new Set<CodexPetAnimationState>([
+	"idle",
+	"running-right",
+	"running-left",
+	"waving",
+	"jumping",
+	"failed",
+	"waiting",
+	"running",
+	"review",
+]);
 const INBOX_STATUSES = new Set([
 	"pending",
 	"acting",
@@ -216,6 +229,7 @@ const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude ", source: "native" },
 	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex ", source: "native" },
 	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude ", source: "native" },
+	{ name: "/pet-animate", usage: "/pet-animate <pet> <state> <motion>", description: "Create or repair a pet animation row.", insert: "/pet-animate ", aliases: ["/animate-pet"], source: "native" },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help", aliases: ["/commands"], source: "native" },
 ];
 
@@ -1277,6 +1291,7 @@ export class ApiServer {
 	private windowController: WindowController | null = null;
 	private channelReloadTimer: ReturnType<typeof setTimeout> | null = null;
 	private activePetId: string | null = null;
+	private activePetStateOverride: { state: CodexPetAnimationState; expiresAt: number } | null = null;
 	private browserCommands: BrowserCommand[] = [];
 	private browserResults = new Map<string, BrowserCommandResult>();
 	private agentStreamTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -1330,7 +1345,66 @@ export class ApiServer {
 	private spawnPet(pet: CodexPetSummary): CodexPetSpawnResponse {
 		this.activePetId = pet.id;
 		this.broadcast({ kind: "ui:open-pet", pet });
-		return { pet };
+		return { pet, state: this.currentPetState() };
+	}
+
+	private setPetState(state: CodexPetAnimationState, reason?: string): void {
+		this.activePetStateOverride = { state, expiresAt: Date.now() + 9_000 };
+		this.broadcast({ kind: "ui:pet-state", state, ...(reason ? { reason } : {}) });
+	}
+
+	private currentPetState(): CodexPetAnimationState {
+		const override = this.activePetStateOverride;
+		if (!override) return "idle";
+		if (override.expiresAt > Date.now()) return override.state;
+		this.activePetStateOverride = null;
+		return "idle";
+	}
+
+	private petActivity(): CodexPetActivity {
+		const now = Date.now();
+		const runtime = this.activity.runtimeSnapshot();
+		const runningAgents = readWorkspaceAgents()
+			.filter((agent) => agent.status === "running")
+			.slice(0, 3);
+		const recentLogs = this.activity.logs.list({ limit: 6 });
+		const activeLog = recentLogs.find((entry) => now - entry.time < 45_000);
+		const errorLog = recentLogs.find((entry) => entry.levelName.toLowerCase() === "error" && now - entry.time < 90_000);
+		const override = this.currentPetState();
+		const state: CodexPetAnimationState = override !== "idle"
+			? override
+			: errorLog
+				? "failed"
+				: runningAgents.length > 0
+					? "review"
+					: !runtime.available
+						? "waiting"
+						: activeLog
+							? "running"
+							: "idle";
+		const summary = errorLog
+			? "needs attention"
+			: runningAgents.length > 0
+				? `${runningAgents.length} coding agent${runningAgents.length === 1 ? "" : "s"} running`
+				: !runtime.available
+					? "runtime starting"
+					: activeLog
+						? `active${activeLog.source ? `: ${activeLog.source}` : ""}`
+						: "idle";
+		const detail = errorLog?.msg ?? runningAgents[0]?.task ?? activeLog?.msg;
+		return {
+			state,
+			summary,
+			...(detail ? { detail } : {}),
+			runningAgents,
+			recentLogs,
+			runtime: {
+				available: runtime.available,
+				...(runtime.agentName ? { agentName: runtime.agentName } : {}),
+				counts: runtime.counts,
+			},
+			updatedAt: Date.now(),
+		};
 	}
 
 	/**
@@ -1900,7 +1974,21 @@ export class ApiServer {
 			}
 			if (req.method === "GET" && path === "/api/pets/active") {
 				const pet = this.findPet();
-				return pet ? json({ pet }) : error("no Codex pets installed", 404);
+				return pet ? json({ pet, state: this.currentPetState() }) : error("no Codex pets installed", 404);
+			}
+			if (req.method === "GET" && path === "/api/pets/activity") {
+				return json(this.petActivity());
+			}
+			if (req.method === "PUT" && path === "/api/pets/state") {
+				const body = (await req.json().catch(() => ({}))) as { state?: unknown; reason?: unknown };
+				if (typeof body.state !== "string" || !PET_STATES.has(body.state as CodexPetAnimationState)) {
+					return error("invalid pet animation state", 400);
+				}
+				this.setPetState(
+					body.state as CodexPetAnimationState,
+					typeof body.reason === "string" ? body.reason : undefined,
+				);
+				return json({ state: this.currentPetState() });
 			}
 			if (req.method === "POST" && path === "/api/pets/spawn") {
 				const body = (await req.json().catch(() => ({}))) as { pet?: unknown };

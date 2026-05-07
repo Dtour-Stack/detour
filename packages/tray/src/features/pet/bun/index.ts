@@ -2,8 +2,8 @@ import { resolveViewUrl } from "../../../bun/kernel/view-url";
 import type { Feature } from "../../../bun/kernel/registry";
 import type { WindowHandle } from "../../../bun/kernel/windows";
 
-const WIDTH = 224;
-const HEIGHT = 244;
+const WIDTH = 380;
+const HEIGHT = 320;
 
 export const petFeature: Feature = {
 	id: "pet",

@@ -25,6 +25,7 @@ const FALLBACK_SLASH_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex " },
 	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude " },
 	{ name: "/task", usage: "/task [cwd=/path] <task>", description: "Alias for a Codex coding subagent.", insert: "/task " },
+	{ name: "/pet-animate", usage: "/pet-animate <pet> <state> <motion>", description: "Create or repair a pet animation row.", insert: "/pet-animate ", aliases: ["/animate-pet"] },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help" },
 ].map((command) => ({ ...command, source: "native" as const }));
 

@@ -54,6 +54,7 @@ type HatchWorker = {
 const CODEX_HOME_DEFAULT = join(homedir(), ".codex");
 const ACTION_PET = "CODEX_PET";
 const ACTION_HATCH = "CODEX_HATCH";
+const ACTION_PET_ANIMATE = "CODEX_PET_ANIMATE";
 const CELL_WIDTH = 192;
 const CELL_HEIGHT = 208;
 const SAFE_MARGIN_X = 18;
@@ -71,6 +72,7 @@ const ROWS: readonly PetRow[] = [
 	{ state: "running", row: 7, frames: 6, purpose: "generic in-place running loop" },
 	{ state: "review", row: 8, frames: 6, purpose: "focused inspecting or review loop" },
 ];
+const ROW_STATES = new Set(ROWS.map((row) => row.state));
 
 const DIGITAL_PET_STYLE =
 	"Codex digital pet sprite style: pixel-art-adjacent low-resolution mascot sprite, compact chibi proportions, chunky whole-body silhouette, thick dark 1-2 px outline, visible stepped/pixel edges, limited palette, flat cel shading with at most one small highlight and one shadow step, simple readable face, tiny limbs, and no detail that disappears at 192x208. Avoid polished illustration, painterly rendering, anime key art, 3D render, vector app-icon polish, glossy lighting, soft gradients, realistic fur or material texture, anti-aliased high-detail edges, and complex tiny accessories.";
@@ -737,6 +739,95 @@ function startHatchWorker(input: {
 	return { ...command, logPath, pid: child.pid };
 }
 
+function animationRunDirectory(petId: string, state: string, outputDir: string): string {
+	if (outputDir) {
+		if (!isAbsolute(outputDir)) throw new Error("outputDir must be an absolute path");
+		return outputDir;
+	}
+	const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+	return join(codexHome(), "hatch-runs", `${slugify(petId)}-${slugify(state)}-animation-${stamp}`);
+}
+
+function parseAnimationTail(raw: string): { pet: string; state: string; prompt: string } {
+	const match = raw.trim().match(/^(\S+)\s+(\S+)(?:\s+([\s\S]+))?$/);
+	return {
+		pet: match?.[1]?.trim() ?? "",
+		state: match?.[2]?.trim() ?? "",
+		prompt: match?.[3]?.trim() ?? "",
+	};
+}
+
+function petAnimationTask(input: {
+	pet: PetSummary;
+	state: string;
+	prompt: string;
+	runDir: string;
+}): string {
+	const skillPath = join(codexHome(), "skills", "hatch-pet", "SKILL.md");
+	return [
+		`Use the hatch-pet skill at ${skillPath}.`,
+		`Create or repair the "${input.state}" animation row for the existing Codex pet "${input.pet.displayName}".`,
+		`Existing pet directory: ${input.pet.directory}`,
+		`Existing pet.json: ${input.pet.petJsonPath}`,
+		`Existing spritesheet: ${input.pet.spritesheetPath}`,
+		`Working run directory: ${input.runDir}`,
+		`Animation direction: ${input.prompt}`,
+		"Use the existing pet as the identity source. Generate real visual assets through the available image generation path and deterministic hatch-pet scripts only.",
+		"Do not fabricate sprite rows with local scripts, SVG, canvas, or placeholder art.",
+		"Update or repackage the pet so its pet.json and spritesheet.webp remain Codex-compatible. If the requested animation cannot be added safely, leave the run resumable and write the blocker in the log.",
+	].join("\n");
+}
+
+function startPetAnimationWorker(input: {
+	pet: PetSummary;
+	state: string;
+	prompt: string;
+	runDir: string;
+}): HatchWorker {
+	mkdirSync(input.runDir, { recursive: true });
+	writeText(join(input.runDir, "animation-request.json"), JSON.stringify({
+		pet: input.pet,
+		state: input.state,
+		prompt: input.prompt,
+		created_at: new Date().toISOString(),
+	}, null, 2));
+	const cwd = workspaceRoot();
+	const command = hatchWorkerCommand({
+		cwd,
+		task: petAnimationTask(input),
+	});
+	const logPath = join(input.runDir, "pet-animation-worker.log");
+	const stream = createWriteStream(logPath, { flags: "a" });
+	let streamClosed = false;
+	const writeLog = (text: string) => {
+		if (!streamClosed) stream.write(text);
+	};
+	const closeLog = () => {
+		if (streamClosed) return;
+		streamClosed = true;
+		stream.end();
+	};
+	writeLog(`[pet-animation-worker] ${new Date().toISOString()} provider=${command.provider}\n`);
+	writeLog(`[pet-animation-worker] command=${command.command} ${command.args.slice(0, -1).join(" ")} <task>\n\n`);
+	const child = spawn(command.command, command.args, {
+		cwd,
+		env: process.env,
+		stdio: ["ignore", "pipe", "pipe"],
+		shell: false,
+	});
+	child.stdout.pipe(stream, { end: false });
+	child.stderr.pipe(stream, { end: false });
+	child.on("error", (error) => {
+		writeLog(`\n[pet-animation-worker] spawn error: ${error instanceof Error ? error.message : String(error)}\n`);
+		closeLog();
+	});
+	child.on("close", (exitCode, signal) => {
+		writeLog(`\n[pet-animation-worker] closed exit=${exitCode}${signal ? ` signal=${signal}` : ""}\n`);
+		closeLog();
+	});
+	return { ...command, logPath, pid: child.pid };
+}
+
 const hatchHandler: Handler = async (_runtime, message, _state, options, callback) => {
 	const tail = commandTail(messageText(message), "/hatch");
 	const parsed = parseNamedConcept(tail);
@@ -798,6 +889,57 @@ const hatchHandler: Handler = async (_runtime, message, _state, options, callbac
 	}
 };
 
+const petAnimateHandler: Handler = async (_runtime, message, _state, options, callback) => {
+	const parsed = parseAnimationTail(
+		optionString(options, ["raw", "request", "text"]) ||
+		commandTail(messageText(message), "/pet-animate"),
+	);
+	const petQuery = optionString(options, ["pet", "petId", "name", "id"]) || parsed.pet;
+	const state = (optionString(options, ["state", "animationState", "row"]) || parsed.state).toLowerCase();
+	const prompt = optionString(options, ["prompt", "description", "motion", "animation"]) || parsed.prompt;
+	if (!petQuery || !state || !prompt) {
+		const text = "CODEX_PET_ANIMATE needs a pet id, animation state, and motion description.";
+		await emit(callback, text, ACTION_PET_ANIMATE);
+		return fail(text, ACTION_PET_ANIMATE);
+	}
+	if (!ROW_STATES.has(state)) {
+		const text = `Unknown pet animation state "${state}". Use one of: ${ROWS.map((row) => row.state).join(", ")}.`;
+		await emit(callback, text, ACTION_PET_ANIMATE);
+		return fail(text, ACTION_PET_ANIMATE);
+	}
+	const result = listCodexPets();
+	const pet = result.pets.find((item) => matchesPet(item, petQuery));
+	if (!pet) {
+		const text = result.pets.length === 0
+			? `No Codex pets found in ${join(codexHome(), "pets")}.`
+			: `No Codex pet matched "${petQuery}". Installed pets: ${result.pets.map((item) => item.displayName).join(", ")}.`;
+		await emit(callback, text, ACTION_PET_ANIMATE);
+		return fail(text, ACTION_PET_ANIMATE);
+	}
+	try {
+		const outputDir = optionString(options, ["outputDir", "runDir"]);
+		const runDir = animationRunDirectory(pet.id, state, outputDir);
+		const worker = startPetAnimationWorker({ pet, state, prompt, runDir });
+		const text = [
+			`Started Codex pet animation worker for ${pet.displayName}.`,
+			`state: ${state}`,
+			`run: ${runDir}`,
+			`worker: ${worker.provider}${worker.pid ? ` pid=${worker.pid}` : ""}`,
+			`log: ${worker.logPath}`,
+		].join("\n");
+		await emit(callback, text, ACTION_PET_ANIMATE);
+		return ok(
+			text,
+			{ actionName: ACTION_PET_ANIMATE, state, pipelineStarted: true },
+			{ actionName: ACTION_PET_ANIMATE, pet, state, runDir, worker: { provider: worker.provider, pid: worker.pid ?? null, logPath: worker.logPath } },
+		);
+	} catch (error) {
+		const text = `CODEX_PET_ANIMATE failed: ${error instanceof Error ? error.message : String(error)}`;
+		await emit(callback, text, ACTION_PET_ANIMATE);
+		return fail(text, ACTION_PET_ANIMATE);
+	}
+};
+
 export const codexPetAction: Action = {
 	name: ACTION_PET,
 	similes: ["PET", "/pet", "LIST_CODEX_PETS", "SHOW_CODEX_PETS", "INSPECT_CODEX_PET"],
@@ -811,6 +953,38 @@ export const codexPetAction: Action = {
 			name: "pet",
 			description: "Optional Codex pet id or display name to inspect.",
 			required: false,
+			schema: { type: "string" as const },
+		},
+	],
+	contexts: ["general", "media"],
+};
+
+export const codexPetAnimateAction: Action = {
+	name: ACTION_PET_ANIMATE,
+	similes: ["ANIMATE_CODEX_PET", "CREATE_PET_ANIMATION", "REPAIR_PET_ANIMATION", "PET_ANIMATE"],
+	description:
+		"Create or repair one animation row for an installed Codex pet through a hatch-pet worker.",
+	validate: async () => true,
+	handler: petAnimateHandler,
+	suppressPostActionContinuation: true,
+	examples: [],
+	parameters: [
+		{
+			name: "pet",
+			description: "Installed Codex pet id or display name.",
+			required: true,
+			schema: { type: "string" as const },
+		},
+		{
+			name: "state",
+			description: "Animation row to create or repair.",
+			required: true,
+			schema: { type: "string" as const },
+		},
+		{
+			name: "prompt",
+			description: "Motion direction for the new animation.",
+			required: true,
 			schema: { type: "string" as const },
 		},
 	],
@@ -864,7 +1038,7 @@ export const codexHatchAction: Action = {
 export const codexPetsPlugin: Plugin = {
 	name: "codex-pets",
 	description: "Codex /pet and /hatch abilities for local pet inspection and full hatch pipeline runs.",
-	actions: [codexPetAction, codexHatchAction],
+	actions: [codexPetAction, codexHatchAction, codexPetAnimateAction],
 };
 
 export default codexPetsPlugin;

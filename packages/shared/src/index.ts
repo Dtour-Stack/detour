@@ -36,6 +36,17 @@ export type CodexPetAtlas = {
 	height: number;
 };
 
+export type CodexPetAnimationState =
+	| "idle"
+	| "running-right"
+	| "running-left"
+	| "waving"
+	| "jumping"
+	| "failed"
+	| "waiting"
+	| "running"
+	| "review";
+
 export type CodexPetSummary = {
 	id: string;
 	displayName: string;
@@ -54,6 +65,17 @@ export type CodexPetsResponse = {
 
 export type CodexPetSpawnResponse = {
 	pet: CodexPetSummary;
+	state: CodexPetAnimationState;
+};
+
+export type CodexPetActivity = {
+	state: CodexPetAnimationState;
+	summary: string;
+	detail?: string;
+	runningAgents: WorkspaceAgentRecord[];
+	recentLogs: ActivityLogEntry[];
+	runtime?: Pick<ActivityRuntimeSnapshot, "available" | "agentName" | "counts">;
+	updatedAt: number;
 };
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
@@ -238,6 +260,7 @@ export type WsServerMessage =
 	| { kind: "ui:open-channels" }
 	| { kind: "ui:open-agents" }
 	| { kind: "ui:open-pet"; pet?: CodexPetSummary }
+	| { kind: "ui:pet-state"; state: CodexPetAnimationState; reason?: string }
 	| { kind: "ui:open-browser" }
 	| { kind: "browser:command"; command: BrowserCommand }
 	| { kind: "ui:preferences-changed"; preferences: UiPreferences }

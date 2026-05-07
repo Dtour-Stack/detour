@@ -22,6 +22,8 @@ import type {
 	ChroniclerConfig,
 	ChroniclerObservation,
 	ChroniclerStatus,
+	CodexPetActivity,
+	CodexPetAnimationState,
 	CodexPetSpawnResponse,
 	CodexPetsResponse,
 	ModelConfig,
@@ -200,6 +202,14 @@ export class WebClient {
 
 	spawnPet(pet?: string): Promise<CodexPetSpawnResponse> {
 		return this.json("POST", "/api/pets/spawn", pet ? { pet } : {});
+	}
+
+	petActivity(): Promise<CodexPetActivity> {
+		return this.json("GET", "/api/pets/activity");
+	}
+
+	setPetState(state: CodexPetAnimationState, reason?: string): Promise<{ state: CodexPetAnimationState }> {
+		return this.json("PUT", "/api/pets/state", { state, ...(reason ? { reason } : {}) });
 	}
 
 	detectBackends(): Promise<BackendStatus[]> {
