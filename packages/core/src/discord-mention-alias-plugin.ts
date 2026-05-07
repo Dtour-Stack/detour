@@ -18,7 +18,13 @@ import {
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
 const MANAGER_WRAPPED = Symbol.for("detour.discordMessageManagerGuard.wrapped");
-const DISCORD_FALLBACK_TEXT = "I saw it. Reply pipeline tripped, but I am still here.";
+const DISCORD_FALLBACK_TEXTS = [
+	"I saw it. Had to kick the door open for a second, but I am here.",
+	"I caught the tag. Give me one clean second and I am back in the room.",
+	"Yeah, I am here. Short stumble, still standing.",
+	"I saw the callout. The quiet part is over.",
+	"I caught it. Took the scenic route back, but I am not missing this.",
+] as const;
 const DEFAULT_REPLY_GUARD_MS = 12_000;
 const DEFAULT_FALLBACK_GENERATION_MS = 10_000;
 
@@ -208,6 +214,28 @@ function stringId(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+function fallbackHash(seed: string): number {
+	let hash = 2_166_136_261;
+	for (let i = 0; i < seed.length; i += 1) {
+		hash ^= seed.charCodeAt(i);
+		hash = Math.imul(hash, 16_777_619);
+	}
+	return hash >>> 0;
+}
+
+function fallbackText(seed: string | undefined): string {
+	if (!seed) return DISCORD_FALLBACK_TEXTS[0];
+	return DISCORD_FALLBACK_TEXTS[fallbackHash(seed) % DISCORD_FALLBACK_TEXTS.length];
+}
+
+function memoryFallbackSeed(message: Memory): string | undefined {
+	return stringId(message.id) ?? stringId(message.content.text);
+}
+
+function rawFallbackSeed(message: DiscordMessageLike): string | undefined {
+	return stringId(message.id) ?? stringId(message.content);
+}
+
 function trajectoryIds(message: Memory): { trajectoryId: string; stepId: string } | null {
 	const meta = message.metadata;
 	if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
@@ -308,7 +336,7 @@ async function emitDiscordFallbackReply(
 	const content: Content = {
 		thought: "Discord visible reply guard",
 		actions: ["REPLY"],
-		text: generatedText ?? DISCORD_FALLBACK_TEXT,
+		text: generatedText ?? fallbackText(memoryFallbackSeed(message)),
 		simple: true,
 	};
 	recordFallbackTrajectory(
@@ -383,7 +411,7 @@ async function directDiscordFallbackContent(
 	return {
 		thought: "Discord manager visible reply guard",
 		actions: ["REPLY"],
-		text: text ?? DISCORD_FALLBACK_TEXT,
+		text: text ?? fallbackText(rawFallbackSeed(message)),
 		simple: true,
 	};
 }

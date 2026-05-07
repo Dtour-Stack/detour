@@ -17,6 +17,18 @@ type HandleMessage = (
 	options?: MessageProcessingOptions,
 ) => Promise<MessageProcessingResult>;
 
+const INTERNAL_FALLBACK_TERMS = ["pipeline", "tripped", "fallback", "provider", "llm", "runtime", "generation"];
+
+function expectPublicDiscordText(text: unknown): asserts text is string {
+	expect(typeof text).toBe("string");
+	const value = String(text);
+	expect(value.length).toBeGreaterThan(0);
+	const lower = value.toLowerCase();
+	for (const term of INTERNAL_FALLBACK_TERMS) {
+		expect(lower.includes(term)).toBe(false);
+	}
+}
+
 function discordMessage(): Memory {
 	return {
 		id: "message-id",
@@ -47,7 +59,10 @@ function metadataOnlyDiscordMessage(): Memory {
 	} as never;
 }
 
-function makeRuntime(handleMessage: HandleMessage) {
+function makeRuntime(
+	handleMessage: HandleMessage,
+	useModel: () => Promise<string | null> = async () => "fallback reply",
+) {
 	const replies: Content[] = [];
 	const llmCalls: unknown[] = [];
 	const steps: unknown[] = [];
@@ -70,7 +85,7 @@ function makeRuntime(handleMessage: HandleMessage) {
 		},
 		getService: (type: string) => type === "trajectories" ? trajectoryLogger : null,
 		getServicesByType: () => [],
-		useModel: async () => "fallback reply",
+		useModel,
 		logger: { warn: () => undefined },
 	} as never;
 	const callback: HandlerCallback = async (content) => {
@@ -81,7 +96,7 @@ function makeRuntime(handleMessage: HandleMessage) {
 	return { runtime, service, callback, replies, llmCalls, steps };
 }
 
-function makeManagerRuntime() {
+function makeManagerRuntime(useModel: () => Promise<string | null> = async () => "manager fallback") {
 	const sent: unknown[] = [];
 	const events: unknown[] = [];
 	const messageManager: { handleMessage: (message: unknown) => Promise<unknown> } = {
@@ -102,7 +117,7 @@ function makeManagerRuntime() {
 				}
 			: null,
 		getServicesByType: () => [],
-		useModel: async () => "manager fallback",
+		useModel,
 		emitEvent: async (_event: unknown, payload: unknown) => {
 			events.push(payload);
 		},
@@ -139,6 +154,22 @@ describe("discord mention alias reply guard", () => {
 		expect(replies.map((reply) => reply.text)).toEqual(["fallback reply"]);
 		expect(llmCalls).toHaveLength(1);
 		expect(steps).toHaveLength(1);
+	});
+
+	test("last-resort fallback text does not leak internal pipeline wording", async () => {
+		const { runtime, service, callback, replies } = makeRuntime(
+			async () => await new Promise<MessageProcessingResult>(() => undefined),
+			async () => {
+				throw new Error("model unavailable");
+			},
+		);
+
+		const result = await service.handleMessage(runtime, discordMessage(), callback);
+
+		expect(result.didRespond).toBe(true);
+		expectPublicDiscordText(result.responseContent?.text);
+		expect(result.responseContent.text).not.toBe("I saw it. Reply pipeline tripped, but I am still here.");
+		expect(replies.map((reply) => reply.text)).toEqual([result.responseContent.text]);
 	});
 
 	test("late handler callbacks are suppressed after fallback sends", async () => {
@@ -192,5 +223,18 @@ describe("discord mention alias reply guard", () => {
 			allowedMentions: { repliedUser: false },
 		});
 		expect(events).toHaveLength(1);
+	});
+
+	test("raw Discord manager guard hides internal wording when generation fails", async () => {
+		const { messageManager, message, sent } = makeManagerRuntime(async () => {
+			throw new Error("model unavailable");
+		});
+
+		await messageManager.handleMessage(message);
+
+		expect(sent).toHaveLength(1);
+		const payload = sent[0] as { content?: unknown };
+		expectPublicDiscordText(payload.content);
+		expect(payload.content).not.toBe("I saw it. Reply pipeline tripped, but I am still here.");
 	});
 });
