@@ -17,6 +17,7 @@ import type {
 	BrowserCommand,
 	BrowserCommandInput,
 	BrowserCommandResult,
+	ChatCommandInfo,
 	ChannelsSnapshot,
 	ChroniclerConfig,
 	ChroniclerObservation,
@@ -180,6 +181,10 @@ export class WebClient {
 
 	listOpenRouterModels(): Promise<OpenRouterModelsResponse> {
 		return this.json("GET", "/api/providers/openrouter/models");
+	}
+
+	listChatCommands(): Promise<{ commands: ChatCommandInfo[] }> {
+		return this.json("GET", "/api/chat/commands");
 	}
 
 	detectBackends(): Promise<BackendStatus[]> {

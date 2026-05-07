@@ -17,6 +17,7 @@ import type {
 	BrowserCommand,
 	BrowserCommandInput,
 	BrowserCommandResult,
+	ChatCommandInfo,
 	ChroniclerConfig,
 	ProviderId,
 	SetActiveProviderBody,
@@ -47,6 +48,7 @@ import type {
 	ListOptions as GatewayListOptions,
 } from "../channels/gateway";
 import type { ConfigService } from "../config-service";
+import { codexSkillChatCommands } from "../codex-skills";
 import type { CronService } from "../cron-service";
 import { runDiscordCatchUp } from "../discord-catchup";
 import type { InboxKind, InboxService, InboxStatus } from "../inbox";
@@ -175,6 +177,30 @@ function corsHeaders(contentType?: string): HeadersInit {
 		"access-control-allow-local-network": "true",
 		...(contentType ? { "content-type": contentType } : {}),
 	};
+}
+
+const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
+	{ name: "/browser", usage: "/browser <url or search>", description: "Open the agent browser.", insert: "/browser ", aliases: ["/open", "/web", "/internet"], source: "native" },
+	{ name: "/inspect", usage: "/inspect", description: "Read the active browser tab.", insert: "/inspect", aliases: ["/read-page"], source: "native" },
+	{ name: "/script", usage: "/script <javascript>", description: "Run JavaScript in the browser tab.", insert: "/script ", aliases: ["/js"], source: "native" },
+	{ name: "/logins", usage: "/logins [domain]", description: "List saved logins from vault backends.", insert: "/logins ", aliases: ["/passwords"], source: "native" },
+	{ name: "/login", usage: "/login <source> <identifier> [url]", description: "Fill a saved login in the browser.", insert: "/login 1password ", source: "native" },
+	{ name: "/1password", usage: "/1password <identifier> [url]", description: "Fill a 1Password login in the browser.", insert: "/1password ", aliases: ["/op"], source: "native" },
+	{ name: "/pet", usage: "/pet [name]", description: "List or inspect Codex pets.", insert: "/pet ", source: "native" },
+	{ name: "/hatch", usage: "/hatch <concept>", description: "Prepare a Codex pet hatch run.", insert: "/hatch ", source: "native" },
+	{ name: "/codex", usage: "/codex [cwd=/path] <task>", description: "Run a Codex coding subagent and wait for the result.", insert: "/codex ", aliases: ["/task"], source: "native" },
+	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude ", source: "native" },
+	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex ", source: "native" },
+	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude ", source: "native" },
+	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help", aliases: ["/commands"], source: "native" },
+];
+
+function chatCommands(): ChatCommandInfo[] {
+	const byName = new Map<string, ChatCommandInfo>();
+	for (const command of [...NATIVE_CHAT_COMMANDS, ...codexSkillChatCommands()]) {
+		if (!byName.has(command.name)) byName.set(command.name, command);
+	}
+	return [...byName.values()];
 }
 
 function parseInboxStatus(value: unknown): InboxStatus | null {
@@ -1763,6 +1789,9 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/health") {
 				return json({ ok: true, version: VERSION });
+			}
+			if (req.method === "GET" && path === "/api/chat/commands") {
+				return json({ commands: chatCommands() });
 			}
 			return null;
 		},

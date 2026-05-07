@@ -7,6 +7,15 @@ export type ProviderInfo = {
 	active: boolean;
 };
 
+export type ChatCommandInfo = {
+	name: string;
+	usage: string;
+	description: string;
+	insert: string;
+	aliases?: string[];
+	source: "native" | "skill";
+};
+
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
 export type BackendId = "in-house" | "1password" | "protonpass" | "bitwarden";

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ProviderId } from "@detour/shared";
+import type { ChatCommandInfo, ProviderId } from "@detour/shared";
 import type { WebClient } from "../../api/client";
 
 type Bubble = {
@@ -11,15 +11,7 @@ type Bubble = {
 
 const CONV_ID = "web-default";
 
-type SlashCommand = {
-	name: string;
-	usage: string;
-	description: string;
-	insert: string;
-	aliases?: string[];
-};
-
-const SLASH_COMMANDS: SlashCommand[] = [
+const FALLBACK_SLASH_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/browser", usage: "/browser <url or search>", description: "Open the agent browser.", insert: "/browser ", aliases: ["/open", "/web", "/internet"] },
 	{ name: "/inspect", usage: "/inspect", description: "Read the active browser tab.", insert: "/inspect", aliases: ["/read-page"] },
 	{ name: "/script", usage: "/script <javascript>", description: "Run JavaScript in the browser tab.", insert: "/script ", aliases: ["/js"] },
@@ -34,7 +26,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude " },
 	{ name: "/task", usage: "/task [cwd=/path] <task>", description: "Alias for a Codex coding subagent.", insert: "/task " },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help" },
-];
+].map((command) => ({ ...command, source: "native" as const }));
 
 function uid() {
 	return Math.random().toString(36).slice(2, 10);
@@ -52,23 +44,28 @@ export function ChatView({
 	const [pending, setPending] = useState(false);
 	const [draft, setDraft] = useState("");
 	const [slashIndex, setSlashIndex] = useState(0);
+	const [slashCommands, setSlashCommands] = useState<ChatCommandInfo[]>(FALLBACK_SLASH_COMMANDS);
 	const assistantId = useRef<string | null>(null);
 	const bottomRef = useRef<HTMLDivElement>(null);
 
 	const slashMatches = useMemo(() => {
 		if (!draft.startsWith("/")) return [];
 		const needle = draft.slice(1).split(/\s+/)[0]?.toLowerCase() ?? "";
-		return SLASH_COMMANDS.filter((command) => {
+		return slashCommands.filter((command) => {
 			const names = [command.name, ...(command.aliases ?? [])];
 			return names.some((name) => name.slice(1).startsWith(needle));
 		});
-	}, [draft]);
+	}, [draft, slashCommands]);
 	const slashOpen = Boolean(activeProvider && !pending && draft.startsWith("/") && slashMatches.length > 0);
 
 	useEffect(() => {
 		client
 			.listProviders()
 			.then((ps) => setActiveProvider(ps.find((p) => p.active)?.id ?? null));
+		client
+			.listChatCommands()
+			.then((result) => setSlashCommands(result.commands.length > 0 ? result.commands : FALLBACK_SLASH_COMMANDS))
+			.catch(() => setSlashCommands(FALLBACK_SLASH_COMMANDS));
 		const off = client.on((msg) => {
 			if (msg.kind === "provider:changed") {
 				setActiveProvider(msg.activeProvider);
@@ -140,15 +137,15 @@ export function ChatView({
 		setPending(false);
 	}
 
-	function insertSlash(command: SlashCommand) {
+	function insertSlash(command: ChatCommandInfo) {
 		setDraft(command.insert);
 	}
 
-	function selectedSlash(): SlashCommand | null {
+	function selectedSlash(): ChatCommandInfo | null {
 		return slashMatches[slashIndex] ?? slashMatches[0] ?? null;
 	}
 
-	function shouldInsertSlash(command: SlashCommand) {
+	function shouldInsertSlash(command: ChatCommandInfo) {
 		const trimmed = draft.trim();
 		if (!/^\/\S*$/.test(trimmed)) return false;
 		return trimmed !== command.name || command.insert !== command.name;

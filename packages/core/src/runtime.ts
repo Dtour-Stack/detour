@@ -47,6 +47,12 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 import { embeddingOpenAIPlugin } from "@detour/plugin-embedding-openai";
 import { decodeCodexJwt } from "@detour/plugin-codex-chatgpt";
 import { codexHatchAction, codexPetAction, codexPetsPlugin } from "@detour/plugin-codex-pets";
+import {
+	codexSkillInvocationPrompt,
+	codexSkillsListText,
+	codexSkillsPlugin,
+	findCodexSkill,
+} from "./codex-skills";
 import { pensieveToolsPlugin } from "@detour/plugin-pensieve-tools";
 import {
 	browserFillLoginAction,
@@ -480,7 +486,8 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
-	| { kind: "reply"; text: string };
+	| { kind: "reply"; text: string }
+	| { kind: "prompt"; text: string };
 
 type WorkspaceSlashAgent = "codex" | "claude";
 
@@ -494,6 +501,10 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 		case "/help":
 		case "/commands":
 			return slashHelp();
+		case "/skills":
+			return { kind: "reply", text: codexSkillsListText() };
+		case "/skill":
+			return slashSkill(tail);
 		case "/browser":
 		case "/open":
 		case "/web":
@@ -528,7 +539,7 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 		case "/spawn-claude":
 			return slashWorkspaceAgent(tail, "claude", true);
 		default:
-			return null;
+			return slashNamedSkill(command, tail);
 	}
 }
 
@@ -550,6 +561,8 @@ function slashHelp(): NativeSlashDispatch {
 			"/claude [cwd=/path] <task>",
 			"/spawn-codex [cwd=/path] <task>",
 			"/spawn-claude [cwd=/path] <task>",
+			"/skills",
+			"/skill <name> <task>",
 		].join("\n"),
 	};
 }
@@ -589,6 +602,21 @@ function parseWorkspaceTaskTail(tail: string): { cwd?: string; task: string } {
 		...(cwd ? { cwd } : {}),
 		task,
 	};
+}
+
+function slashSkill(tail: string): NativeSlashDispatch {
+	const match = tail.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+	const name = match?.[1] ?? "";
+	if (!name) return { kind: "reply", text: "Usage: /skill <name> <task>" };
+	const skill = findCodexSkill(name);
+	if (!skill) return { kind: "reply", text: `No Codex skill matched "${name}".` };
+	return { kind: "prompt", text: codexSkillInvocationPrompt(skill, match?.[2] ?? "") };
+}
+
+function slashNamedSkill(command: string, tail: string): NativeSlashDispatch | null {
+	const skill = findCodexSkill(command);
+	if (!skill) return null;
+	return { kind: "prompt", text: codexSkillInvocationPrompt(skill, tail) };
 }
 
 function slashBrowser(tail: string): NativeSlashDispatch {
@@ -883,9 +911,14 @@ export class RuntimeService {
 		text: string,
 		onDelta: (delta: string) => void,
 	): Promise<void> {
-		if (nativeSlashCommand(text)) {
+		const slash = nativeSlashCommand(text);
+		if (slash) {
 			const state = await this.getOrBuild();
 			if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
+			if (slash.kind === "prompt") {
+				await this.deliverMessage(state, slash.text, onDelta, false);
+				return;
+			}
 			await this.deliverMessage(state, text, onDelta);
 			return;
 		}
@@ -919,6 +952,7 @@ export class RuntimeService {
 		state: RuntimeState,
 		text: string,
 		onDelta: (delta: string) => void,
+		allowNativeSlash = true,
 	): Promise<void> {
 		const service = state.runtime.messageService;
 		if (!service) {
@@ -969,7 +1003,7 @@ export class RuntimeService {
 			content: { text, source: "tray-app", attachments: [] },
 			createdAt: Date.now(),
 		};
-		const slash = nativeSlashCommand(text);
+		const slash = allowNativeSlash ? nativeSlashCommand(text) : null;
 		if (slash) {
 			let emitted = "";
 			if (slash.kind === "reply") {
@@ -1258,6 +1292,7 @@ export class RuntimeService {
 			vaultToolsPlugin,
 			pensieveToolsPlugin,
 			codexPetsPlugin,
+			codexSkillsPlugin,
 			discordMentionAliasPlugin,
 			discordContextPlugin,
 			dpeFallbackPlugin,
