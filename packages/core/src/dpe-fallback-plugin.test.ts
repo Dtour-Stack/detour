@@ -112,4 +112,20 @@ describe("dpe fallback patch", () => {
 		expect(prompts[0]).toContain("protector of cozy devs");
 		expect(prompts[0]).toContain("answer like a sharp dev friend");
 	});
+
+	test("does not turn provider failure diagnostics into public replies", async () => {
+		const { runtime } = makeRuntime(
+			async () => {
+				throw new Error("planner failed");
+			},
+			async () => "Reply generation failed inside my provider path. Logged discord_generation_failed: apiKey=set",
+		);
+
+		const result = await runWithPlannerFallbackContext(
+			{ source: "discord", addressed: true },
+			() => runtime.dynamicPromptExecFromState(plannerArgs),
+		);
+
+		expect(result).toBeNull();
+	});
 });

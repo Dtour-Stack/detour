@@ -54,6 +54,19 @@ function cleanText(raw: string): string {
 	return text.length > 2000 ? text.slice(0, 2000).trim() : text;
 }
 
+function isInternalFailureText(text: string): boolean {
+	const lower = text.toLowerCase();
+	return [
+		"dynamicpromptexecfromstate",
+		"reply generation failed",
+		"provider path",
+		"discord_generation_failed",
+		"server_is_overloaded",
+		"apiKey=",
+		"stack trace",
+	].some((term) => lower.includes(term.toLowerCase()));
+}
+
 function stringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
@@ -100,6 +113,13 @@ export async function generatePlainTextReply(
 		});
 		const text = typeof raw === "string" ? cleanText(raw) : "";
 		if (!text) return null;
+		if (isInternalFailureText(text)) {
+			runtime.logger.warn(
+				{ src: "detour:dpe-fallback", reason },
+				"Suppressed internal failure text from plain-text fallback",
+			);
+			return null;
+		}
 		runtime.logger.warn(
 			{ src: "detour:dpe-fallback", reason },
 			"Using plain-text planner fallback",
@@ -154,7 +174,7 @@ export function installDpeFallbackPatch(runtime: IAgentRuntime): void {
 				error instanceof Error ? error.message : String(error),
 			);
 			if (fallback) return fallback;
-			throw error;
+			return null;
 		}
 	};
 	wrapped[WRAPPED] = true;

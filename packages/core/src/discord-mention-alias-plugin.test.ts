@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type {
+	Action,
 	Content,
 	HandlerCallback,
 	IAgentRuntime,
@@ -17,10 +18,10 @@ type HandleMessage = (
 	options?: MessageProcessingOptions,
 ) => Promise<MessageProcessingResult>;
 
-const INTERNAL_FALLBACK_TERMS = ["pipeline", "tripped", "fallback", "provider", "llm", "runtime", "generation"];
 type TestUseModel = (modelType: unknown, params: unknown) => Promise<string | null>;
 type ManagerRuntimeOptions = {
 	useModel?: TestUseModel;
+	actions?: Action[];
 	history?: Array<{
 		id: string;
 		content: string;
@@ -33,16 +34,6 @@ type ManagerRuntimeOptions = {
 		createdTimestamp?: number;
 	};
 };
-
-function expectPublicDiscordText(text: unknown): asserts text is string {
-	expect(typeof text).toBe("string");
-	const value = String(text);
-	expect(value.length).toBeGreaterThan(0);
-	const lower = value.toLowerCase();
-	for (const term of INTERNAL_FALLBACK_TERMS) {
-		expect(lower.includes(term)).toBe(false);
-	}
-}
 
 function discordMessage(): Memory {
 	return {
@@ -121,6 +112,7 @@ function makeManagerRuntime(options: ManagerRuntimeOptions = {}) {
 	const runtime: IAgentRuntime = {
 		agentId: "agent-id",
 		character: { name: "Detour Squirrel", username: "detour_squirrel" },
+		actions: options.actions ?? [],
 		getSetting: (key: string) => {
 			if (key === "DISCORD_ADDRESSED_REPLY_GUARD_MS") return "5";
 			if (key === "DISCORD_FALLBACK_GENERATION_MS") return "100";
@@ -172,7 +164,7 @@ describe("discord mention alias reply guard", () => {
 		expect(steps).toHaveLength(1);
 	});
 
-	test("last-resort fallback text does not leak internal pipeline wording", async () => {
+	test("reply guard does not send hardcoded public filler when generation fails", async () => {
 		const { runtime, service, callback, replies } = makeRuntime(
 			async () => await new Promise<MessageProcessingResult>(() => undefined),
 			async () => {
@@ -182,10 +174,9 @@ describe("discord mention alias reply guard", () => {
 
 		const result = await service.handleMessage(runtime, discordMessage(), callback);
 
-		expect(result.didRespond).toBe(true);
-		expectPublicDiscordText(result.responseContent?.text);
-		expect(result.responseContent.text).not.toBe("I saw it. Reply pipeline tripped, but I am still here.");
-		expect(replies.map((reply) => reply.text)).toEqual([result.responseContent.text]);
+		expect(result.didRespond).toBe(false);
+		expect(result.responseContent).toBeNull();
+		expect(replies).toEqual([]);
 	});
 
 	test("late handler callbacks are suppressed after fallback sends", async () => {
@@ -241,7 +232,7 @@ describe("discord mention alias reply guard", () => {
 		expect(events).toHaveLength(1);
 	});
 
-	test("raw Discord manager guard hides internal wording when generation fails", async () => {
+	test("raw Discord manager guard suppresses public filler when generation fails", async () => {
 		const { messageManager, message, sent } = makeManagerRuntime({
 			useModel: async () => {
 				throw new Error("model unavailable");
@@ -250,10 +241,7 @@ describe("discord mention alias reply guard", () => {
 
 		await messageManager.handleMessage(message);
 
-		expect(sent).toHaveLength(1);
-		const payload = sent[0] as { content?: unknown };
-		expectPublicDiscordText(payload.content);
-		expect(payload.content).not.toBe("I saw it. Reply pipeline tripped, but I am still here.");
+		expect(sent).toEqual([]);
 	});
 
 	test("raw Discord manager guard gives generated replies recent channel context", async () => {
@@ -298,5 +286,40 @@ describe("discord mention alias reply guard", () => {
 		expect(prompts[0]).toContain("Detour any fud on X lately?");
 		expect(prompts[0]).toContain("Always. Send me the post");
 		expect(prompts[0]).toContain("specifically asking about in your notifications");
+	});
+
+	test("raw Discord manager guard includes X notifications for notification questions", async () => {
+		const prompts: string[] = [];
+		const xNotificationsAction: Action = {
+			name: "X_NOTIFICATIONS",
+			description: "Read recent X notifications",
+			validate: async () => true,
+			handler: async (_runtime, _message, _state, _options, callback) => {
+				await callback?.({
+					text: "10 notifications:\n• [reply] @fishai asked if there is fud in the replies (tweet 205)",
+				}, "X_NOTIFICATIONS");
+				return { success: true };
+			},
+		};
+		const { messageManager, message, sent } = makeManagerRuntime({
+			actions: [xNotificationsAction],
+			message: {
+				id: "current",
+				content: "Detour any fud on X lately?",
+				createdTimestamp: 1,
+			},
+			useModel: async (_modelType, params) => {
+				const prompt = (params as { prompt?: string }).prompt ?? "";
+				prompts.push(prompt);
+				return "yeah, fishai is poking at the replies. nothing fatal, just normal X noise.";
+			},
+		});
+
+		await messageManager.handleMessage(message);
+
+		expect(sent).toHaveLength(1);
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain("X notification context");
+		expect(prompts[0]).toContain("@fishai");
 	});
 });

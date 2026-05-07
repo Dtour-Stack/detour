@@ -18,15 +18,9 @@ import {
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
 const MANAGER_WRAPPED = Symbol.for("detour.discordMessageManagerGuard.wrapped");
-const DISCORD_FALLBACK_TEXTS = [
-	"I saw it. Had to kick the door open for a second, but I am here.",
-	"I caught the tag. Give me one clean second and I am back in the room.",
-	"Yeah, I am here. Short stumble, still standing.",
-	"I saw the callout. The quiet part is over.",
-	"I caught it. Took the scenic route back, but I am not missing this.",
-] as const;
 const DEFAULT_REPLY_GUARD_MS = 45_000;
 const DEFAULT_FALLBACK_GENERATION_MS = 10_000;
+const X_NOTIFICATIONS_ACTION = "X_NOTIFICATIONS";
 
 type TimeoutResult = "timeout";
 
@@ -185,6 +179,75 @@ function fallbackConversation(message: Memory): string {
 	return text ? `Latest Discord message:\n${text}` : "";
 }
 
+function asksAboutXNotifications(text: string): boolean {
+	const lower = text.toLowerCase();
+	const mentionsX = /\b(?:x|twitter)\b/.test(lower) || lower.includes("@detour_squirrel");
+	const asksSignal = [
+		"notification",
+		"notifications",
+		"mention",
+		"mentions",
+		"tag",
+		"tags",
+		"comment",
+		"comments",
+		"reply",
+		"replies",
+		"fud",
+		"talking shit",
+	].some((term) => lower.includes(term));
+	return lower.includes("your notifications") || (mentionsX && asksSignal);
+}
+
+async function xNotificationContext(runtime: IAgentRuntime, conversation: string): Promise<string> {
+	if (!asksAboutXNotifications(conversation)) return "";
+	const action = runtime.actions.find((candidate) => candidate.name === X_NOTIFICATIONS_ACTION);
+	if (!action) {
+		return "X notification context: X_NOTIFICATIONS is not registered. Do not invent notifications.";
+	}
+	const lines: string[] = [];
+	const message: Memory = {
+		id: createUniqueUuid(runtime, `discord:x-notifications:${Date.now()}`),
+		entityId: runtime.agentId,
+		agentId: runtime.agentId,
+		roomId: createUniqueUuid(runtime, "discord:x-notifications"),
+		content: { text: "Check X notifications for this Discord reply.", source: "discord" },
+		createdAt: Date.now(),
+	};
+	try {
+		const result = await action.handler(runtime, message, undefined, {}, async (content) => {
+			const text = typeof content.text === "string" ? content.text.trim() : "";
+			if (text) lines.push(text);
+			return [];
+		});
+		const text = lines.join("\n").trim() || result?.text?.trim() || "";
+		return text
+			? `X notification context:\n${text}`
+			: "X notification context: X_NOTIFICATIONS returned no summary. Do not invent notifications.";
+	} catch (error) {
+		runtime.logger.warn(
+			{
+				src: "detour:discord-x-context",
+				error: error instanceof Error ? error.message : String(error),
+			},
+			"X notification context fetch failed",
+		);
+		return "X notification context: unavailable because the X notification read failed. Do not invent notifications.";
+	}
+}
+
+async function enrichFallbackConversation(runtime: IAgentRuntime, conversation: string): Promise<string> {
+	const context = await xNotificationContext(runtime, conversation);
+	if (!context) return conversation;
+	return [
+		conversation,
+		"",
+		context,
+		"",
+		"If the latest Discord message asks about X notifications, answer from the X notification context above.",
+	].join("\n");
+}
+
 function rawDiscordText(message: DiscordMessageLike): string {
 	const text = typeof message.content === "string" ? message.content.trim() : "";
 	return text.length > 0 ? text : "";
@@ -239,7 +302,7 @@ async function rawFallbackConversation(
 			return line ? [line] : [];
 		})
 		.slice(-12);
-	return lines.length > 0
+	const conversation = lines.length > 0
 		? [
 				"Recent Discord channel context:",
 				...lines,
@@ -247,6 +310,7 @@ async function rawFallbackConversation(
 				"Reply to the latest user message. Use prior turns when they clarify what the user means.",
 			].join("\n")
 		: "";
+	return enrichFallbackConversation(runtime, conversation);
 }
 
 function readPositiveMs(runtime: IAgentRuntime, key: string, fallback: number): number {
@@ -272,28 +336,6 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | Time
 
 function stringId(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function fallbackHash(seed: string): number {
-	let hash = 2_166_136_261;
-	for (let i = 0; i < seed.length; i += 1) {
-		hash ^= seed.charCodeAt(i);
-		hash = Math.imul(hash, 16_777_619);
-	}
-	return hash >>> 0;
-}
-
-function fallbackText(seed: string | undefined): string {
-	if (!seed) return DISCORD_FALLBACK_TEXTS[0];
-	return DISCORD_FALLBACK_TEXTS[fallbackHash(seed) % DISCORD_FALLBACK_TEXTS.length];
-}
-
-function memoryFallbackSeed(message: Memory): string | undefined {
-	return stringId(message.id) ?? stringId(message.content.text);
-}
-
-function rawFallbackSeed(message: DiscordMessageLike): string | undefined {
-	return stringId(message.id) ?? stringId(message.content);
 }
 
 function trajectoryIds(message: Memory): { trajectoryId: string; stepId: string } | null {
@@ -382,21 +424,34 @@ async function emitDiscordFallbackReply(
 	message: Memory,
 	callback: HandlerCallback,
 	reason: string,
-): Promise<{ content: Content; memories: Memory[] }> {
+): Promise<{ content: Content; memories: Memory[] } | null> {
 	const startedAt = Date.now();
+	const conversation = await enrichFallbackConversation(runtime, fallbackConversation(message));
 	const generated = await withTimeout(
 		generatePlainTextReply(
 			runtime,
-			fallbackConversation(message),
+			conversation,
 			`discord-visible-reply:${reason}`,
 		),
 		readPositiveMs(runtime, "DISCORD_FALLBACK_GENERATION_MS", DEFAULT_FALLBACK_GENERATION_MS),
 	);
 	const generatedText = generated === "timeout" ? null : generated;
+	if (!generatedText) {
+		runtime.logger.warn(
+			{
+				src: "detour:discord-reply-guard",
+				reason,
+				messageId: message.id,
+				roomId: message.roomId,
+			},
+			"Suppressed Discord fallback reply because no public text was generated",
+		);
+		return null;
+	}
 	const content: Content = {
 		thought: "Discord visible reply guard",
 		actions: ["REPLY"],
-		text: generatedText ?? fallbackText(memoryFallbackSeed(message)),
+		text: generatedText,
 		simple: true,
 	};
 	recordFallbackTrajectory(
@@ -405,7 +460,7 @@ async function emitDiscordFallbackReply(
 		content,
 		reason,
 		Date.now() - startedAt,
-		typeof generatedText === "string" && generatedText.length > 0,
+		true,
 	);
 	runtime.logger.warn(
 		{
@@ -459,7 +514,7 @@ async function directDiscordFallbackContent(
 	service: DiscordServiceLike,
 	message: DiscordMessageLike,
 	reason: string,
-): Promise<Content> {
+): Promise<Content | null> {
 	const conversation = await rawFallbackConversation(runtime, message, service.client?.user);
 	const generated = await withTimeout(
 		generatePlainTextReply(
@@ -470,10 +525,22 @@ async function directDiscordFallbackContent(
 		readPositiveMs(runtime, "DISCORD_FALLBACK_GENERATION_MS", DEFAULT_FALLBACK_GENERATION_MS),
 	);
 	const text = generated === "timeout" ? null : generated;
+	if (!text) {
+		runtime.logger.warn(
+			{
+				src: "detour:discord-manager-guard",
+				reason,
+				messageId: message.id,
+				channelId: message.channel?.id,
+			},
+			"Suppressed direct Discord manager fallback because no public text was generated",
+		);
+		return null;
+	}
 	return {
 		thought: "Discord manager visible reply guard",
 		actions: ["REPLY"],
-		text: text ?? fallbackText(rawFallbackSeed(message)),
+		text,
 		simple: true,
 	};
 }
@@ -532,6 +599,7 @@ async function handleManagerFallback(
 	const botId = stringId(service.client?.user?.id);
 	if (await hasRecentBotReply(message, botId)) return;
 	const content = await directDiscordFallbackContent(runtime, service, message, reason);
+	if (!content) return;
 	await sendDirectDiscordFallback(message, content);
 	emitDirectDiscordFallbackSent(runtime, message, content);
 	runtime.logger.warn(
@@ -600,6 +668,15 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 				fallbackEmitted = true;
 				void original.catch((error) => logLateHandlerFailure(callRuntime, message, error));
 				const fallback = await emitDiscordFallbackReply(callRuntime, message, callback, "timeout");
+				if (!fallback) {
+					return {
+						didRespond: false,
+						responseContent: null,
+						responseMessages: [],
+						state: emptyState(),
+						mode: "none",
+					};
+				}
 				return {
 					didRespond: true,
 					responseContent: fallback.content,
@@ -611,6 +688,7 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 			if (addressed && callback && !emittedVisibleContent) {
 				fallbackEmitted = true;
 				const fallback = await emitDiscordFallbackReply(callRuntime, message, callback, "empty-result");
+				if (!fallback) return result;
 				return {
 					...result,
 					didRespond: true,
@@ -629,6 +707,15 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 				callback,
 				error instanceof Error ? error.message : String(error),
 			);
+			if (!fallback) {
+				return {
+					didRespond: false,
+					responseContent: null,
+					responseMessages: [],
+					state: emptyState(),
+					mode: "none",
+				};
+			}
 			return {
 				didRespond: true,
 				responseContent: fallback.content,
