@@ -136,7 +136,7 @@ const MAX_WORKSPACE_FILE_BYTES = 300_000;
 const MAX_WORKSPACE_PREVIEW_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_WORKSPACE_DIRECTORY_ENTRIES = 400;
 const PREVIEW_URL_PATTERN =
-	/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s"'<>),\]}]*)?/gi;
+	/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s\\"'<>),\]}]*)?/gi;
 const GENERATED_PREVIEW_PATTERN =
 	/DETOUR_GENERATED_PROJECT_OK\s+([^\s"'<>]+\.html)/i;
 const WORKSPACE_IGNORED_ENTRIES = new Set([
