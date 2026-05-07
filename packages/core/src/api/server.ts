@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RuntimeService } from "../runtime";
+import { runDiscordCatchUp } from "../discord-catchup";
 import type { AccountCredentialProvider, AuthService } from "../auth";
 import { ALL_PROVIDER_IDS, PROVIDER_ENV } from "../auth";
 import type { BackendOps, InstallableBackendId } from "../backend-ops";
@@ -1945,6 +1946,44 @@ export class ApiServer {
 					.then((r) => console.log(`[discord] backfill complete for ${body.channelId}:`, r.stats))
 					.catch((err) => console.warn(`[discord] backfill failed for ${body.channelId}:`, err instanceof Error ? err.message : err));
 				return json({ ok: true, scheduled: true, channelId: body.channelId });
+			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, path, json, error } = ctx;
+			if (req.method === "POST" && path === "/api/channels/discord/catch-up") {
+				const body = recordValue(await req.json().catch(() => ({}))) ?? {};
+				const live = this.runtime.peek();
+				if (!live) return error("runtime not built", 503);
+				const channelId = optionalString(body, "channelId");
+				const limit = optionalNumber(body, "limit") ?? 100;
+				const maxAgeHours = optionalNumber(body, "maxAgeHours") ?? 24;
+				const options = {
+					...(channelId ? { channelId } : {}),
+					limit,
+					maxAgeMs: maxAgeHours > 0 ? maxAgeHours * 60 * 60_000 : 0,
+				};
+				const wait = optionalBoolean(body, "wait") ?? Boolean(channelId);
+				if (wait) {
+					try {
+						const result = await runDiscordCatchUp(live, options);
+						return json({ ok: true, scheduled: false, result, ...(channelId ? { channelId } : {}) });
+					} catch (err) {
+						return error(err instanceof Error ? err.message : String(err), 400);
+					}
+				}
+				void runDiscordCatchUp(live, options).catch((err) => {
+					const runtime = this.runtime.peek();
+					runtime?.logger.warn(
+						{
+							src: "api:discord-catchup",
+							channelId,
+							error: err instanceof Error ? err.message : String(err),
+						},
+						"Discord catch-up failed",
+					);
+				});
+				return json({ ok: true, scheduled: true, ...(channelId ? { channelId } : {}) });
 			}
 			return null;
 		},

@@ -49,6 +49,16 @@ import type {
 
 type Listener = (msg: WsServerMessage) => void;
 
+export type DiscordCatchUpResult = {
+	channelsScanned: number;
+	messagesScanned: number;
+	addressed: number;
+	alreadyAnswered: number;
+	replied: number;
+	errors: number;
+	errorDetails?: Array<{ channelId: string; channelName?: string; error: string }>;
+};
+
 export class WebClient {
 	private ws: WebSocket | null = null;
 	private listeners = new Set<Listener>();
@@ -319,6 +329,9 @@ export class WebClient {
 	}
 	async discordBackfill(channelId: string, limit = 200, force = false): Promise<{ ok: boolean; scheduled: boolean; channelId: string }> {
 		return this.json("POST", "/api/channels/discord/backfill", { channelId, limit, force });
+	}
+	async discordCatchUp(channelId: string, limit = 100, maxAgeHours = 24): Promise<{ ok: boolean; scheduled: boolean; channelId?: string; result?: DiscordCatchUpResult }> {
+		return this.json("POST", "/api/channels/discord/catch-up", { channelId, limit, maxAgeHours, wait: true });
 	}
 	async activitySetAutonomy(enabled: boolean): Promise<void> {
 		await this.json("POST", `/api/activity/autonomy/${enabled ? "enable" : "disable"}`);

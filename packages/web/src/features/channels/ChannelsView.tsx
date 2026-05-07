@@ -19,7 +19,7 @@ import type {
 	ChannelStatus,
 	ChannelsSnapshot,
 } from "@detour/shared";
-import { WebClient } from "../../api/client";
+import { WebClient, type DiscordCatchUpResult } from "../../api/client";
 import { useDetourTheme } from "../../useDetourTheme";
 
 const CHANNEL_ICONS: Record<string, string> = {
@@ -747,6 +747,13 @@ function ChannelHistory({
 	);
 }
 
+function summarizeCatchUp(result: DiscordCatchUpResult | undefined): string {
+	if (!result) return "missed reply scan finished";
+	const firstError = result.errorDetails?.[0];
+	const errorText = firstError ? ` · ${firstError.channelName ?? firstError.channelId}: ${firstError.error}` : "";
+	return `${result.replied} replied · ${result.addressed} addressed · ${result.alreadyAnswered} already answered · ${result.errors} errors${errorText}`;
+}
+
 function DiscordBackfillSection({ client }: { client: WebClient }) {
 	const [guilds, setGuilds] = useState<Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -771,6 +778,19 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 		try {
 			await client.discordBackfill(channelId, limit, false);
 			setResults((r) => ({ ...r, [channelId]: `backfilling ${limit} msgs (running in background — check Activity > Trajectories for source=discord)` }));
+		} catch (e) {
+			setResults((r) => ({ ...r, [channelId]: `error: ${e instanceof Error ? e.message : String(e)}` }));
+		} finally {
+			setBusy(null);
+		}
+	};
+
+	const catchUp = async (channelId: string) => {
+		setBusy(`catchup:${channelId}`);
+		setResults((r) => ({ ...r, [channelId]: "scheduling missed replies…" }));
+		try {
+			const response = await client.discordCatchUp(channelId, Math.min(limit, 500), 24);
+			setResults((r) => ({ ...r, [channelId]: summarizeCatchUp(response.result) }));
 		} catch (e) {
 			setResults((r) => ({ ...r, [channelId]: `error: ${e instanceof Error ? e.message : String(e)}` }));
 		} finally {
@@ -827,6 +847,14 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 										onClick={() => backfill(c.id)}
 									>
 										{busy === c.id ? "…" : "Backfill"}
+									</button>
+									<button
+										type="button"
+										className="btn small"
+										disabled={busy === `catchup:${c.id}`}
+										onClick={() => catchUp(c.id)}
+									>
+										{busy === `catchup:${c.id}` ? "…" : "Reply missed"}
 									</button>
 								</div>
 							))}

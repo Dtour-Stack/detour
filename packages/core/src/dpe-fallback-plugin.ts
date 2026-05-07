@@ -37,7 +37,7 @@ function shouldUsePlainReply(args: DynamicPromptArgs): boolean {
 	return isResponsePlanner(args) && context?.source === "discord" && context.addressed;
 }
 
-function conversationText(state: State | undefined): string {
+export function conversationText(state: State | undefined): string {
 	const recent = state?.values?.recentMessages;
 	if (typeof recent === "string" && recent.trim().length > 0) return recent;
 	if (typeof state?.text === "string" && state.text.trim().length > 0) return state.text;
@@ -54,13 +54,12 @@ function cleanText(raw: string): string {
 	return text.length > 2000 ? text.slice(0, 2000).trim() : text;
 }
 
-async function fallbackPlannerReply(
+export async function generatePlainTextReply(
 	runtime: IAgentRuntime,
-	args: DynamicPromptArgs,
+	conversation: string,
 	reason: string,
-): Promise<DynamicPromptResult> {
-	const conversation = conversationText(args.state);
-	if (!conversation) return null;
+): Promise<string | null> {
+	if (!conversation.trim()) return null;
 	const prompt = [
 		`You are ${runtime.character.name}. Reply to the latest user message in plain text.`,
 		"Return only the message to send. No labels, no JSON, no TOON, no markdown fence, no hidden reasoning.",
@@ -82,13 +81,7 @@ async function fallbackPlannerReply(
 			{ src: "detour:dpe-fallback", reason },
 			"Using plain-text planner fallback",
 		);
-		return {
-			thought: "Plain-text planner fallback",
-			actions: ["REPLY"],
-			providers: "",
-			text,
-			simple: true,
-		};
+		return text;
 	} catch (error) {
 		runtime.logger.warn(
 			{
@@ -100,6 +93,22 @@ async function fallbackPlannerReply(
 		);
 		return null;
 	}
+}
+
+async function fallbackPlannerReply(
+	runtime: IAgentRuntime,
+	args: DynamicPromptArgs,
+	reason: string,
+): Promise<DynamicPromptResult> {
+	const text = await generatePlainTextReply(runtime, conversationText(args.state), reason);
+	if (!text) return null;
+	return {
+		thought: "Plain-text planner fallback",
+		actions: ["REPLY"],
+		providers: "",
+		text,
+		simple: true,
+	};
 }
 
 export function installDpeFallbackPatch(runtime: IAgentRuntime): void {

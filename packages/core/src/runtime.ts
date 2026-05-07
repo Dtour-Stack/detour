@@ -42,6 +42,7 @@ import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch } from "./discord-mention-alias-plugin";
 import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
+import { runDiscordCatchUp } from "./discord-catchup";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -671,6 +672,7 @@ export class RuntimeService {
 					channelId: "chat",
 					type: ChannelType.DM,
 				});
+				this.scheduleDiscordCatchUp(runtime);
 			}
 
 			return {
@@ -891,6 +893,26 @@ export class RuntimeService {
 		} catch (err) {
 			console.warn("[runtime] task timer start failed:", err instanceof Error ? err.message : err);
 		}
+	}
+
+	private scheduleDiscordCatchUp(runtime: AgentRuntime): void {
+		const enabled = String(runtime.getSetting("DISCORD_CATCH_UP_ENABLED") ?? "true").toLowerCase();
+		if (enabled === "false" || enabled === "0" || enabled === "off") return;
+		const timer = setTimeout(() => {
+			void runDiscordCatchUp(runtime, {
+				limit: 100,
+				maxAgeMs: 6 * 60 * 60_000,
+			}).catch((err) => {
+				runtime.logger.warn(
+					{
+						src: "runtime",
+						error: err instanceof Error ? err.message : String(err),
+					},
+					"Discord catch-up failed",
+				);
+			});
+		}, 5_000);
+		(timer as { unref?: () => void }).unref?.();
 	}
 
 	private async providerAttempts(): Promise<ProviderAttempt[]> {

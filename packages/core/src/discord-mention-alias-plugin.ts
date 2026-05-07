@@ -1,4 +1,5 @@
 import type {
+	Content,
 	HandlerCallback,
 	IAgentRuntime,
 	IMessageService,
@@ -6,11 +7,16 @@ import type {
 	MessageProcessingOptions,
 	MessageProcessingResult,
 	Plugin,
+	State,
 } from "@elizaos/core";
-import { runWithPlannerFallbackContext } from "./dpe-fallback-plugin";
+import {
+	generatePlainTextReply,
+	runWithPlannerFallbackContext,
+} from "./dpe-fallback-plugin";
 
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
+const DISCORD_FALLBACK_TEXT = "I saw it. Reply pipeline tripped, but I am still here.";
 
 type WrappedMessageService = IMessageService & {
 	[WRAPPED]?: true;
@@ -57,6 +63,53 @@ function markMention(runtime: IAgentRuntime, message: Memory): boolean {
 	return true;
 }
 
+function isAddressedDiscordMessage(runtime: IAgentRuntime, message: Memory): boolean {
+	const mentionContext = message.content.mentionContext;
+	return message.content.source === "discord" && (
+		mentionContext?.isMention === true ||
+		mentionContext?.isReply === true ||
+		mentionsAlias(message.content.text, configuredAliases(runtime))
+	);
+}
+
+function fallbackConversation(message: Memory): string {
+	const text = typeof message.content.text === "string" ? message.content.text.trim() : "";
+	return text ? `Latest Discord message:\n${text}` : "";
+}
+
+async function emitDiscordFallbackReply(
+	runtime: IAgentRuntime,
+	message: Memory,
+	callback: HandlerCallback,
+	reason: string,
+): Promise<{ content: Content; memories: Memory[] }> {
+	const generated = await generatePlainTextReply(
+		runtime,
+		fallbackConversation(message),
+		`discord-visible-reply:${reason}`,
+	);
+	const content: Content = {
+		thought: "Discord visible reply guard",
+		actions: ["REPLY"],
+		text: generated ?? DISCORD_FALLBACK_TEXT,
+		simple: true,
+	};
+	runtime.logger.warn(
+		{
+			src: "detour:discord-reply-guard",
+			reason,
+			messageId: message.id,
+			roomId: message.roomId,
+		},
+		"Sending direct Discord fallback reply",
+	);
+	return { content, memories: await callback(content) };
+}
+
+function emptyState(): State {
+	return { values: {}, data: {}, text: "" } as State;
+}
+
 export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 	const service = runtime.messageService as WrappedMessageService | null;
 	if (!service || service[WRAPPED]) return;
@@ -68,14 +121,48 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 		options?: MessageProcessingOptions,
 	): Promise<MessageProcessingResult> => {
 		const marked = markMention(callRuntime, message);
-		const mentionContext = message.content.mentionContext;
-		const addressed = marked ||
-			mentionContext?.isMention === true ||
-			mentionContext?.isReply === true;
-		return runWithPlannerFallbackContext(
-			{ source: "discord", addressed },
-			() => handleMessage(callRuntime, message, callback, options),
-		);
+		const addressed = marked || isAddressedDiscordMessage(callRuntime, message);
+		let emittedVisibleContent = false;
+		const trackingCallback: HandlerCallback | undefined = callback
+			? async (content, actionName) => {
+					const memories = await callback(content, actionName);
+					if (memories.length > 0) emittedVisibleContent = true;
+					return memories;
+				}
+			: undefined;
+
+		try {
+			const result = await runWithPlannerFallbackContext(
+				{ source: "discord", addressed },
+				() => handleMessage(callRuntime, message, trackingCallback, options),
+			);
+			if (addressed && callback && !emittedVisibleContent) {
+				const fallback = await emitDiscordFallbackReply(callRuntime, message, callback, "empty-result");
+				return {
+					...result,
+					didRespond: true,
+					responseContent: fallback.content,
+					responseMessages: fallback.memories,
+					mode: "simple",
+				};
+			}
+			return result;
+		} catch (error) {
+			if (!addressed || !callback) throw error;
+			const fallback = await emitDiscordFallbackReply(
+				callRuntime,
+				message,
+				callback,
+				error instanceof Error ? error.message : String(error),
+			);
+			return {
+				didRespond: true,
+				responseContent: fallback.content,
+				responseMessages: fallback.memories,
+				state: emptyState(),
+				mode: "simple",
+			};
+		}
 	};
 	service[WRAPPED] = true;
 }
@@ -92,6 +179,16 @@ export const discordMentionAliasPlugin: Plugin = {
 			mutatesPrimary: true,
 			handler: (_runtime, ctx) => {
 				if (ctx.phase !== "incoming_before_compose") return;
+				markMention(runtime, ctx.message);
+			},
+		});
+		runtime.registerPipelineHook({
+			id: "detour.discord_pre_should_respond_alias",
+			phase: "pre_should_respond",
+			position: -100,
+			mutatesPrimary: true,
+			handler: (_runtime, ctx) => {
+				if (ctx.phase !== "pre_should_respond") return;
 				markMention(runtime, ctx.message);
 			},
 		});

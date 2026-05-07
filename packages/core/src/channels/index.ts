@@ -245,7 +245,7 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		label: "Discord",
 		description: "Connect a Discord bot. Required: DISCORD_API_TOKEN. Optional: DISCORD_APPLICATION_ID.",
 		requiredVaultKeys: ["DISCORD_API_TOKEN"],
-		optionalVaultKeys: ["DISCORD_APPLICATION_ID", "DISCORD_AUTO_REPLY", "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS"],
+		optionalVaultKeys: ["DISCORD_APPLICATION_ID", "DISCORD_AUTO_REPLY", "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS", "DISCORD_CATCH_UP_ENABLED"],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-discord",
 		loadPlugin: loadDiscord,
