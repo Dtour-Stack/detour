@@ -327,6 +327,11 @@ export class WebClient {
 	activityWorkspaceProjects(): Promise<WorkspaceProjectsSnapshot> {
 		return this.json("GET", "/api/activity/workspace-projects");
 	}
+	deleteWorkspaceProject(
+		projectId: string,
+	): Promise<{ ok: boolean; projectId: string; cwd: string; deletedAgents: number; deletedProjectDir: boolean }> {
+		return this.json("DELETE", `/api/activity/workspace-projects/${encodeURIComponent(projectId)}`);
+	}
 	activityWorkspaceProjectFiles(
 		projectId: string,
 		path = "",

@@ -76,6 +76,7 @@ export default {
 			// local chat completion).
 			"build-assets/llama": "bun/llama",
 			"../core/src/knowledge/detour-squirrel": "knowledge/detour-squirrel",
+			"../core/skills": "skills",
 			// Production React build for canary/stable. Copied into
 			// `Resources/app/views/web/` so resolveViewUrl() can target
 			// `views://web/index.html#<route>` when running outside dev.

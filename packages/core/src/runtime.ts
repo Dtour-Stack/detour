@@ -5,11 +5,13 @@ import {
 	type Character,
 	type Content,
 	createCharacter,
+	type IAgentRuntime,
 	type ModelParamsMap,
 	type ModelResultMap,
 	type Memory,
 	type Plugin,
 	provisionAgent,
+	Service,
 	stringToUuid,
 	type UUID,
 } from "@elizaos/core";
@@ -19,6 +21,23 @@ import type { ProviderId } from "@detour/shared";
 import type { VaultService } from "./vault";
 import type { AuthService } from "./auth";
 import { listAccounts, type AccountCredentialRecord } from "@elizaos/agent/auth";
+import {
+	agentSkillsPlugin,
+	estimateTokens,
+	extractBody,
+	generateSkillsToon,
+	parseFrontmatter,
+	SKILL_SOURCE_PRECEDENCE,
+	type CacheOptions,
+	type LoadedSkillWithSource,
+	type PromptToonOptions,
+	type SkillCatalogEntry,
+	type SkillDetails,
+	type SkillEligibility,
+	type SkillInstructions,
+	type SkillSearchResult,
+	type SkillSource,
+} from "@elizaos/plugin-agent-skills";
 import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // Note: plugin-local-embedding (eliza's bundled choice) drags in node-llama-cpp,
 // transformers, and whisper — too heavy for our bundle and hangs startup.
@@ -49,9 +68,10 @@ import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDisc
 import { discordContextPlugin } from "./discord-context-provider";
 import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
 import { runDiscordCatchUp } from "./discord-catchup";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ConfigService } from "./config-service";
 import { toElizaCharacter } from "./agent-character";
 
@@ -103,6 +123,16 @@ const WORLD_ID = stringToUuid("tray-app:default-world");
 // IGNORE, which is why chat sends were producing trajectories with 0 LLM
 // calls while the inbox/cron path (which uses a stable system entity) worked.
 const USER_ID = stringToUuid("tray-app:default-user");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const DETOUR_SKILLS_ROOT = join(homedir(), ".detour", "skills");
+const DETOUR_INSTALLED_SKILLS_DIR = join(DETOUR_SKILLS_ROOT, "installed");
+const DETOUR_WORKSPACE_SKILLS_DIR = join(DETOUR_SKILLS_ROOT, "workspace");
+const DETOUR_BUNDLED_SKILLS_DIRS = [
+	join(dirname(fileURLToPath(import.meta.url)), "..", "skills"),
+	join(REPO_ROOT, "packages", "core", "skills"),
+];
+const ELIZA_BUNDLED_SKILLS_DIR = join(REPO_ROOT, "eliza", "packages", "skills", "skills");
+const ELIZA_CURATED_ACTIVE_SKILLS_DIR = join(process.env.ELIZA_STATE_DIR ?? join(homedir(), ".eliza"), "skills", "curated", "active");
 const X_RUNTIME_SETTING_KEYS = [
 	"X_AUTH_TOKEN",
 	"X_CT0",
@@ -120,6 +150,333 @@ const X_RUNTIME_SETTING_KEYS = [
 	"X_AUTONOMY_MAX_DISCOVERY_PER_TICK",
 	"X_AUTONOMY_DISCOVERY_QUERIES",
 ] as const;
+
+function mergeSettingList(existing: string | undefined, additions: readonly string[]): string | undefined {
+	const seen = new Set<string>();
+	const values = [
+		...(existing?.split(",") ?? []),
+		...additions,
+	]
+		.map((value) => value.trim())
+		.filter((value) => value.length > 0);
+	for (const value of values) seen.add(value);
+	const merged = [...seen];
+	return merged.length > 0 ? merged.join(",") : undefined;
+}
+
+type SkillSourceDirectory = {
+	source: SkillSource;
+	dir: string;
+};
+
+class DetourAgentSkillsService extends Service {
+	static serviceType = "AGENT_SKILLS_SERVICE";
+	capabilityDescription = "Detour bundled Agent Skills";
+	private loadedSkills = new Map<string, LoadedSkillWithSource>();
+	private enabledSkills = new Set<string>();
+
+	static async start(runtime: IAgentRuntime): Promise<DetourAgentSkillsService> {
+		const service = new DetourAgentSkillsService(runtime);
+		await service.initialize();
+		return service;
+	}
+
+	async initialize(): Promise<void> {
+		this.loadedSkills.clear();
+		const sources = this.skillSourceDirectories();
+		for (const source of sources) this.loadSkillsFromDirectory(source);
+		this.enabledSkills = new Set(this.loadedSkills.keys());
+		this.runtime.logger.info(
+			{
+				src: "runtime",
+				loaded: this.loadedSkills.size,
+				sources: sources.length,
+			},
+			"Agent skills loaded",
+		);
+	}
+
+	async stop(): Promise<void> {
+		this.loadedSkills.clear();
+		this.enabledSkills.clear();
+	}
+
+	getLoadedSkills(): LoadedSkillWithSource[] {
+		return [...this.loadedSkills.values()];
+	}
+
+	getLoadedSkill(slug: string): LoadedSkillWithSource | null {
+		return this.loadedSkills.get(cleanSkillSlug(slug)) ?? null;
+	}
+
+	getSkillInstructions(slug: string): SkillInstructions | null {
+		const skill = this.getLoadedSkill(slug);
+		if (!skill) return null;
+		const body = extractBody(skill.content);
+		return {
+			slug: skill.slug,
+			body,
+			estimatedTokens: estimateTokens(body),
+		};
+	}
+
+	generateSkillsPromptToon(options: PromptToonOptions = {}): string {
+		return generateSkillsToon(
+			this.getLoadedSkills().map((skill) => ({
+				name: skill.name,
+				description: skill.description,
+				location: `${skill.path}/SKILL.md`,
+			})),
+			{ includeLocation: options.includeLocation ?? true },
+		);
+	}
+
+	getSkillScanStatus(): undefined {
+		return undefined;
+	}
+
+	async getSkillScanReport(): Promise<null> {
+		return null;
+	}
+
+	async getEligibleSkills(): Promise<LoadedSkillWithSource[]> {
+		return this.getLoadedSkills();
+	}
+
+	isSkillEnabled(slug: string): boolean {
+		return this.enabledSkills.has(cleanSkillSlug(slug));
+	}
+
+	setSkillEnabled(slug: string, enabled: boolean): boolean {
+		const safeSlug = cleanSkillSlug(slug);
+		if (!this.loadedSkills.has(safeSlug)) return false;
+		if (enabled) this.enabledSkills.add(safeSlug);
+		else this.enabledSkills.delete(safeSlug);
+		return true;
+	}
+
+	async checkSkillEligibility(skill: LoadedSkillWithSource): Promise<SkillEligibility> {
+		return {
+			slug: skill.slug,
+			eligible: true,
+			reasons: [],
+			checkedAt: Date.now(),
+		};
+	}
+
+	getSkillExecutionEnv(): NodeJS.ProcessEnv {
+		return { ...process.env };
+	}
+
+	getScriptPath(slug: string, script: string): string | null {
+		const skill = this.getLoadedSkill(slug);
+		if (!skill || !skill.scripts.includes(script)) return null;
+		return join(skill.path, "scripts", script);
+	}
+
+	async getCatalog(): Promise<SkillCatalogEntry[]> {
+		return this.getLoadedSkills().map((skill) => this.catalogEntry(skill));
+	}
+
+	async search(
+		query: string,
+		limit = 10,
+		_options: CacheOptions = {},
+	): Promise<SkillSearchResult[]> {
+		const q = query.trim().toLowerCase();
+		const skills = this.getLoadedSkills()
+			.map((skill) => ({
+				skill,
+				score: skillSearchScore(skill, q),
+			}))
+			.filter((result) => result.score > 0 || q.length === 0)
+			.sort((a, b) => b.score - a.score || a.skill.slug.localeCompare(b.skill.slug))
+			.slice(0, limit);
+		return skills.map(({ skill, score }) => ({
+			score,
+			slug: skill.slug,
+			displayName: skill.name,
+			summary: skill.description,
+			version: skill.version,
+			updatedAt: skill.loadedAt,
+		}));
+	}
+
+	async getSkillDetails(slug: string): Promise<SkillDetails | null> {
+		const skill = this.getLoadedSkill(slug);
+		if (!skill) return null;
+		return {
+			skill: {
+				slug: skill.slug,
+				displayName: skill.name,
+				summary: skill.description,
+				tags: {},
+				stats: { downloads: 0, stars: 0, versions: 1 },
+				createdAt: skill.loadedAt,
+				updatedAt: skill.loadedAt,
+			},
+			latestVersion: {
+				version: skill.version,
+				createdAt: skill.loadedAt,
+			},
+		};
+	}
+
+	async isInstalled(slug: string): Promise<boolean> {
+		return this.loadedSkills.has(cleanSkillSlug(slug));
+	}
+
+	async install(): Promise<boolean> {
+		return false;
+	}
+
+	async uninstall(slug: string): Promise<boolean> {
+		const skill = this.getLoadedSkill(slug);
+		if (!skill || skill.source === "bundled" || skill.source === "plugin") return false;
+		this.loadedSkills.delete(skill.slug);
+		this.enabledSkills.delete(skill.slug);
+		return true;
+	}
+
+	async syncCatalog(): Promise<{ added: number; updated: number }> {
+		const before = this.loadedSkills.size;
+		await this.initialize();
+		return { added: Math.max(0, this.loadedSkills.size - before), updated: this.loadedSkills.size };
+	}
+
+	getCatalogStats(): {
+		total: number;
+		installed: number;
+		loaded: number;
+		cachedAt: number | null;
+		storageType: "memory" | "filesystem";
+		categories: string[];
+	} {
+		return {
+			total: this.loadedSkills.size,
+			installed: this.loadedSkills.size,
+			loaded: this.loadedSkills.size,
+			cachedAt: null,
+			storageType: "filesystem",
+			categories: ["detour"],
+		};
+	}
+
+	private skillSourceDirectories(): SkillSourceDirectory[] {
+		return [
+			...settingPathList(this.runtime.getSetting("WORKSPACE_SKILLS_DIR")).map((dir) => ({ source: "workspace" as const, dir })),
+			...settingPathList(this.runtime.getSetting("SKILLS_DIR")).map((dir) => ({ source: "managed" as const, dir })),
+			...settingPathList(this.runtime.getSetting("BUNDLED_SKILLS_DIRS")).map((dir) => ({ source: "bundled" as const, dir })),
+			...settingPathList(this.runtime.getSetting("EXTRA_SKILLS_DIRS")).map((dir) => ({ source: "extra" as const, dir })),
+		].filter((source) => existsSync(source.dir));
+	}
+
+	private loadSkillsFromDirectory(source: SkillSourceDirectory): void {
+		for (const entry of readdirSync(source.dir, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const skillDir = join(source.dir, entry.name);
+			const skillPath = join(skillDir, "SKILL.md");
+			if (!existsSync(skillPath)) continue;
+			const skill = this.loadSkill(source, entry.name, skillDir, skillPath);
+			if (!skill) continue;
+			const existing = this.loadedSkills.get(skill.slug);
+			if (existing && existing.precedence >= skill.precedence) continue;
+			this.loadedSkills.set(skill.slug, skill);
+		}
+	}
+
+	private loadSkill(
+		source: SkillSourceDirectory,
+		slugFallback: string,
+		skillDir: string,
+		skillPath: string,
+	): LoadedSkillWithSource | null {
+		const content = readFileSync(skillPath, "utf8");
+		const parsed = parseFrontmatter(content);
+		if (!parsed.frontmatter?.name || !parsed.frontmatter.description) return null;
+		const slug = cleanSkillSlug(parsed.frontmatter.name) || cleanSkillSlug(slugFallback);
+		if (!slug) return null;
+		const version = typeof parsed.frontmatter.metadata?.version === "string"
+			? parsed.frontmatter.metadata.version
+			: "0.0.0";
+		return {
+			slug,
+			name: parsed.frontmatter.name,
+			description: parsed.frontmatter.description,
+			version,
+			content,
+			frontmatter: parsed.frontmatter,
+			path: skillDir,
+			scripts: listChildFiles(skillDir, "scripts"),
+			references: listChildFiles(skillDir, "references"),
+			assets: listChildFiles(skillDir, "assets"),
+			loadedAt: Date.now(),
+			source: source.source,
+			sourceDir: source.dir,
+			precedence: SKILL_SOURCE_PRECEDENCE[source.source],
+			...(source.source === "bundled" ? { bundledDir: source.dir } : {}),
+		};
+	}
+
+	private catalogEntry(skill: LoadedSkillWithSource): SkillCatalogEntry {
+		return {
+			slug: skill.slug,
+			displayName: skill.name,
+			summary: skill.description,
+			version: skill.version,
+			tags: { [skill.source]: skill.source },
+			stats: { downloads: 0, stars: 0 },
+			updatedAt: skill.loadedAt,
+		};
+	}
+}
+
+function settingPathList(value: string | number | boolean | null | undefined): string[] {
+	if (typeof value !== "string") return [];
+	return value
+		.split(",")
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
+}
+
+function cleanSkillSlug(value: string): string {
+	return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function listChildFiles(dir: string, child: string): string[] {
+	const target = join(dir, child);
+	if (!existsSync(target) || !statSync(target).isDirectory()) return [];
+	return readdirSync(target, { withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => entry.name)
+		.sort();
+}
+
+function skillSearchScore(skill: LoadedSkillWithSource, query: string): number {
+	if (!query) return 1;
+	const haystack = `${skill.slug} ${skill.name} ${skill.description}`.toLowerCase();
+	if (haystack.includes(query)) return 1;
+	const terms = query.split(/\s+/).filter((term) => term.length > 2);
+	const hits = terms.filter((term) => haystack.includes(term)).length;
+	return terms.length > 0 ? hits / terms.length : 0;
+}
+
+const detourAgentSkillsPlugin: Plugin = {
+	...agentSkillsPlugin,
+	services: [DetourAgentSkillsService],
+};
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timeoutId = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
+	}
+}
 
 type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
@@ -846,8 +1203,22 @@ export class RuntimeService {
 		settings.DISCORD_AUTO_REPLY ??= "true";
 		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "false";
 		this.loadEmbeddingSettings(settings);
+		this.loadSkillsSettings(settings);
 		await this.loadXSettings(settings);
 		return settings;
+	}
+
+	private loadSkillsSettings(settings: Record<string, string>): void {
+		settings.SKILLS_AUTO_LOAD ??= "true";
+		settings.SKILLS_SYNC_CATALOG_ON_START ??= "false";
+		settings.SKILLS_DIR ??= process.env.DETOUR_SKILLS_DIR ?? DETOUR_INSTALLED_SKILLS_DIR;
+		settings.WORKSPACE_SKILLS_DIR ??= process.env.DETOUR_WORKSPACE_SKILLS_DIR ?? DETOUR_WORKSPACE_SKILLS_DIR;
+		const bundled = [...DETOUR_BUNDLED_SKILLS_DIRS, ELIZA_BUNDLED_SKILLS_DIR].filter((dir) => existsSync(dir));
+		const extra = [ELIZA_CURATED_ACTIVE_SKILLS_DIR].filter((dir) => existsSync(dir));
+		const bundledSetting = mergeSettingList(settings.BUNDLED_SKILLS_DIRS, bundled);
+		const extraSetting = mergeSettingList(settings.EXTRA_SKILLS_DIRS, extra);
+		if (bundledSetting) settings.BUNDLED_SKILLS_DIRS = bundledSetting;
+		if (extraSetting) settings.EXTRA_SKILLS_DIRS = extraSetting;
 	}
 
 	private loadEmbeddingSettings(settings: Record<string, string>): void {
@@ -883,6 +1254,7 @@ export class RuntimeService {
 			llmPlugin,
 			embeddingOpenAIPlugin,
 			embeddingStubPlugin,
+			detourAgentSkillsPlugin,
 			vaultToolsPlugin,
 			pensieveToolsPlugin,
 			codexPetsPlugin,
@@ -899,9 +1271,10 @@ export class RuntimeService {
 	private async waitForOwnerBind(runtime: AgentRuntime): Promise<void> {
 		if (!this.ownerBind) return;
 		try {
-			await (runtime as unknown as {
+			const load = (runtime as unknown as {
 				getServiceLoadPromise?: (t: string) => Promise<unknown>;
-			}).getServiceLoadPromise?.("OWNER_BIND_VERIFY");
+			}).getServiceLoadPromise?.("OWNER_BIND_VERIFY") ?? Promise.resolve(null);
+			await withTimeout(load, 5_000);
 			console.log("[runtime] OWNER_BIND_VERIFY started — channel plugins safe to load");
 		} catch (err) {
 			console.warn("[runtime] OWNER_BIND_VERIFY start failed:", err instanceof Error ? err.message : err);

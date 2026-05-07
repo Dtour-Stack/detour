@@ -136,6 +136,7 @@ export function AgentsPane({
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [panel, setPanel] = useState<AgentPanel>("terminal");
+	const [deletingProject, setDeletingProject] = useState(false);
 	const agents = agentData?.agents ?? [];
 	const projects = projectData?.projects ?? [];
 	const selectedProject = useMemo(
@@ -158,6 +159,19 @@ export function AgentsPane({
 		refreshAgents();
 		refreshProjects();
 	}, [refreshAgents, refreshProjects]);
+	const deleteSelectedProject = useCallback(async () => {
+		if (!selectedProject) return;
+		if (!confirm(`Delete managed project "${selectedProject.name}" and ${selectedProject.agentIds.length} session records?`)) return;
+		setDeletingProject(true);
+		try {
+			await client.deleteWorkspaceProject(selectedProject.id);
+			setSelectedProjectId(null);
+			setSelectedId(null);
+			refresh();
+		} finally {
+			setDeletingProject(false);
+		}
+	}, [client, refresh, selectedProject]);
 
 	useEffect(() => {
 		if (!selectedProjectId && projects.length > 0) setSelectedProjectId(projects[0].id);
@@ -188,15 +202,18 @@ export function AgentsPane({
 	return (
 		<div className={standalone ? "agents-workbench standalone" : "agents-workbench"}>
 			<aside className="agents-project-rail">
-				<div className="agents-sidebar-head">
-					<div>
-						<div className="agents-kicker">Detour</div>
-						<div className="agents-title">Workspace</div>
+					<div className="agents-sidebar-head">
+						<div>
+							<div className="agents-kicker">Detour</div>
+							<div className="agents-title">Workspace</div>
+						</div>
+						<button type="button" className="agents-icon-btn" onClick={refresh} title="Refresh">
+							refresh
+						</button>
+						<button type="button" className="agents-icon-btn" onClick={deleteSelectedProject} disabled={!selectedProject || deletingProject} title="Delete selected managed project">
+							delete
+						</button>
 					</div>
-					<button type="button" className="agents-icon-btn" onClick={refresh} title="Refresh">
-						refresh
-					</button>
-				</div>
 				<div className="agents-count">
 					{projectData ? `${projects.length} projects` : "loading"} · {remote ? "remote" : "local"}
 				</div>

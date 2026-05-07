@@ -46,6 +46,19 @@ const PROVIDERS: ReadonlyArray<{
 ];
 
 const ACTIVE_PROVIDER_KEY = "trayapp.activeProvider";
+const ROTATING_CLAUDE_KEY_PREFIXES = [
+	"ANTHROPIC_API_KEY_",
+	"CLAUDE_API_KEY_",
+] as const;
+const ROTATING_CLAUDE_LIST_KEYS = [
+	"ANTHROPIC_API_KEYS",
+	"CLAUDE_API_KEYS",
+] as const;
+
+function numericKeySuffix(key: string, prefix: string): number {
+	const suffix = key.slice(prefix.length);
+	return /^\d+$/.test(suffix) ? Number.parseInt(suffix, 10) : Number.MAX_SAFE_INTEGER;
+}
 
 export class VaultService {
 	private managerPromise: Promise<SecretsManager> | null = null;
@@ -132,6 +145,15 @@ export class VaultService {
 		for (const p of PROVIDERS) {
 			if (await manager.has(p.envKey)) {
 				process.env[p.envKey] = await manager.get(p.envKey);
+			}
+		}
+		for (const key of ROTATING_CLAUDE_LIST_KEYS) {
+			if (await manager.has(key)) process.env[key] = await manager.get(key);
+		}
+		for (const prefix of ROTATING_CLAUDE_KEY_PREFIXES) {
+			const keys = [...await manager.list(prefix)].sort((a, b) => numericKeySuffix(a, prefix) - numericKeySuffix(b, prefix) || a.localeCompare(b));
+			for (const key of keys) {
+				process.env[key] = await manager.get(key);
 			}
 		}
 		return this.getActiveProvider();

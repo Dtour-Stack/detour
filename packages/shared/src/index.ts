@@ -750,6 +750,7 @@ export type WorkspaceAgentRecord = {
 	exitCode?: number | null;
 	signal?: string | null;
 	endedAt?: number;
+	credentialAttempt?: number;
 };
 
 export type WorkspaceAgentsSnapshot = {
@@ -780,6 +781,7 @@ export type WorkspaceProjectRecord = {
 
 export type WorkspaceProjectsSnapshot = {
 	projects: WorkspaceProjectRecord[];
+	workspaceRoot?: string;
 	updatedAt: number;
 };
 

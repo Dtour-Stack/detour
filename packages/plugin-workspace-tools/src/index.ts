@@ -50,7 +50,16 @@ type AgentRecord = {
 	exitCode?: number | null;
 	signal?: string | null;
 	endedAt?: number;
+	credentialAttempt?: number;
 };
+
+type CredentialAttempt = {
+	env: NodeJS.ProcessEnv;
+	index: number;
+	total: number;
+};
+
+type CredentialAttempts = [CredentialAttempt, ...CredentialAttempt[]];
 
 type AuditEvent = {
 	action: string;
@@ -72,8 +81,16 @@ type AuditEvent = {
 
 const DEFAULT_MAX_OUTPUT = 20_000;
 const WORKSPACE_AUDIT_FILE = `${homedir()}/.eliza/audit/agent-workspace-actions.jsonl`;
+const AGENT_WORKSPACE_ROOT = join(homedir(), ".detour", "workspace");
+const AGENT_PROJECTS_DIR = join(AGENT_WORKSPACE_ROOT, "projects");
 const AGENT_STATE_DIR = `${homedir()}/.detour/workspace-agents`;
 const AGENT_STATE_FILE = join(AGENT_STATE_DIR, "sessions.json");
+const AGENT_TMP_DIR = join(AGENT_WORKSPACE_ROOT, ".tmp");
+const AGENT_CACHE_DIR = join(AGENT_WORKSPACE_ROOT, ".cache");
+const AGENT_BUN_CACHE_DIR = join(AGENT_CACHE_DIR, "bun");
+const CLAUDE_KEY_LIST_NAMES = ["ANTHROPIC_API_KEYS", "CLAUDE_API_KEYS"] as const;
+const CLAUDE_SINGLE_KEY_NAMES = ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"] as const;
+const CLAUDE_NUMBERED_KEY_PREFIXES = ["ANTHROPIC_API_KEY_", "CLAUDE_API_KEY_"] as const;
 
 function caller(runtime: IAgentRuntime): string {
 	return `agent:${runtime.character?.name ?? "unknown"}`;
@@ -130,12 +147,28 @@ function numberOption(options: Record<string, unknown> | undefined, keys: readon
 
 function workspaceRoot(): string {
 	const root = process.env.DETOUR_WORKSPACE_ROOT;
-	return typeof root === "string" && root.length > 0 ? resolve(root) : process.cwd();
+	const resolved = typeof root === "string" && root.length > 0
+		? resolve(root)
+		: AGENT_PROJECTS_DIR;
+	mkdirSync(resolved, { recursive: true });
+	return resolved;
 }
 
-function resolveCwd(cwd: string | undefined): string {
-	if (!cwd) return workspaceRoot();
-	return isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot(), cwd);
+function projectSlug(value: string): string {
+	const slug = value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 56);
+	return slug || "project";
+}
+
+function resolveCwd(cwd: string | undefined, projectSeed: string): string {
+	const resolved = cwd
+		? isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot(), cwd)
+		: resolve(workspaceRoot(), projectSlug(projectSeed));
+	mkdirSync(resolved, { recursive: true });
+	return resolved;
 }
 
 function truncateMiddle(text: string, maxLength: number): string {
@@ -154,6 +187,104 @@ function executablePath(command: string): string | null {
 		if (existsSync(candidate)) return candidate;
 	}
 	return null;
+}
+
+function workspaceAgentEnv(): NodeJS.ProcessEnv {
+	mkdirSync(AGENT_WORKSPACE_ROOT, { recursive: true });
+	mkdirSync(AGENT_PROJECTS_DIR, { recursive: true });
+	mkdirSync(AGENT_TMP_DIR, { recursive: true });
+	mkdirSync(AGENT_CACHE_DIR, { recursive: true });
+	mkdirSync(AGENT_BUN_CACHE_DIR, { recursive: true });
+	const githubToken = process.env.GITHUB_AGENT_PAT ?? process.env.GITHUB_TOKEN ?? process.env.GITHUB_USER_PAT;
+	const env: NodeJS.ProcessEnv = {
+		...process.env,
+		DETOUR_WORKSPACE_ROOT: workspaceRoot(),
+		TMPDIR: AGENT_TMP_DIR,
+		TMP: AGENT_TMP_DIR,
+		TEMP: AGENT_TMP_DIR,
+		XDG_CACHE_HOME: AGENT_CACHE_DIR,
+		BUN_INSTALL_CACHE_DIR: AGENT_BUN_CACHE_DIR,
+	};
+	if (githubToken) {
+		env.GITHUB_TOKEN = githubToken;
+		env.GH_TOKEN = process.env.GH_TOKEN ?? githubToken;
+	}
+	return env;
+}
+
+function parseKeyList(raw: string): string[] {
+	const trimmed = raw.trim();
+	if (!trimmed) return [];
+	if (trimmed.startsWith("[")) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Invalid Claude key list JSON: ${message}`);
+		}
+		if (!Array.isArray(parsed)) throw new Error("Claude key list JSON must be an array.");
+		return parsed.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+	}
+	return trimmed.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function numberedEnvKeyValue(prefix: string, index: number): string | undefined {
+	return process.env[`${prefix}${index}`];
+}
+
+function claudeApiKeys(): string[] {
+	const values: string[] = [];
+	for (const key of CLAUDE_SINGLE_KEY_NAMES) {
+		const value = process.env[key];
+		if (value?.trim()) values.push(value.trim());
+	}
+	for (const key of CLAUDE_KEY_LIST_NAMES) {
+		const value = process.env[key];
+		if (value?.trim()) values.push(...parseKeyList(value));
+	}
+	for (const prefix of CLAUDE_NUMBERED_KEY_PREFIXES) {
+		for (let index = 1; index <= 50; index += 1) {
+			const value = numberedEnvKeyValue(prefix, index);
+			if (value?.trim()) values.push(value.trim());
+		}
+	}
+	return [...new Set(values)];
+}
+
+function commandUsesClaude(input: { provider: AgentProvider; agentType: string }): boolean {
+	return input.provider === "claude" || input.agentType.toLowerCase() === "claude";
+}
+
+function envForCredentialAttempt(base: NodeJS.ProcessEnv, key: string | undefined): NodeJS.ProcessEnv {
+	if (!key) return base;
+	return {
+		...base,
+		ANTHROPIC_API_KEY: key,
+		CLAUDE_API_KEY: key,
+	};
+}
+
+function credentialAttempts(input: { provider: AgentProvider; agentType: string }): CredentialAttempts {
+	const base = workspaceAgentEnv();
+	if (!commandUsesClaude(input)) return [{ env: base, index: 1, total: 1 }];
+	const keys = claudeApiKeys();
+	if (keys.length === 0) return [{ env: base, index: 1, total: 1 }];
+	const [first, ...rest] = keys;
+	return [
+		{ env: envForCredentialAttempt(base, first), index: 1, total: keys.length },
+		...rest.map((key, index) => ({ env: envForCredentialAttempt(base, key), index: index + 2, total: keys.length })),
+	];
+}
+
+function isCredentialFailure(text: string): boolean {
+	return /authentication_error|authentication failed|invalid authentication credentials|invalid api key|credit balance is too low|rate[_ -]?limit|overloaded|quota|429|401/i.test(text);
+}
+
+function shouldRetryCredentialFailure(result: ProcessRun, attempts: CredentialAttempts, attemptIndex: number): boolean {
+	return result.exitCode !== 0
+		&& attemptIndex + 1 < attempts.length
+		&& isCredentialFailure(`${result.stderr}\n${result.stdout}`);
 }
 
 function writeAudit(event: AuditEvent): void {
@@ -232,11 +363,11 @@ function ok(text: string, values: Record<string, unknown>): ActionResult {
 	return { success: true, text, values: values as never };
 }
 
-function runProcess(command: string, args: string[], cwd: string, timeoutMs: number): Promise<ProcessRun> {
+function runProcess(command: string, args: string[], cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv = workspaceAgentEnv()): Promise<ProcessRun> {
 	const started = Date.now();
 	const child = spawn(command, args, {
 		cwd,
-		env: process.env,
+		env,
 		stdio: ["ignore", "pipe", "pipe"],
 		shell: false,
 	});
@@ -365,18 +496,24 @@ function buildAgentCommand(input: {
 	return { command, args };
 }
 
-function spawnAgentProcess(record: AgentRecord): AgentRecord {
+function spawnAgentAttempt(record: AgentRecord, attempts: CredentialAttempts, attemptIndex: number): AgentRecord {
 	mkdirSync(AGENT_STATE_DIR, { recursive: true });
 	upsertAgent(record);
 	const stream = createWriteStream(record.logPath, { flags: "a" });
+	const attempt = attempts[attemptIndex] ?? attempts[0];
+	if (attempt.total > 1) stream.write(`\n[credential_attempt] ${attempt.index}/${attempt.total}\n`);
 	const child = spawn(record.command, record.args, {
 		cwd: record.cwd,
-		env: process.env,
+		env: attempt.env,
 		stdio: ["ignore", "pipe", "pipe"],
 		shell: false,
 	});
-	const next: AgentRecord = { ...record, pid: child.pid };
+	const next: AgentRecord = { ...record, pid: child.pid, credentialAttempt: attempt.index };
 	upsertAgent(next);
+	const stdout: Buffer[] = [];
+	const stderr: Buffer[] = [];
+	child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+	child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
 	child.stdout.pipe(stream);
 	child.stderr.pipe(stream);
 	child.on("error", (error) => {
@@ -385,28 +522,46 @@ function spawnAgentProcess(record: AgentRecord): AgentRecord {
 		stream.end();
 	});
 	child.on("close", (exitCode, signal) => {
+		const stdoutText = Buffer.concat(stdout).toString("utf8");
+		const stderrText = Buffer.concat(stderr).toString("utf8");
+		const canRetry = exitCode !== 0 && attemptIndex + 1 < attempts.length && isCredentialFailure(`${stderrText}\n${stdoutText}`);
+		if (canRetry) {
+			stream.write(`\n[credential_retry] ${attempt.index}/${attempt.total} failed; rotating Claude key\n`);
+			stream.end();
+			spawnAgentAttempt(record, attempts, attemptIndex + 1);
+			return;
+		}
 		updateAgent(record.id, {
 			status: exitCode === 0 ? "completed" : "failed",
 			exitCode,
 			signal,
 			endedAt: Date.now(),
+			credentialAttempt: attempt.index,
 		});
 		stream.end();
 	});
 	return next;
 }
 
+function spawnAgentProcess(record: AgentRecord, attempts: CredentialAttempts): AgentRecord {
+	return spawnAgentAttempt(record, attempts, 0);
+}
+
+function formatProcessLog(record: AgentRecord, result: ProcessRun): string {
+	return [
+		record.credentialAttempt && record.credentialAttempt > 1
+			? `[credential_attempt] ${record.credentialAttempt}\n`
+			: "",
+		`$ ${record.command} ${record.args.join(" ")}\n`,
+		result.stdout,
+		result.stderr ? `\n[stderr]\n${result.stderr}` : "",
+		`\n[exit] code=${result.exitCode ?? "null"} signal=${result.signal ?? "null"} timedOut=${result.timedOut} durationMs=${result.durationMs}\n`,
+	].join("");
+}
+
 function writeProcessLog(record: AgentRecord, result: ProcessRun): void {
 	mkdirSync(AGENT_STATE_DIR, { recursive: true });
-	writeFileSync(
-		record.logPath,
-		[
-			`$ ${record.command} ${record.args.join(" ")}\n`,
-			result.stdout,
-			result.stderr ? `\n[stderr]\n${result.stderr}` : "",
-			`\n[exit] code=${result.exitCode ?? "null"} signal=${result.signal ?? "null"} timedOut=${result.timedOut} durationMs=${result.durationMs}\n`,
-		].join(""),
-	);
+	writeFileSync(record.logPath, formatProcessLog(record, result));
 }
 
 function writeErrorLog(record: AgentRecord, errorText: string): void {
@@ -422,11 +577,13 @@ const spawnAgentHandler: Handler = async (runtime, message, _state, options, cal
 	const task = stringOption(opts, ["task", "prompt", "instructions", "text"]) ?? messageText(message);
 	if (!task) return fail("SPAWN_AGENT requires `task`.");
 	const provider = resolveProvider(opts);
-	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]));
 	const agentType = agentTypeFor(provider, opts);
 	const id = stringOption(opts, ["id", "sessionId", "session"]) ?? randomUUID();
+	const projectName = stringOption(opts, ["project", "projectName", "workspace", "repoName"]);
+	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]), projectName ?? `${task}-${id.slice(0, 8)}`);
 	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
 	const previewUrl = previewUrlOption(opts);
+	const attempts = credentialAttempts({ provider, agentType });
 	const record = spawnAgentProcess({
 		id,
 		provider,
@@ -439,7 +596,7 @@ const spawnAgentHandler: Handler = async (runtime, message, _state, options, cal
 		logPath: join(AGENT_STATE_DIR, `${id}.log`),
 		...(previewUrl ? { previewUrl } : {}),
 		startedAt: Date.now(),
-	});
+	}, attempts);
 	upsertAgent(record);
 	writeAudit({
 		action: "spawn_agent",
@@ -463,12 +620,13 @@ const createTaskHandler: Handler = async (runtime, message, _state, options, cal
 	const task = stringOption(opts, ["task", "prompt", "instructions", "text"]) ?? messageText(message);
 	if (!task) return fail("CREATE_TASK requires `task`.");
 	const provider = resolveProvider(opts);
-	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]));
 	const agentType = agentTypeFor(provider, opts);
-	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
 	const timeoutMs = Math.max(1_000, Math.min(30 * 60_000, numberOption(opts, ["timeoutMs", "timeout_ms", "timeout"], 30 * 60_000)));
 	const maxOutput = Math.max(1_000, Math.min(200_000, numberOption(opts, ["maxOutput", "max_output", "maxOutputChars"], DEFAULT_MAX_OUTPUT)));
 	const id = stringOption(opts, ["id", "taskId", "sessionId", "session"]) ?? randomUUID();
+	const projectName = stringOption(opts, ["project", "projectName", "workspace", "repoName"]);
+	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]), projectName ?? `${task}-${id.slice(0, 8)}`);
+	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
 	const previewUrl = previewUrlOption(opts);
 	const record: AgentRecord = {
 		id,
@@ -485,35 +643,48 @@ const createTaskHandler: Handler = async (runtime, message, _state, options, cal
 	};
 	upsertAgent(record);
 	try {
-		const result = await runProcess(built.command, built.args, cwd, timeoutMs);
-		const success = result.exitCode === 0 && !result.timedOut;
-		writeProcessLog(record, result);
-		upsertAgent({
-			...record,
-			status: success ? "completed" : "failed",
-			exitCode: result.exitCode,
-			signal: result.signal,
-			endedAt: Date.now(),
-		});
-		writeAudit({
-			action: "create_task",
-			agentId: id,
-			provider,
-			agentType,
-			command: result.command,
-			args: result.args,
-			cwd,
-			exitCode: result.exitCode,
-			signal: result.signal,
-			timedOut: result.timedOut,
-			durationMs: result.durationMs,
-			success,
-			caller: caller(runtime),
-			ts: Date.now(),
-		});
-		const text = processSummary(result, maxOutput);
-		await emit(callback, text, "CREATE_TASK");
-		return ok(text, { result, provider, agentType, agent: { ...record, status: success ? "completed" : "failed" } });
+		const attempts = credentialAttempts({ provider, agentType });
+		const logs: string[] = [];
+		for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+			const attempt = attempts[attemptIndex] ?? attempts[0];
+			const attemptRecord: AgentRecord = { ...record, credentialAttempt: attempt.index };
+			upsertAgent(attemptRecord);
+			const result = await runProcess(built.command, built.args, cwd, timeoutMs, attempt.env);
+			const success = result.exitCode === 0 && !result.timedOut;
+			logs.push(formatProcessLog(attemptRecord, result));
+			if (shouldRetryCredentialFailure(result, attempts, attemptIndex)) {
+				logs.push(`[credential_retry] ${attempt.index}/${attempt.total} failed; rotating Claude key\n`);
+				continue;
+			}
+			writeFileSync(record.logPath, logs.join("\n"));
+			upsertAgent({
+				...attemptRecord,
+				status: success ? "completed" : "failed",
+				exitCode: result.exitCode,
+				signal: result.signal,
+				endedAt: Date.now(),
+			});
+			writeAudit({
+				action: "create_task",
+				agentId: id,
+				provider,
+				agentType,
+				command: result.command,
+				args: result.args,
+				cwd,
+				exitCode: result.exitCode,
+				signal: result.signal,
+				timedOut: result.timedOut,
+				durationMs: result.durationMs,
+				success,
+				caller: caller(runtime),
+				ts: Date.now(),
+			});
+			const text = processSummary(result, maxOutput);
+			await emit(callback, text, "CREATE_TASK");
+			return ok(text, { result, provider, agentType, agent: { ...attemptRecord, status: success ? "completed" : "failed" } });
+		}
+		throw new Error("No credential attempts available.");
 	} catch (error) {
 		const errorText = error instanceof Error ? error.message : String(error);
 		writeErrorLog(record, errorText);
@@ -575,6 +746,7 @@ const sendToAgentHandler: Handler = async (runtime, message, _state, options, ca
 	});
 	const childId = randomUUID();
 	const previewUrl = previewUrlOption(opts) ?? existing.previewUrl;
+	const attempts = credentialAttempts({ provider: existing.provider, agentType: existing.agentType });
 	const record = spawnAgentProcess({
 		id: childId,
 		provider: existing.provider,
@@ -587,7 +759,7 @@ const sendToAgentHandler: Handler = async (runtime, message, _state, options, ca
 		logPath: join(AGENT_STATE_DIR, `${childId}.log`),
 		...(previewUrl ? { previewUrl } : {}),
 		startedAt: Date.now(),
-	});
+	}, attempts);
 	upsertAgent(record);
 	writeAudit({
 		action: "send_to_agent",

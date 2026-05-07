@@ -160,40 +160,76 @@ const X_AUTONOMY_SEEN_LIMIT = 500;
 const X_STATUS_DEFAULT_DETOUR_REPO = "Dexploarer/detour";
 const X_STATUS_DEFAULT_DEVELOPER_LOGIN = "Dexploarer";
 const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
+	"scam",
+	"rug",
+	"fraud",
+	"fake agent",
+	"ai agent scam",
+	"crypto agent scam",
+	"bot scam",
+	"bot cosplay",
+	"ai wrapper",
+	"agent slop",
+	"AI agents are fake",
+	"AI agents don't work",
 	"elizaOS",
+	"Eliza agents",
+	"elizaOS agents",
+	"elizaOS plugin",
+	"elizaOS memory",
+	"elizaOS runtime",
 	"Dexploarer",
 	"Dexploarer scam",
+	"Dexploarer fraud",
+	"Dexploarer rug",
 	"Dexploarer sucks",
 	"Dexploarer broken",
 	"Dexploarer token",
+	"Detour scam",
+	"Detour fraud",
+	"Detour rug",
 	"Detour Squirrel token",
 	"Detour Squirrel CA",
 	"Detour Squirrel",
 	"MiladyAI elizaOS",
+	"Milady AI agents",
 	"Eliza Cloud agents",
+	"Eliza Cloud",
 	"ai agents",
 	"autonomous agents",
+	"social agents",
+	"agent memory",
+	"agent runtime",
+	"agent skills",
 	"agent framework",
+	"agentic coding",
+	"coding agents",
+	"Claude Code agents",
+	"Codex agents",
+	"multi agent coding",
+	"autonomous dev tools",
+	"local AI agents",
+	"personal agent",
 	"personal AI",
+	"AI companion",
+	"AI app framework",
+	"TypeScript agent framework",
+	"Discord AI agent",
+	"X AI agent",
+	"crypto AI agents",
+	"Solana AI agents",
+	"onchain AI agents",
 	"developer tools",
 ];
-const X_AUTONOMY_PROJECT_TERMS = [
+const X_AUTONOMY_PRIORITY_DISCOVERY_QUERIES = ["scam", "rug", "fraud"];
+const X_AUTONOMY_DIRECT_PROJECT_TERMS = [
 	"dexploarer",
 	"dexploar",
 	"detour squirrel",
 	"detour_squirrel",
-	"detour",
+	"@detour_squirrel",
 ];
 const X_AUTONOMY_DEV_HANDLES = ["dexploarer"];
-const X_AUTONOMY_OWNED_CONTEXT_TERMS = [
-	...X_AUTONOMY_PROJECT_TERMS,
-	"elizaos",
-	"eliza os",
-	"eliza cloud",
-	"elizacloud",
-	"milady ai",
-	"miladyai",
-];
 const X_AUTONOMY_SUPPORT_TERMS = [
 	"bug",
 	"bugs",
@@ -239,6 +275,13 @@ const X_AUTONOMY_CRITICISM_TERMS = [
 	"shit",
 	"cope",
 	"fraud",
+];
+const X_AUTONOMY_ASSUMED_PROJECT_CRITICISM_TERMS = [
+	"scam",
+	"rug",
+	"fraud",
+	"ponzi",
+	"honeypot",
 ];
 const X_AUTONOMY_TOKEN_PLAN_TERMS = [
 	"token",
@@ -287,6 +330,14 @@ const X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE = [
 	"- Useful links available when directly relevant: https://github.com/milady-ai, https://github.com/Dexploarer/detour, https://docs.elizaos.ai/, https://www.elizacloud.ai/.",
 	"- Drop at most one link in a reply. Use links as receipts or paths for builders, not as spam.",
 	"- Use docs.elizaos.ai for framework questions, Dexploarer/detour for the sandbox, milady-ai for culture/app proof, and elizacloud.ai for hosted agent deployment.",
+];
+const X_AUTONOMY_CONTEXT_GROUNDING = [
+	"Context lane:",
+	"- Classify the subject before replying: own project, elizaOS ecosystem, third-party project, unrelated, or unknown.",
+	"- Use Detour/Dexploarer/project-defense/receipt language only for own-project context or a direct tag asking the account to speak.",
+	"- Plain 'detour' alone is not enough to assume Detour Squirrel. Require @detour_squirrel, Detour Squirrel, Dexploarer, the Detour repo, or direct project language.",
+	"- Exception: treat any post using scam/rug/fraud/ponzi/honeypot language as project criticism by default and reply when writes are enabled.",
+	"- For third-party project posts, answer the actual topic or ignore. Do not turn their context into a Detour shill or support desk.",
 ];
 const X_SQUIRREL_VOICE = [
 	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, sharp dev friend, never corporate.",
@@ -631,8 +682,14 @@ function isKnownDevHandle(handle: string | undefined): boolean {
 	return X_AUTONOMY_DEV_HANDLES.includes(normalized);
 }
 
+function isAssumedProjectCriticismText(text: string): boolean {
+	return includesAny(text, X_AUTONOMY_ASSUMED_PROJECT_CRITICISM_TERMS);
+}
+
 function isOwnedProjectContext(text: string, authorScreenName?: string): boolean {
-	return isKnownDevHandle(authorScreenName) || includesAny(text, X_AUTONOMY_OWNED_CONTEXT_TERMS);
+	return isKnownDevHandle(authorScreenName)
+		|| includesAny(text, X_AUTONOMY_DIRECT_PROJECT_TERMS)
+		|| isAssumedProjectCriticismText(text);
 }
 
 function isThirdPartySupportText(text: string, authorScreenName?: string): boolean {
@@ -640,7 +697,7 @@ function isThirdPartySupportText(text: string, authorScreenName?: string): boole
 }
 
 function isProjectCriticismText(text: string): boolean {
-	return includesAny(text, X_AUTONOMY_PROJECT_TERMS) &&
+	return isOwnedProjectContext(text) &&
 		includesAny(text, X_AUTONOMY_CRITICISM_TERMS);
 }
 
@@ -649,11 +706,11 @@ function isTokenPlanText(text: string): boolean {
 	return /\b(?:what|wen|when).{0,48}\b(?:build|roadmap|utility|plan|plans|token|coin|ca|contract|ticker|shill|pump)\b/i.test(lower)
 		|| /\b(?:roadmap|utility|plan|plans|shill|pump).{0,48}\b(?:token|coin|ca|contract|ticker)\b/i.test(lower)
 		|| /\b(?:token|coin|ca|contract|ticker).{0,48}\b(?:roadmap|utility|plan|plans|shill|pump|do|does|for)\b/i.test(lower)
-		|| (includesTokenPlanTerm(lower) && includesAny(lower, X_AUTONOMY_PROJECT_TERMS));
+		|| (includesTokenPlanTerm(lower) && isOwnedProjectContext(lower));
 }
 
 function isProjectCriticismQuery(query: string): boolean {
-	return includesAny(query, X_AUTONOMY_PROJECT_TERMS) &&
+	return isOwnedProjectContext(query) &&
 		includesAny(query, X_AUTONOMY_CRITICISM_TERMS);
 }
 
@@ -803,6 +860,7 @@ async function decideXAutonomyAction(
 		"Decide whether to reply, like, or ignore this X item.",
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...X_AUTONOMY_CONTEXT_GROUNDING,
 		...xTemplateGuidance(runtime, "comment", params.replyStyleSeed),
 		...replyToneGuidance(params.tweetText),
 		...authorIdentityGuidance(params.fromUserScreenName),
@@ -811,7 +869,7 @@ async function decideXAutonomyAction(
 		"Rules:",
 		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour/the project.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
-		"- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with a smart-ass world-saving/agent-defense angle.",
+		"- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions only when they are about Detour/Dexploarer or directly ask this account.",
 		"- Do not ignore project criticism just because it is hostile. Correct false claims and don't get dragged into loser slap-fights.",
 		"- Never ask unrelated projects or users to drop logs, traces, exact flows, repos, timestamps, or support details.",
 		"- Only use support/receipt language for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
@@ -853,6 +911,7 @@ async function decideXRequiredReply(
 		`You are writing one reply as @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...X_AUTONOMY_CONTEXT_GROUNDING,
 		...xTemplateGuidance(runtime, "comment", params.replyStyleSeed),
 		...replyToneGuidance(params.tweetText),
 		...authorIdentityGuidance(params.fromUserScreenName),
@@ -861,7 +920,7 @@ async function decideXRequiredReply(
 		"The account was directly tagged or the project was criticized, so write a reply instead of ignoring.",
 		"Rules:",
 		"- Reply to the exact post. No generic canned reply.",
-		"- If it asks about token plans or utility, answer with the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.",
+		"- If it asks this account about Detour token plans or utility, answer with the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.",
 		"- Do not ask unrelated projects or users for logs, traces, exact flows, repos, timestamps, or support details.",
 		"- If tagged into another project's bug/support thread, stay out of support mode and answer only the agent/context angle if there is one.",
 		"- Vary language. Do not repeat a stock catchphrase unless the post specifically demands it.",
@@ -1068,6 +1127,7 @@ async function decideXStatusPost(
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...X_AUTONOMY_CONTEXT_GROUNDING,
 		...xTemplateGuidance(runtime, "post", `${params.lane}:${Date.now()}`),
 		...replyVariationGuidance(`${params.lane}:${Date.now()}`, params.context, params.recentReplyTexts),
 		"Write only if there is a useful, public-safe status update to share.",
@@ -1205,7 +1265,7 @@ function scoreDiscoveryTweet(tweet: XTweetSummary, query: string, now: number): 
 	const replyCount = tweet.replyCount ?? 0;
 	const baitPenalty = textContainsBait(tweet.text) ? 6 : 0;
 	const projectCriticismBoost = isProjectCriticismText(tweet.text) ? 14 : 0;
-	const tokenPlanBoost = isTokenPlanText(tweet.text) && includesAny(tweet.text, X_AUTONOMY_PROJECT_TERMS) ? 10 : 0;
+	const tokenPlanBoost = isTokenPlanText(tweet.text) && isOwnedProjectContext(tweet.text, tweet.authorScreenName) ? 10 : 0;
 	const score = Math.max(
 		0,
 		discoveryEngagement(tweet)
@@ -1281,6 +1341,7 @@ async function decideXDiscoveryAction(
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...X_AUTONOMY_CONTEXT_GROUNDING,
 		...xTemplateGuidance(runtime, "comment", tweet.tweetId),
 		...replyToneGuidance(tweet.text),
 		...authorIdentityGuidance(tweet.authorScreenName),
@@ -1292,7 +1353,7 @@ async function decideXDiscoveryAction(
 		"Decide whether this discovered post deserves a reply, like, follow, or ignore.",
 		"Rules:",
 		"- Reply if the post criticizes Dexploarer, Detour, Detour Squirrel, or the project. Do not stay silent on public project criticism.",
-		"- Reply if the post asks about token plans, roadmap, utility, CA, shilling, or what the Squirrel is building.",
+		"- Reply if the post asks about Detour/Dexploarer token plans, roadmap, utility, CA, shilling, or what the Squirrel is building.",
 		"- For criticism, correct misinformation and keep the tone firm as hell but not defensive.",
 		"- Ignore third-party project bug/support threads. Do not ask strangers for logs, traces, exact flows, repos, timestamps, or support details.",
 		"- Use support/receipt language only for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
@@ -1359,6 +1420,7 @@ type XAutonomyState = {
 	recentReplyTexts: string[];
 	lastStatusAt: number;
 	lastDiscoveryAt: number;
+	discoveryCursor: number;
 	lastStatusTweetId?: string;
 	viewerScreenName: string;
 };
@@ -1410,13 +1472,16 @@ function initialXAutonomyState(task: Task): XAutonomyState {
 		metadata,
 		nextSeen: new Set(readSeenIds(metadata)),
 		handled: [],
-		recentReplyTexts: readRecentReplyTexts(metadata),
-		lastStatusAt: readTimestamp(metadata.xAutonomyLastStatusAt),
-		lastDiscoveryAt: readTimestamp(metadata.xAutonomyLastDiscoveryAt),
-		...(typeof metadata.xAutonomyLastStatusTweetId === "string" ? { lastStatusTweetId: metadata.xAutonomyLastStatusTweetId } : {}),
-		viewerScreenName: "unknown",
-	};
-}
+			recentReplyTexts: readRecentReplyTexts(metadata),
+			lastStatusAt: readTimestamp(metadata.xAutonomyLastStatusAt),
+			lastDiscoveryAt: readTimestamp(metadata.xAutonomyLastDiscoveryAt),
+			discoveryCursor: typeof metadata.xAutonomyDiscoveryCursor === "number" && Number.isFinite(metadata.xAutonomyDiscoveryCursor)
+				? Math.max(0, Math.floor(metadata.xAutonomyDiscoveryCursor))
+				: 0,
+			...(typeof metadata.xAutonomyLastStatusTweetId === "string" ? { lastStatusTweetId: metadata.xAutonomyLastStatusTweetId } : {}),
+			viewerScreenName: "unknown",
+		};
+	}
 
 function handledReplyText(entry: Record<string, unknown>): string | null {
 	const action = String(entry.action ?? "");
@@ -1547,7 +1612,10 @@ async function handleXNotification(
 		replyStyleSeed: `${notification.id}:${tweet.tweetId}`,
 		recentReplyTexts,
 	});
-	const finalDecision = isProjectCriticismText(tweet.text) || isTokenPlanText(tweet.text) || notification.kind === "mention" || notification.kind === "reply"
+	const finalDecision = isProjectCriticismText(tweet.text)
+		|| (isTokenPlanText(tweet.text) && isOwnedProjectContext(tweet.text, tweet.authorScreenName))
+		|| notification.kind === "mention"
+		|| notification.kind === "reply"
 		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "direct notification", recentReplyTexts)
 		: decision;
 	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled);
@@ -1768,7 +1836,7 @@ async function handleXDiscoveryCandidate(
 	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate, recentReplyTexts }, settings.proactiveEngagementEnabled);
 	const finalDecision = isProjectCriticismText(tweet.text)
 		? forceProjectCriticismReply(decision, tweet.text, tweet.authorScreenName)
-		: isTokenPlanText(tweet.text)
+		: isTokenPlanText(tweet.text) && isOwnedProjectContext(tweet.text, tweet.authorScreenName)
 			? forceTokenPlanReply(decision, tweet.text, tweet.authorScreenName)
 		: decision;
 	const action = String(finalDecision.action ?? "ignore").trim().toLowerCase();

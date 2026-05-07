@@ -26,7 +26,7 @@ function detourSquirrelKnowledge(): CharacterInput["knowledge"] {
 		join(import.meta.dir, "..", "knowledge", "detour-squirrel"),
 	].find((candidate) => existsSync(candidate));
 	return directory
-		? [...DETOUR_SQUIRREL_KNOWLEDGE_FACTS, { directory, shared: true }]
+		? [{ directory, shared: true }]
 		: [...DETOUR_SQUIRREL_KNOWLEDGE_FACTS];
 }
 

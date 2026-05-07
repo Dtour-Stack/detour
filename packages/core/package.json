@@ -23,6 +23,7 @@
 		"@elizaos/app-core": "workspace:*",
 		"@elizaos/core": "workspace:*",
 		"@elizaos/plugin-anthropic": "workspace:*",
+		"@elizaos/plugin-agent-skills": "workspace:*",
 		"@elizaos/plugin-discord": "workspace:*",
 		"@elizaos/plugin-github": "workspace:*",
 		"@elizaos/plugin-imessage": "workspace:*",

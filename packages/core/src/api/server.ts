@@ -5,6 +5,7 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	rmSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -31,7 +32,7 @@ import type {
 	WsClientMessage,
 	WsServerMessage,
 } from "@detour/shared";
-import { ModelType, type Memory, type UUID } from "@elizaos/core";
+import { ModelType, type Memory, type Service, type UUID } from "@elizaos/core";
 import type { Server, ServerWebSocket } from "bun";
 import type { ActivityService } from "../activity";
 import { xAutonomyRuntimeSettings } from "../activity/autonomy-service";
@@ -106,10 +107,30 @@ type ApiRequestContext = ApiResponseHelpers & {
 
 type ApiRouteHandler = (ctx: ApiRequestContext) => Promise<Response | null>;
 
+type RuntimeSkillRecord = {
+	slug: string;
+	name: string;
+	description: string;
+	source?: string;
+	sourceDir?: string;
+	path?: string;
+	enabled?: boolean;
+};
+
+type RuntimeSkillsService = Service & {
+	getLoadedSkills(): RuntimeSkillRecord[];
+	getCatalogStats?(): {
+		loaded: number;
+		total: number;
+		storageType: string;
+	};
+};
+
 const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
 const MAX_BROWSER_COMMANDS = 100;
 const WORKSPACE_AGENT_STATE_DIR = join(homedir(), ".detour", "workspace-agents");
 const WORKSPACE_AGENT_STATE_FILE = join(WORKSPACE_AGENT_STATE_DIR, "sessions.json");
+const WORKSPACE_PROJECT_ROOT = join(homedir(), ".detour", "workspace", "projects");
 const MAX_WORKSPACE_AGENT_LOG_CHARS = 200_000;
 const MAX_WORKSPACE_FILE_BYTES = 300_000;
 const MAX_WORKSPACE_PREVIEW_FILE_BYTES = 5 * 1024 * 1024;
@@ -327,6 +348,7 @@ function parseWorkspaceAgent(
 	const exitCode = source.exitCode === null ? null : numberValue(source.exitCode);
 	const signal = stringValue(source.signal);
 	const endedAt = numberValue(source.endedAt);
+	const credentialAttempt = numberValue(source.credentialAttempt);
 	const previewUrl = workspacePreviewUrl(source.previewUrl);
 	const previewPath = previewPathFromLog(logPath);
 	const generatedPreviewUrl = origin && previewPath
@@ -349,6 +371,7 @@ function parseWorkspaceAgent(
 		...(exitCode !== null || source.exitCode === null ? { exitCode } : {}),
 		...(signal !== null ? { signal } : {}),
 		...(endedAt !== null ? { endedAt } : {}),
+		...(credentialAttempt !== null ? { credentialAttempt } : {}),
 	};
 }
 
@@ -359,7 +382,12 @@ function readWorkspaceAgents(origin?: string): WorkspaceAgentRecord[] {
 	return rawAgents
 		.map((agent) => parseWorkspaceAgent(agent, origin))
 		.filter((agent): agent is WorkspaceAgentRecord => agent !== null)
-		.sort((a, b) => b.startedAt - a.startedAt);
+			.sort((a, b) => b.startedAt - a.startedAt);
+}
+
+function writeWorkspaceAgents(agents: WorkspaceAgentRecord[]): void {
+	mkdirSync(WORKSPACE_AGENT_STATE_DIR, { recursive: true });
+	writeFileSync(WORKSPACE_AGENT_STATE_FILE, JSON.stringify({ agents }, null, 2));
 }
 
 function safeWorkspaceAgentLogPath(agent: WorkspaceAgentRecord): string | null {
@@ -369,6 +397,13 @@ function safeWorkspaceAgentLogPath(agent: WorkspaceAgentRecord): string | null {
 
 function workspaceProjectId(cwd: string): string {
 	return Buffer.from(cwd, "utf8").toString("base64url");
+}
+
+function isManagedWorkspaceProjectPath(cwd: string): boolean {
+	const root = resolve(WORKSPACE_PROJECT_ROOT);
+	const target = resolve(cwd);
+	const rel = relative(root, target);
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 function previewContentType(filePath: string): string {
@@ -483,6 +518,25 @@ function resolveWorkspaceProject(
 	origin?: string,
 ): WorkspaceProjectRecord | null {
 	return readWorkspaceProjects(origin).find((project) => project.id === projectId) ?? null;
+}
+
+function deleteWorkspaceProject(projectId: string, origin?: string): { ok: true; projectId: string; cwd: string; deletedAgents: number; deletedProjectDir: boolean } | { ok: false; error: string; status: number } {
+	const project = resolveWorkspaceProject(projectId, origin);
+	if (!project) return { ok: false, error: "workspace project not found", status: 404 };
+	if (project.runningCount > 0) return { ok: false, error: "workspace project has running agents", status: 409 };
+	if (!isManagedWorkspaceProjectPath(project.cwd)) {
+		return { ok: false, error: "only managed workspace projects can be deleted", status: 400 };
+	}
+	const agents = readWorkspaceAgents(origin);
+	const deletedAgents = agents.filter((agent) => agent.cwd === project.cwd);
+	writeWorkspaceAgents(agents.filter((agent) => agent.cwd !== project.cwd));
+	for (const agent of deletedAgents) {
+		const logPath = safeWorkspaceAgentLogPath(agent);
+		if (logPath && existsSync(logPath)) unlinkSync(logPath);
+	}
+	const deletedProjectDir = existsSync(project.cwd);
+	if (deletedProjectDir) rmSync(project.cwd, { recursive: true, force: true });
+	return { ok: true, projectId, cwd: project.cwd, deletedAgents: deletedAgents.length, deletedProjectDir };
 }
 
 function projectSubpath(value: string | null): string {
@@ -2265,15 +2319,27 @@ export class ApiServer {
 					updatedAt: Date.now(),
 				});
 			}
-			if (req.method === "GET" && path === "/api/activity/workspace-projects") {
-				return publicJson({
-					projects: readWorkspaceProjects(url.origin),
-					updatedAt: Date.now(),
-				});
-			}
-			const projectFiles = path.match(
-				/^\/api\/activity\/workspace-projects\/([^/]+)\/files$/,
-			);
+				if (req.method === "GET" && path === "/api/activity/workspace-projects") {
+					return publicJson({
+						projects: readWorkspaceProjects(url.origin),
+						workspaceRoot: WORKSPACE_PROJECT_ROOT,
+						updatedAt: Date.now(),
+					});
+				}
+				const projectDelete = path.match(
+					/^\/api\/activity\/workspace-projects\/([^/]+)$/,
+				);
+				if (req.method === "DELETE" && projectDelete) {
+					const result = deleteWorkspaceProject(
+						decodeURIComponent(projectDelete[1] ?? ""),
+						url.origin,
+					);
+					if (!result.ok) return publicError(result.error, result.status);
+					return publicJson(result);
+				}
+				const projectFiles = path.match(
+					/^\/api\/activity\/workspace-projects\/([^/]+)\/files$/,
+				);
 			if (req.method === "GET" && projectFiles) {
 				const project = resolveWorkspaceProject(
 					decodeURIComponent(projectFiles[1] ?? ""),
@@ -3429,6 +3495,39 @@ export class ApiServer {
 			// --- Activity plugins ---
 			if (req.method === "GET" && path === "/api/activity/plugins") {
 				return json(this.activity.pluginsSnapshot());
+			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, url, path, json, ok, error } = ctx;
+			if (req.method === "GET" && path === "/api/activity/skills") {
+				const runtime = this.runtime.peek();
+				const service = runtime?.getService<RuntimeSkillsService>(
+					"AGENT_SKILLS_SERVICE",
+				);
+				if (!service) {
+					return json({
+						available: false,
+						count: 0,
+						skills: [],
+						stats: null,
+					});
+				}
+				const skills = service.getLoadedSkills().map((skill) => ({
+					slug: skill.slug,
+					name: skill.name,
+					description: skill.description,
+					source: skill.source ?? null,
+					sourceDir: skill.sourceDir ?? null,
+					path: skill.path ?? null,
+					enabled: skill.enabled ?? null,
+				}));
+				return json({
+					available: true,
+					count: skills.length,
+					stats: service.getCatalogStats?.() ?? null,
+					skills,
+				});
 			}
 			return null;
 		},
