@@ -53,7 +53,7 @@ import type {
 } from "@detour/shared";
 
 type Listener = (msg: WsServerMessage) => void;
-type DetourAddressSpace = "local" | "loopback";
+type DetourAddressSpace = "local";
 type DetourFetchInit = RequestInit & { targetAddressSpace?: DetourAddressSpace };
 const LOCAL_API_BASE = "http://127.0.0.1:2138";
 
@@ -81,7 +81,7 @@ function targetAddressSpace(base: string): DetourAddressSpace | null {
 			url.hostname === "localhost" ||
 			url.hostname === "::1"
 		) {
-			return "loopback";
+			return "local";
 		}
 		return null;
 	} catch {
