@@ -169,8 +169,10 @@ function corsHeaders(contentType?: string): HeadersInit {
 	return {
 		"access-control-allow-origin": "*",
 		"access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-		"access-control-allow-headers": "content-type",
+		"access-control-allow-headers":
+			"content-type, access-control-request-private-network, access-control-request-local-network",
 		"access-control-allow-private-network": "true",
+		"access-control-allow-local-network": "true",
 		...(contentType ? { "content-type": contentType } : {}),
 	};
 }

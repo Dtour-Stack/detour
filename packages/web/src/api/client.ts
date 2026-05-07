@@ -53,7 +53,8 @@ import type {
 } from "@detour/shared";
 
 type Listener = (msg: WsServerMessage) => void;
-type DetourFetchInit = RequestInit & { targetAddressSpace?: "local" };
+type DetourAddressSpace = "local" | "loopback";
+type DetourFetchInit = RequestInit & { targetAddressSpace?: DetourAddressSpace };
 const LOCAL_API_BASE = "http://127.0.0.1:2138";
 
 export type DiscordCatchUpResult = {
@@ -70,18 +71,21 @@ export type DiscordCatchUpResult = {
 	}>;
 };
 
-function isLoopbackBase(base: string): boolean {
-	if (!base) return false;
+function targetAddressSpace(base: string): DetourAddressSpace | null {
+	if (!base) return null;
 	try {
 		const url = new URL(base, window.location.href);
-		return (
-			url.protocol === "http:" &&
-			(url.hostname === "127.0.0.1" ||
-				url.hostname === "localhost" ||
-				url.hostname === "::1")
-		);
+		if (url.protocol !== "http:") return null;
+		if (
+			url.hostname === "127.0.0.1" ||
+			url.hostname === "localhost" ||
+			url.hostname === "::1"
+		) {
+			return "loopback";
+		}
+		return null;
 	} catch {
-		return false;
+		return null;
 	}
 }
 
@@ -100,8 +104,9 @@ export class WebClient {
 	constructor(private readonly base = defaultApiBase()) {}
 
 	private fetchInit(init: RequestInit): DetourFetchInit {
-		return isLoopbackBase(this.base)
-			? { ...init, targetAddressSpace: "local" }
+		const addressSpace = targetAddressSpace(this.base);
+		return addressSpace
+			? { ...init, targetAddressSpace: addressSpace }
 			: init;
 	}
 
