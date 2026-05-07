@@ -53,6 +53,7 @@ import type {
 } from "@detour/shared";
 
 type Listener = (msg: WsServerMessage) => void;
+type DetourFetchInit = RequestInit & { targetAddressSpace?: "local" };
 
 export type DiscordCatchUpResult = {
 	channelsScanned: number;
@@ -68,12 +69,33 @@ export type DiscordCatchUpResult = {
 	}>;
 };
 
+function isLoopbackBase(base: string): boolean {
+	if (!base) return false;
+	try {
+		const url = new URL(base, window.location.href);
+		return (
+			url.protocol === "http:" &&
+			(url.hostname === "127.0.0.1" ||
+				url.hostname === "localhost" ||
+				url.hostname === "::1")
+		);
+	} catch {
+		return false;
+	}
+}
+
 export class WebClient {
 	private ws: WebSocket | null = null;
 	private listeners = new Set<Listener>();
 	private outbox: WsClientMessage[] = [];
 
 	constructor(private readonly base = "") {}
+
+	private fetchInit(init: RequestInit): DetourFetchInit {
+		return isLoopbackBase(this.base)
+			? { ...init, targetAddressSpace: "local" }
+			: init;
+	}
 
 	async connect(): Promise<void> {
 		await new Promise<void>((resolve, reject) => {
@@ -370,11 +392,11 @@ export class WebClient {
 		ids?: string[],
 	): Promise<{ blob: Blob; filename: string }> {
 		const path = "/api/activity/trajectories/export.zip";
-		const res = await fetch(`${this.base}${path}`, {
+		const res = await fetch(`${this.base}${path}`, this.fetchInit({
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(ids?.length ? { ids } : {}),
-		});
+		}));
 		if (!res.ok) {
 			const err = await res.text().catch(() => res.statusText);
 			throw new Error(`API POST ${path}: ${err}`);
@@ -900,11 +922,11 @@ export class WebClient {
 		path: string,
 		body?: unknown,
 	): Promise<T> {
-		const res = await fetch(`${this.base}${path}`, {
+		const res = await fetch(`${this.base}${path}`, this.fetchInit({
 			method,
 			headers: body ? { "content-type": "application/json" } : undefined,
 			body: body ? JSON.stringify(body) : undefined,
-		});
+		}));
 		if (!res.ok) {
 			const err = await res.text().catch(() => res.statusText);
 			throw new Error(`API ${method} ${path}: ${err}`);

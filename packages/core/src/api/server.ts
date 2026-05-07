@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
 	ActivityXAutonomyUpdate,
 	BrowserCommand,
@@ -112,9 +112,12 @@ const WORKSPACE_AGENT_STATE_DIR = join(homedir(), ".detour", "workspace-agents")
 const WORKSPACE_AGENT_STATE_FILE = join(WORKSPACE_AGENT_STATE_DIR, "sessions.json");
 const MAX_WORKSPACE_AGENT_LOG_CHARS = 200_000;
 const MAX_WORKSPACE_FILE_BYTES = 300_000;
+const MAX_WORKSPACE_PREVIEW_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_WORKSPACE_DIRECTORY_ENTRIES = 400;
 const PREVIEW_URL_PATTERN =
 	/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s"'<>),\]}]*)?/gi;
+const GENERATED_PREVIEW_PATTERN =
+	/DETOUR_GENERATED_PROJECT_OK\s+([^\s"'<>]+\.html)/i;
 const WORKSPACE_IGNORED_ENTRIES = new Set([
 	".git",
 	".next",
@@ -125,6 +128,13 @@ const WORKSPACE_IGNORED_ENTRIES = new Set([
 	"dist",
 	"node_modules",
 ]);
+const WORKSPACE_PREVIEW_ENTRYPOINTS = [
+	"index.html",
+	"public/index.html",
+	"app/index.html",
+	"src/index.html",
+	"exports/index.html",
+];
 const INBOX_STATUSES = new Set([
 	"pending",
 	"acting",
@@ -133,6 +143,16 @@ const INBOX_STATUSES = new Set([
 	"dismissed",
 ]);
 const MEMORY_TABLES = new Set<string>(KNOWN_MEMORY_TABLES);
+
+function corsHeaders(contentType?: string): HeadersInit {
+	return {
+		"access-control-allow-origin": "*",
+		"access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+		"access-control-allow-headers": "content-type",
+		"access-control-allow-private-network": "true",
+		...(contentType ? { "content-type": contentType } : {}),
+	};
+}
 
 function parseInboxStatus(value: unknown): InboxStatus | null {
 	return typeof value === "string" && INBOX_STATUSES.has(value)
@@ -143,23 +163,14 @@ function parseInboxStatus(value: unknown): InboxStatus | null {
 function publicJson(data: unknown, status = 200): Response {
 	return new Response(JSON.stringify(data), {
 		status,
-		headers: {
-			"access-control-allow-origin": "*",
-			"access-control-allow-methods": "GET, OPTIONS",
-			"access-control-allow-headers": "content-type",
-			"content-type": "application/json",
-		},
+		headers: corsHeaders("application/json"),
 	});
 }
 
 function publicOptions(): Response {
 	return new Response(null, {
 		status: 204,
-		headers: {
-			"access-control-allow-origin": "*",
-			"access-control-allow-methods": "GET, OPTIONS",
-			"access-control-allow-headers": "content-type",
-		},
+		headers: corsHeaders(),
 	});
 }
 
@@ -240,7 +251,50 @@ function previewUrlFromLog(logPath: string): string | null {
 	return null;
 }
 
-function parseWorkspaceAgent(value: unknown): WorkspaceAgentRecord | null {
+function agentMessageTextFromLog(text: string): string {
+	const fragments: string[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		if (!line.startsWith("{")) continue;
+		try {
+			const event = recordValue(JSON.parse(line));
+			const params = recordValue(event?.params);
+			const update = recordValue(params?.update);
+			const content = recordValue(update?.content);
+			const fragment = stringValue(content?.text);
+			if (
+				update?.sessionUpdate === "agent_message_chunk" &&
+				fragment !== null
+			) {
+				fragments.push(fragment);
+			}
+		} catch {
+			continue;
+		}
+	}
+	return fragments.join("");
+}
+
+function previewPathFromLog(logPath: string): string | null {
+	if (!existsSync(logPath)) return null;
+	const text = readFileSync(logPath, "utf8");
+	const match = `${text}\n${agentMessageTextFromLog(text)}`.match(
+		GENERATED_PREVIEW_PATTERN,
+	);
+	return match ? projectSubpath(match[1] ?? "") : null;
+}
+
+function workspaceProjectFilePreviewUrl(
+	origin: string,
+	cwd: string,
+	pathValue: string,
+): string {
+	return `${origin}/api/activity/workspace-projects/${encodeURIComponent(workspaceProjectId(cwd))}/preview/${encodePreviewPath(pathValue)}`;
+}
+
+function parseWorkspaceAgent(
+	value: unknown,
+	origin?: string,
+): WorkspaceAgentRecord | null {
 	const source = recordValue(value);
 	if (!source) return null;
 	const id = stringValue(source.id);
@@ -274,7 +328,11 @@ function parseWorkspaceAgent(value: unknown): WorkspaceAgentRecord | null {
 	const signal = stringValue(source.signal);
 	const endedAt = numberValue(source.endedAt);
 	const previewUrl = workspacePreviewUrl(source.previewUrl);
-	const detectedPreviewUrl = previewUrl ?? previewUrlFromLog(logPath);
+	const previewPath = previewPathFromLog(logPath);
+	const generatedPreviewUrl = origin && previewPath
+		? workspaceProjectFilePreviewUrl(origin, cwd, previewPath)
+		: null;
+	const detectedPreviewUrl = generatedPreviewUrl ?? previewUrl ?? previewUrlFromLog(logPath);
 	return {
 		id,
 		provider,
@@ -294,12 +352,12 @@ function parseWorkspaceAgent(value: unknown): WorkspaceAgentRecord | null {
 	};
 }
 
-function readWorkspaceAgents(): WorkspaceAgentRecord[] {
+function readWorkspaceAgents(origin?: string): WorkspaceAgentRecord[] {
 	if (!existsSync(WORKSPACE_AGENT_STATE_FILE)) return [];
 	const parsed = recordValue(JSON.parse(readFileSync(WORKSPACE_AGENT_STATE_FILE, "utf8")));
 	const rawAgents = Array.isArray(parsed?.agents) ? parsed.agents : [];
 	return rawAgents
-		.map(parseWorkspaceAgent)
+		.map((agent) => parseWorkspaceAgent(agent, origin))
 		.filter((agent): agent is WorkspaceAgentRecord => agent !== null)
 		.sort((a, b) => b.startedAt - a.startedAt);
 }
@@ -313,9 +371,79 @@ function workspaceProjectId(cwd: string): string {
 	return Buffer.from(cwd, "utf8").toString("base64url");
 }
 
-function readWorkspaceProjects(): WorkspaceProjectRecord[] {
+function previewContentType(filePath: string): string {
+	const ext = extname(filePath).toLowerCase();
+	if (ext === ".html" || ext === ".htm") return "text/html; charset=utf-8";
+	if (ext === ".css") return "text/css; charset=utf-8";
+	if (ext === ".js" || ext === ".mjs") return "text/javascript; charset=utf-8";
+	if (ext === ".json") return "application/json; charset=utf-8";
+	if (ext === ".svg") return "image/svg+xml";
+	if (ext === ".png") return "image/png";
+	if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+	if (ext === ".gif") return "image/gif";
+	if (ext === ".webp") return "image/webp";
+	if (ext === ".ico") return "image/x-icon";
+	return "text/plain; charset=utf-8";
+}
+
+function encodePreviewPath(pathValue: string): string {
+	return pathValue.split("/").map(encodeURIComponent).join("/");
+}
+
+function scanPreviewEntrypoint(root: string): string | null {
+	const queue: Array<{ absolute: string; relativePath: string; depth: number }> = [
+		{ absolute: root, relativePath: "", depth: 0 },
+	];
+	let newest: { path: string; updatedAt: number } | null = null;
+	let visited = 0;
+	while (queue.length > 0 && visited < 1_500) {
+		const current = queue.shift();
+		if (!current) break;
+		visited += 1;
+		for (const entry of readdirSync(current.absolute, { withFileTypes: true })) {
+			if (WORKSPACE_IGNORED_ENTRIES.has(entry.name)) continue;
+			const absolute = join(current.absolute, entry.name);
+			const relativePath = current.relativePath
+				? `${current.relativePath}/${entry.name}`
+				: entry.name;
+			if (entry.isFile() && entry.name === "index.html") {
+				const stat = statSync(absolute);
+				if (!newest || stat.mtimeMs > newest.updatedAt) {
+					newest = { path: relativePath, updatedAt: stat.mtimeMs };
+				}
+				continue;
+			}
+			if (entry.isDirectory() && current.depth < 4) {
+				queue.push({ absolute, relativePath, depth: current.depth + 1 });
+			}
+		}
+	}
+	return newest?.path ?? null;
+}
+
+function workspacePreviewPath(cwd: string): string | null {
+	if (!existsSync(cwd)) return null;
+	const root = realpathSync(cwd);
+	for (const candidate of WORKSPACE_PREVIEW_ENTRYPOINTS) {
+		const absolute = resolve(root, candidate);
+		if (existsSync(absolute) && statSync(absolute).isFile()) return candidate;
+	}
+	return scanPreviewEntrypoint(root);
+}
+
+function workspaceProjectPreviewUrl(
+	origin: string | undefined,
+	project: WorkspaceProjectRecord,
+): string | null {
+	if (!origin) return null;
+	const previewPath = workspacePreviewPath(project.cwd);
+	if (!previewPath) return null;
+	return `${origin}/api/activity/workspace-projects/${encodeURIComponent(project.id)}/preview/${encodePreviewPath(previewPath)}`;
+}
+
+function readWorkspaceProjects(origin?: string): WorkspaceProjectRecord[] {
 	const byCwd = new Map<string, WorkspaceProjectRecord>();
-	for (const agent of readWorkspaceAgents()) {
+	for (const agent of readWorkspaceAgents(origin)) {
 		const existing = byCwd.get(agent.cwd);
 		if (!existing) {
 			byCwd.set(agent.cwd, {
@@ -340,11 +468,21 @@ function readWorkspaceProjects(): WorkspaceProjectRecord[] {
 			if (agent.previewUrl) existing.previewUrl = agent.previewUrl;
 		}
 	}
-	return [...byCwd.values()].sort((a, b) => b.latestStartedAt - a.latestStartedAt);
+	const projects = [...byCwd.values()];
+	for (const project of projects) {
+		if (!project.previewUrl) {
+			const previewUrl = workspaceProjectPreviewUrl(origin, project);
+			if (previewUrl) project.previewUrl = previewUrl;
+		}
+	}
+	return projects.sort((a, b) => b.latestStartedAt - a.latestStartedAt);
 }
 
-function resolveWorkspaceProject(projectId: string): WorkspaceProjectRecord | null {
-	return readWorkspaceProjects().find((project) => project.id === projectId) ?? null;
+function resolveWorkspaceProject(
+	projectId: string,
+	origin?: string,
+): WorkspaceProjectRecord | null {
+	return readWorkspaceProjects(origin).find((project) => project.id === projectId) ?? null;
 }
 
 function projectSubpath(value: string | null): string {
@@ -442,6 +580,23 @@ function readWorkspaceProjectFile(
 		updatedAt: stat.mtimeMs,
 		truncated: raw.byteLength > MAX_WORKSPACE_FILE_BYTES,
 	};
+}
+
+function workspaceProjectPreviewResponse(
+	project: WorkspaceProjectRecord,
+	pathValue: string,
+): Response | { error: string; status: number } {
+	const target = safeProjectPath(project, pathValue);
+	if (!target) return { error: "preview file not found", status: 404 };
+	const stat = statSync(target);
+	if (!stat.isFile()) return { error: "preview path is not a file", status: 400 };
+	if (stat.size > MAX_WORKSPACE_PREVIEW_FILE_BYTES) {
+		return { error: "preview file too large", status: 413 };
+	}
+	return new Response(readFileSync(target), {
+		status: 200,
+		headers: corsHeaders(previewContentType(pathValue)),
+	});
 }
 
 function recordValue(body: unknown): Record<string, unknown> | null {
@@ -1402,7 +1557,7 @@ export class ApiServer {
 		const json = (data: unknown, status = 200) =>
 			new Response(JSON.stringify(data), {
 				status,
-				headers: { "content-type": "application/json" },
+				headers: corsHeaders("application/json"),
 			});
 		const ok = () => json({ ok: true });
 		const error = (message: string, status = 400) =>
@@ -2105,14 +2260,14 @@ export class ApiServer {
 			}
 			if (req.method === "GET" && path === "/api/activity/workspace-agents") {
 				return publicJson({
-					agents: readWorkspaceAgents(),
+					agents: readWorkspaceAgents(url.origin),
 					stateDir: WORKSPACE_AGENT_STATE_DIR,
 					updatedAt: Date.now(),
 				});
 			}
 			if (req.method === "GET" && path === "/api/activity/workspace-projects") {
 				return publicJson({
-					projects: readWorkspaceProjects(),
+					projects: readWorkspaceProjects(url.origin),
 					updatedAt: Date.now(),
 				});
 			}
@@ -2120,7 +2275,10 @@ export class ApiServer {
 				/^\/api\/activity\/workspace-projects\/([^/]+)\/files$/,
 			);
 			if (req.method === "GET" && projectFiles) {
-				const project = resolveWorkspaceProject(decodeURIComponent(projectFiles[1] ?? ""));
+				const project = resolveWorkspaceProject(
+					decodeURIComponent(projectFiles[1] ?? ""),
+					url.origin,
+				);
 				if (!project) return publicError("workspace project not found", 404);
 				const result = readWorkspaceProjectFiles(
 					project,
@@ -2133,7 +2291,10 @@ export class ApiServer {
 				/^\/api\/activity\/workspace-projects\/([^/]+)\/file$/,
 			);
 			if (req.method === "GET" && projectFile) {
-				const project = resolveWorkspaceProject(decodeURIComponent(projectFile[1] ?? ""));
+				const project = resolveWorkspaceProject(
+					decodeURIComponent(projectFile[1] ?? ""),
+					url.origin,
+				);
 				if (!project) return publicError("workspace project not found", 404);
 				const result = readWorkspaceProjectFile(
 					project,
@@ -2141,6 +2302,22 @@ export class ApiServer {
 				);
 				if ("error" in result) return publicError(result.error, result.status);
 				return publicJson(result);
+			}
+			const projectPreview = path.match(
+				/^\/api\/activity\/workspace-projects\/([^/]+)\/preview\/(.+)$/,
+			);
+			if (req.method === "GET" && projectPreview) {
+				const project = resolveWorkspaceProject(
+					decodeURIComponent(projectPreview[1] ?? ""),
+					url.origin,
+				);
+				if (!project) return publicError("workspace project not found", 404);
+				const result = workspaceProjectPreviewResponse(
+					project,
+					projectSubpath(decodeURIComponent(projectPreview[2] ?? "")),
+				);
+				if ("error" in result) return publicError(result.error, result.status);
+				return result;
 			}
 			const logMatch = path.match(
 				/^\/api\/activity\/workspace-agents\/([^/]+)\/log$/,
@@ -3522,6 +3699,8 @@ export class ApiServer {
 	): Promise<Response | undefined> {
 		const url = new URL(req.url);
 		const path = url.pathname;
+
+		if (req.method === "OPTIONS") return publicOptions();
 
 		if (path === "/ws") {
 			const id = crypto.randomUUID();

@@ -38,7 +38,11 @@ import {
 	vaultToolsPlugin,
 } from "@detour/plugin-vault-tools";
 import { cronToolsPlugin } from "@detour/plugin-cron-tools";
-import { workspaceToolsPlugin } from "@detour/plugin-workspace-tools";
+import {
+	createTaskAction,
+	spawnAgentAction,
+	workspaceToolsPlugin,
+} from "@detour/plugin-workspace-tools";
 import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
@@ -121,6 +125,8 @@ type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
 	| { kind: "reply"; text: string };
 
+type WorkspaceSlashAgent = "codex" | "claude";
+
 function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 	const trimmed = text.trim();
 	if (!trimmed.startsWith("/")) return null;
@@ -155,6 +161,15 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 			return { kind: "action", action: codexPetAction, options: {} };
 		case "/hatch":
 			return { kind: "action", action: codexHatchAction, options: {} };
+		case "/codex":
+		case "/task":
+			return slashWorkspaceAgent(tail, "codex", false);
+		case "/claude":
+			return slashWorkspaceAgent(tail, "claude", false);
+		case "/spawn-codex":
+			return slashWorkspaceAgent(tail, "codex", true);
+		case "/spawn-claude":
+			return slashWorkspaceAgent(tail, "claude", true);
 		default:
 			return null;
 	}
@@ -174,7 +189,48 @@ function slashHelp(): NativeSlashDispatch {
 			"/1password <identifier> [url]",
 			"/pet [name]",
 			"/hatch <concept>",
+			"/codex [cwd=/path] <task>",
+			"/claude [cwd=/path] <task>",
+			"/spawn-codex [cwd=/path] <task>",
+			"/spawn-claude [cwd=/path] <task>",
 		].join("\n"),
+	};
+}
+
+function slashWorkspaceAgent(
+	tail: string,
+	agentType: WorkspaceSlashAgent,
+	background: boolean,
+): NativeSlashDispatch {
+	const parsed = parseWorkspaceTaskTail(tail);
+	if (!parsed.task) {
+		return {
+			kind: "reply",
+			text: `Usage: /${background ? `spawn-${agentType}` : agentType} [cwd=/path] <task>`,
+		};
+	}
+	return {
+		kind: "action",
+		action: background ? spawnAgentAction : createTaskAction,
+		options: {
+			task: parsed.task,
+			provider: "acpx",
+			agentType,
+			approvalPreset: "autonomous",
+			timeoutMs: "900000",
+			...(parsed.cwd ? { workdir: parsed.cwd } : {}),
+		},
+	};
+}
+
+function parseWorkspaceTaskTail(tail: string): { cwd?: string; task: string } {
+	const parts = tail.trim().split(/\s+/).filter(Boolean);
+	const cwdPart = parts.find((part) => part.startsWith("cwd="));
+	const cwd = cwdPart?.slice("cwd=".length);
+	const task = parts.filter((part) => part !== cwdPart).join(" ").trim();
+	return {
+		...(cwd ? { cwd } : {}),
+		task,
 	};
 }
 

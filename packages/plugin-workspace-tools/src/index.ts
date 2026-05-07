@@ -19,17 +19,6 @@ import type {
 	Plugin,
 } from "@elizaos/core";
 
-type ShellRun = {
-	command: string;
-	cwd: string;
-	exitCode: number | null;
-	signal: NodeJS.Signals | null;
-	stdout: string;
-	stderr: string;
-	durationMs: number;
-	timedOut: boolean;
-};
-
 type ProcessRun = {
 	command: string;
 	args: string[];
@@ -81,7 +70,6 @@ type AuditEvent = {
 	ts: number;
 };
 
-const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT = 20_000;
 const WORKSPACE_AUDIT_FILE = `${homedir()}/.eliza/audit/agent-workspace-actions.jsonl`;
 const AGENT_STATE_DIR = `${homedir()}/.detour/workspace-agents`;
@@ -155,11 +143,6 @@ function truncateMiddle(text: string, maxLength: number): string {
 	const head = Math.floor(maxLength * 0.65);
 	const tail = Math.max(0, maxLength - head - 80);
 	return `${text.slice(0, head)}\n\n[output truncated: ${text.length - maxLength} chars omitted]\n\n${text.slice(text.length - tail)}`;
-}
-
-function shellCommand(): { command: string; args: string[] } {
-	if (process.platform === "win32") return { command: "cmd.exe", args: ["/d", "/s", "/c"] };
-	return { command: "/bin/zsh", args: ["-lc"] };
 }
 
 function executablePath(command: string): string | null {
@@ -288,63 +271,11 @@ function runProcess(command: string, args: string[], cwd: string, timeoutMs: num
 	});
 }
 
-function runShell(commandText: string, cwd: string, timeoutMs: number): Promise<ShellRun> {
-	const shell = shellCommand();
-	const started = Date.now();
-	const child = spawn(shell.command, [...shell.args, commandText], {
-		cwd,
-		env: process.env,
-		stdio: ["ignore", "pipe", "pipe"],
-		shell: false,
-	});
-	const stdout: Buffer[] = [];
-	const stderr: Buffer[] = [];
-	let timedOut = false;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		child.kill("SIGTERM");
-	}, timeoutMs);
-	return new Promise<ShellRun>((resolveRun, rejectRun) => {
-		child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-		child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-		child.on("error", (error) => {
-			clearTimeout(timer);
-			rejectRun(error);
-		});
-		child.on("close", (exitCode, signal) => {
-			clearTimeout(timer);
-			resolveRun({
-				command: commandText,
-				cwd,
-				exitCode,
-				signal,
-				stdout: Buffer.concat(stdout).toString("utf8"),
-				stderr: Buffer.concat(stderr).toString("utf8"),
-				durationMs: Date.now() - started,
-				timedOut,
-			});
-		});
-	});
-}
-
 function processSummary(result: ProcessRun, maxOutput: number): string {
 	const stdout = truncateMiddle(result.stdout.trim(), maxOutput);
 	const stderr = truncateMiddle(result.stderr.trim(), maxOutput);
 	return [
 		`Command: ${result.command} ${result.args.join(" ")}`,
-		`CWD: ${result.cwd}`,
-		`Exit: ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}`,
-		`Duration: ${result.durationMs}ms`,
-		stdout ? `STDOUT:\n${stdout}` : "",
-		stderr ? `STDERR:\n${stderr}` : "",
-	].filter((line) => line.length > 0).join("\n");
-}
-
-function shellSummary(result: ShellRun, maxOutput: number): string {
-	const stdout = truncateMiddle(result.stdout.trim(), maxOutput);
-	const stderr = truncateMiddle(result.stderr.trim(), maxOutput);
-	return [
-		`Command: ${result.command}`,
 		`CWD: ${result.cwd}`,
 		`Exit: ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}`,
 		`Duration: ${result.durationMs}ms`,
@@ -485,47 +416,6 @@ function writeErrorLog(record: AgentRecord, errorText: string): void {
 		`$ ${record.command} ${record.args.join(" ")}\n[error]\n${errorText}\n`,
 	);
 }
-
-const shellHandler: Handler = async (runtime, _message, _state, options, callback) => {
-	const opts = options as Record<string, unknown> | undefined;
-	const command = stringOption(opts, ["command", "cmd", "shell"]);
-	if (!command) return fail("WORKSPACE_SHELL requires `command`.");
-	const cwd = resolveCwd(stringOption(opts, ["cwd", "directory", "dir"]));
-	const timeoutMs = Math.max(1_000, Math.min(30 * 60_000, numberOption(opts, ["timeoutMs", "timeout_ms", "timeout"], DEFAULT_TIMEOUT_MS)));
-	const maxOutput = Math.max(1_000, Math.min(200_000, numberOption(opts, ["maxOutput", "max_output", "maxOutputChars"], DEFAULT_MAX_OUTPUT)));
-	try {
-		const result = await runShell(command, cwd, timeoutMs);
-		const success = result.exitCode === 0 && !result.timedOut;
-		writeAudit({
-			action: "workspace_shell",
-			command,
-			cwd,
-			exitCode: result.exitCode,
-			signal: result.signal,
-			timedOut: result.timedOut,
-			durationMs: result.durationMs,
-			success,
-			caller: caller(runtime),
-			ts: Date.now(),
-		});
-		const text = shellSummary(result, maxOutput);
-		await emit(callback, text, "WORKSPACE_SHELL");
-		return ok(text, { result });
-	} catch (error) {
-		const errorText = error instanceof Error ? error.message : String(error);
-		writeAudit({
-			action: "workspace_shell",
-			command,
-			cwd,
-			success: false,
-			error: errorText,
-			caller: caller(runtime),
-			ts: Date.now(),
-		});
-		await emit(callback, `WORKSPACE_SHELL failed: ${errorText}`, "WORKSPACE_SHELL");
-		return fail(`WORKSPACE_SHELL failed: ${errorText}`);
-	}
-};
 
 const spawnAgentHandler: Handler = async (runtime, message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
@@ -739,22 +629,6 @@ const stopAgentHandler: Handler = async (runtime, _message, _state, options, cal
 	return ok(text, { agent: updated });
 };
 
-export const workspaceShellAction: Action = {
-	name: "WORKSPACE_SHELL",
-	similes: ["RUN_TERMINAL", "RUN_SHELL", "EXECUTE_COMMAND", "RUN_COMMAND", "TERMINAL"],
-	description:
-		"Run a real shell command in a workspace directory. Use this for repository work, code generation, tests, git status, commits, pushes, project scaffolding, trajectory export jobs, and website publishing tasks.",
-	validate: async () => true,
-	handler: shellHandler,
-	examples: [],
-	parameters: [
-		{ name: "command", description: "Shell command to run.", required: true, schema: { type: "string" as const } },
-		{ name: "cwd", description: "Working directory. Relative paths resolve from DETOUR_WORKSPACE_ROOT.", required: false, schema: { type: "string" as const } },
-		{ name: "timeoutMs", description: "Timeout in milliseconds. Defaults to 120000.", required: false, schema: { type: "number" as const } },
-		{ name: "maxOutput", description: "Maximum stdout/stderr characters returned to the model.", required: false, schema: { type: "number" as const } },
-	],
-};
-
 export const spawnAgentAction: Action = {
 	name: "SPAWN_AGENT",
 	similes: ["SPAWN_CODING_AGENT", "START_CODING_AGENT", "LAUNCH_CODING_AGENT", "SPAWN_SUB_AGENT", "START_TASK_AGENT"],
@@ -834,9 +708,8 @@ export const cancelTaskAction: Action = {
 export const workspaceToolsPlugin: Plugin = {
 	name: "workspace-tools",
 	description:
-		"Agent-side workspace execution tools for real terminal use, code generation, tests, git, project scaffolding, subagents, ACPX, and publishing workflows.",
+		"Agent-side workspace orchestration tools for controlling Codex and Claude subagents on code generation, tests, git, project scaffolding, ACPX, and publishing workflows.",
 	actions: [
-		workspaceShellAction,
 		spawnAgentAction,
 		sendToAgentAction,
 		listAgentsAction,

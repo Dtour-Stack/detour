@@ -346,6 +346,7 @@ function AgentPreview({ previewUrl }: { previewUrl?: string }) {
 			className="agents-preview-frame"
 			src={previewUrl}
 			title="Project preview"
+			allow="local-network-access"
 			sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-same-origin allow-scripts"
 		/>
 	);
@@ -560,6 +561,8 @@ function AgentLogTerminal({
 				rows={28}
 				autoResize
 				cursorBlink={false}
+				onData={() => {}}
+				aria-readonly="true"
 				theme="default"
 			/>
 		</div>
