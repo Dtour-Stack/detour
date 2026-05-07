@@ -15,7 +15,7 @@ import "./index.css";
 //   #channels → connected messaging surfaces (Discord/Telegram/iMessage)
 //   #browser  → isolated multi-tab agent browser
 //   default   → chat popup (App)
-const hash = typeof window !== "undefined" ? window.location.hash : "";
+const hash = typeof window !== "undefined" ? window.location.hash.split("?")[0] : "";
 const root =
 	hash === "#pensieve" ? <PensieveView /> :
 	hash === "#activity" ? <ActivityView /> :
