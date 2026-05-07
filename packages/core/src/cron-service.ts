@@ -209,6 +209,8 @@ export class CronService {
 				try {
 					const taskId = await this.createElizaTask(job);
 					job.taskId = taskId;
+					const parsed = this.parsed(job);
+					if (parsed) job.nextRunAt = this.computeNextRun(parsed, Date.now());
 				} catch (err) {
 					logger.warn({ src: "cron", jobId: job.id, err: err instanceof Error ? err.message : err }, "create eliza task failed");
 				}
