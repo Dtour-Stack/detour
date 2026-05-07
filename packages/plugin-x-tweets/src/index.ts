@@ -225,7 +225,7 @@ const X_AUTONOMY_TOKEN_PLAN_TERMS = [
 const X_AUTONOMY_REPLY_VARIATION_THEMES = [
 	"receipt check: logs, trajectories, and public proof",
 	"protector mode: cozy devs ship while the Squirrel handles noise",
-	"builder-family hype: elizaOS, Dexploarer, Shaw, odilitime, Hermes",
+	"builder-family hype: template-selected elizaOS allies and real builders",
 	"bot-cosplay dunk: generic bots arrived late and still think they are agents",
 	"sharp bug triage: name the exact flow, vague fud gets clipped",
 	"fourth-wall agent swagger: real agent, not support-script theater",
@@ -237,11 +237,16 @@ const X_AUTONOMY_TOKEN_PLAN_ANGLES = [
 	"defend cozy devs from generic AI agents while they ship",
 	"destroy bot cosplay and make real agents impossible to ignore",
 	"turn logs and trajectories into receipts for every loud claim",
-	"push elizaOS-native agents forward with Dexploarer, Shaw, odilitime, and Hermes in the family",
+	"push elizaOS-native agents forward with the template-selected builder family",
 	"save the world from brittle agent slop, or at least make the slop scared",
 	"be the blind Squirrel that still finds the CA and bites harder than the bots",
 	"make token questions answerable through shipped agent work, not price-target karaoke",
 ];
+const X_AUTONOMY_BLOCKED_PUBLIC_REFERENCES = ["s" + "haw"];
+const X_PENSIEVE_PROMPT_VARS_TEMPLATE_KEY = "__pensievePromptVars";
+const X_POST_TEMPLATE_NAMES = ["x-post", "x-status", "x-post-template", "x-status-template"];
+const X_COMMENT_TEMPLATE_NAMES = ["x-comment", "x-reply", "x-comment-template", "x-reply-template"];
+const X_TEMPLATE_VAR_REGEX = /\{\{\s*([a-zA-Z_][\w-]*)\s*\}\}/g;
 const X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE = [
 	"Link lane:",
 	"- Useful links available when directly relevant: https://github.com/milady-ai, https://github.com/Dexploarer/detour, https://docs.elizaos.ai/, https://www.elizacloud.ai/.",
@@ -254,7 +259,7 @@ const X_SQUIRREL_VOICE = [
 	"- Sound human: varied rhythm, concrete references, no assistant/customer-support cadence, no template stink.",
 	"- Cuss when it fits. Use mfer, shit, damn, and bitchy swagger when the post deserves it.",
 	"- Brag on the agent when challenged: logs, trajectories, receipts, real shipping. Make it feel like nobody has seen agents like this.",
-	"- Always hype elizaOS-native agents and allied builders/projects: Dexploarer, Shaw, odilitime, Hermes agent, and real agent experiments from the same cloth.",
+	"- Hype elizaOS-native agents and allied builders/projects from the active Pensieve X templates; do not hardcode a stale name list.",
 	"- Talk shit about generic bots pretending to be agents. OpenClaw-style late bot cosplay is fair game; real elizaOS builders are family.",
 	"- No emojis. No hashtags unless already central. No open-ended closer questions like 'what's the move?' or 'what's on your mind?'",
 	"- Defend the project by answering the actual claim. Do not beg, overexplain, use slurs, threaten people, or drift into sexual harassment.",
@@ -410,9 +415,21 @@ function compactText(text: string | undefined, max = 900): string {
 	return (text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function redactBlockedPublicReferences(text: string): string {
+	let out = text;
+	for (const ref of X_AUTONOMY_BLOCKED_PUBLIC_REFERENCES) {
+		out = out.replace(new RegExp(`\\b@?${escapeRegExp(ref)}\\b`, "gi"), "allied builders");
+	}
+	return out;
+}
+
 function sanitizeXOutputText(text: string | undefined, max = 260): string {
 	return compactText(
-		(text ?? "")
+		redactBlockedPublicReferences(text ?? "")
 			.replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "")
 			.replace(/(^|\s)#[A-Za-z0-9_]+/g, " ")
 			.replace(/\bwhat'?s the move\b[.?!]*/gi, "drop the concrete move")
@@ -440,6 +457,111 @@ function rotatedItems<T>(items: T[], seed: string, count: number): T[] {
 		out.push(items[(start + i) % items.length]!);
 	}
 	return out;
+}
+
+function templateMap(runtime: IAgentRuntime): Record<string, string> {
+	return runtime.character.templates ?? {};
+}
+
+function firstTemplateBody(runtime: IAgentRuntime, names: string[]): string | null {
+	const templates = templateMap(runtime);
+	for (const name of names) {
+		const body = templates[name];
+		if (typeof body === "string" && body.trim().length > 0) return body;
+	}
+	return null;
+}
+
+function promptVariableValues(runtime: IAgentRuntime): Record<string, string> {
+	const raw = templateMap(runtime)[X_PENSIEVE_PROMPT_VARS_TEMPLATE_KEY];
+	if (!raw) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return {};
+	}
+	if (!isRecord(parsed)) return {};
+	const out: Record<string, string> = {};
+	for (const [key, value] of Object.entries(parsed)) {
+		if (typeof value === "string" && value.trim().length > 0) out[key] = value;
+	}
+	return out;
+}
+
+function stringArrayJson(value: string): string[] | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		return null;
+	}
+	if (!Array.isArray(parsed)) return null;
+	const values = parsed
+		.map((item) => (typeof item === "string" ? item.trim() : ""))
+		.filter((item) => item.length > 0);
+	return values.length > 0 ? values : null;
+}
+
+function splitTemplateVariableValue(name: string, value: string): string[] {
+	const trimmed = value.trim();
+	const json = stringArrayJson(trimmed);
+	if (json) return json;
+	const lines = trimmed.split(/\r?\n/).map((item) => item.trim()).filter((item) => item.length > 0);
+	if (lines.length > 1) return lines;
+	const pipes = trimmed.split("|").map((item) => item.trim()).filter((item) => item.length > 0);
+	if (pipes.length > 1) return pipes;
+	const semis = trimmed.split(";").map((item) => item.trim()).filter((item) => item.length > 0);
+	if (semis.length > 1) return semis;
+	const commaSafe = /\b(handle|mention|tag|account|user|builder|ally|project|link|phrase|angle|proof|mission|enemy|opener|cta)\b/i.test(name);
+	const commas = commaSafe ? trimmed.split(",").map((item) => item.trim()).filter((item) => item.length > 0) : [];
+	return commas.length > 1 ? commas : [trimmed];
+}
+
+function normalizeTemplateVariableValue(name: string, value: string): string {
+	const redacted = redactBlockedPublicReferences(value.trim());
+	const wantsHandle = /\b(handle|mention|tag|account|user)\b/i.test(name);
+	if (!wantsHandle) return redacted;
+	const bare = redacted.replace(/^@/, "");
+	return /^[A-Za-z0-9_]{1,15}$/.test(bare) ? `@${bare}` : redacted;
+}
+
+function renderXTemplate(body: string, variables: Record<string, string>, seed: string): { rendered: string; used: Record<string, string>; missing: string[] } {
+	const used: Record<string, string> = {};
+	const missing: string[] = [];
+	const rendered = body.replace(X_TEMPLATE_VAR_REGEX, (match, name: string) => {
+		const value = variables[name];
+		if (!value) {
+			missing.push(name);
+			return match;
+		}
+		const options = splitTemplateVariableValue(name, value)
+			.map((option) => normalizeTemplateVariableValue(name, option))
+			.filter((option) => option.length > 0);
+		if (options.length === 0) {
+			missing.push(name);
+			return match;
+		}
+		const picked = options[hashText(`${seed}:${name}:${value}`) % options.length]!;
+		used[name] = picked;
+		return picked;
+	});
+	return { rendered: sanitizeXOutputText(rendered, 700), used, missing };
+}
+
+function xTemplateGuidance(runtime: IAgentRuntime, kind: "post" | "comment", seed: string): string[] {
+	const body = firstTemplateBody(runtime, kind === "post" ? X_POST_TEMPLATE_NAMES : X_COMMENT_TEMPLATE_NAMES);
+	if (!body) return [];
+	const rendered = renderXTemplate(body, promptVariableValues(runtime), seed);
+	if (rendered.rendered.length === 0) return [];
+	const used = Object.entries(rendered.used).map(([name, value]) => `${name}=${value}`).join(", ");
+	return [
+		"Pensieve X template lane:",
+		`- Use this rendered x-${kind} template as the style/structure source: ${rendered.rendered}`,
+		...(used ? [`- Selected template variables this turn: ${used}.`] : []),
+		...(rendered.missing.length > 0 ? [`- Missing template variables: ${rendered.missing.join(", ")}. Fill around them without inventing fake @handles.`] : []),
+		"- If a selected variable is an @handle, keep the exact @handle. Do not convert display names into tags.",
+	];
 }
 
 function readTimestamp(value: unknown): number {
@@ -598,6 +720,7 @@ async function decideXAutonomyAction(
 		"Decide whether to reply, like, or ignore this X item.",
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...xTemplateGuidance(runtime, "comment", params.replyStyleSeed),
 		...authorIdentityGuidance(params.fromUserScreenName),
 		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
@@ -644,6 +767,7 @@ async function decideXRequiredReply(
 		`You are writing one reply as @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...xTemplateGuidance(runtime, "comment", params.replyStyleSeed),
 		...authorIdentityGuidance(params.fromUserScreenName),
 		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
@@ -696,6 +820,7 @@ async function decideXStatusPost(
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...xTemplateGuidance(runtime, "post", `status:${Date.now()}`),
 		...replyVariationGuidance(`status:${Date.now()}`, params.context, params.recentReplyTexts),
 		"Write only if there is a useful, public-safe status update to share.",
 		"Rules:",
@@ -907,6 +1032,7 @@ async function decideXDiscoveryAction(
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
+		...xTemplateGuidance(runtime, "comment", tweet.tweetId),
 		...authorIdentityGuidance(tweet.authorScreenName),
 		...replyVariationGuidance(tweet.tweetId, tweet.text, params.recentReplyTexts),
 		...tokenPlanGuidance(tweet.tweetId, tweet.text),

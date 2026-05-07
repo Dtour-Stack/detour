@@ -17,6 +17,7 @@ export type AuditAction =
 	| "pensieve_list"
 	| "pensieve_search"
 	| "pensieve_link"
+	| "pensieve_template_upsert"
 	| "pensieve_template_render"
 	| "pensieve_var_set";
 

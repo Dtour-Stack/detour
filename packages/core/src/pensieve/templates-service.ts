@@ -21,6 +21,7 @@ import { PensieveMemoryService, type PensieveMemorySummary } from "./memory-serv
 
 const TEMPLATE_TAG = "template";
 const VAR_TAG_PREFIX = "prompt-var";
+const RUNTIME_PROMPT_VARS_TEMPLATE_KEY = "__pensievePromptVars";
 
 const VAR_REGEX = /\{\{\s*([a-zA-Z_][\w-]*)\s*\}\}/g;
 
@@ -258,6 +259,14 @@ export class PensieveTemplatesService {
 			if (!detail) continue;
 			character.templates[t.name] = detail.body;
 			names.push(t.name);
+		}
+		const variables = await this.listVariables();
+		const values: Record<string, string> = {};
+		for (const v of variables) values[v.name] = v.value;
+		if (Object.keys(values).length > 0) {
+			character.templates[RUNTIME_PROMPT_VARS_TEMPLATE_KEY] = JSON.stringify(values);
+		} else {
+			delete character.templates[RUNTIME_PROMPT_VARS_TEMPLATE_KEY];
 		}
 		return { applied: names.length, names };
 	}

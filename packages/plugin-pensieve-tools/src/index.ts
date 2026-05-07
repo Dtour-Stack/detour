@@ -116,6 +116,10 @@ function pickNumber(opts: Record<string, unknown> | undefined, key: string): num
 	return tryAt(paramsBag(opts)) ?? tryAt(opts);
 }
 
+function templateSlug(name: string): string {
+	return name.trim().replace(/[^a-z0-9._-]+/gi, "-").toLowerCase();
+}
+
 async function emit(callback: HandlerCallback | undefined, text: string, actionName: string): Promise<void> {
 	if (!callback) return;
 	try {
@@ -380,6 +384,53 @@ export const pensieveLinkAction: Action = {
 	],
 } as Action;
 
+// ── PENSIEVE_TEMPLATE_UPSERT ───────────────────────────────────────────────
+
+const templateUpsertHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const name = pickString(opts, ["name", "templateName"]);
+	const body = pickString(opts, ["body", "text", "template"]);
+	if (!name || !body) return fail("PENSIEVE_TEMPLATE_UPSERT requires `name` and `body`.");
+	const inputTags = pickStringArray(opts, "tags") ?? [];
+	const tags = Array.from(new Set(["template", ...inputTags]));
+	const slug = templateSlug(name);
+	const { templates } = services(runtime);
+	try {
+		const list = await templates.listTemplates();
+		const existing = list.find((t: PensieveTemplateSummary) => t.name === slug || t.name === name);
+		let summary: PensieveTemplateSummary | null = null;
+		if (existing) {
+			const ok2 = await templates.updateTemplate(existing.id, { body, tags, path: `/templates/${slug}` });
+			summary = ok2 ? await templates.getTemplate(existing.id) : null;
+		} else {
+			summary = await templates.createTemplate({ name: slug, body, tags: inputTags });
+		}
+		audit({ action: "pensieve_template_upsert", target: slug, success: !!summary, caller: caller(runtime), ts: Date.now() });
+		if (!summary) return fail("Template upsert failed.");
+		await emit(callback, `Saved template ${summary.name}.`, "PENSIEVE_TEMPLATE_UPSERT");
+		return ok(`Saved template ${summary.name}.`, { id: summary.id, name: summary.name, variables: summary.variables });
+	} catch (err) {
+		const m = err instanceof Error ? err.message : String(err);
+		audit({ action: "pensieve_template_upsert", target: slug, success: false, error: m, caller: caller(runtime), ts: Date.now() });
+		return fail(`Template upsert failed: ${m}`);
+	}
+};
+
+export const pensieveTemplateUpsertAction: Action = {
+	name: "PENSIEVE_TEMPLATE_UPSERT",
+	similes: ["UPSERT_TEMPLATE", "SAVE_TEMPLATE", "UPDATE_TEMPLATE", "CREATE_TEMPLATE"],
+	description:
+		"Create or update a stored Pensieve template by name. Use this to hone reusable prompts such as `x-post` and `x-comment`.",
+	validate: alwaysValid,
+	handler: templateUpsertHandler,
+	examples: [],
+	parameters: [
+		{ name: "name", description: "Template name slug, e.g. `x-post` or `x-comment`.", required: true, schema: { type: "string" as const } },
+		{ name: "body", description: "Template body with optional {{prompt_var}} placeholders.", required: true, schema: { type: "string" as const } },
+		{ name: "tags", description: "Optional tags to attach.", required: false, schema: { type: "array" as const } },
+	],
+} as Action;
+
 // ── PENSIEVE_TEMPLATE_RENDER ───────────────────────────────────────────────
 
 const renderHandler: Handler = async (runtime, _message, _state, options, callback) => {
@@ -462,7 +513,7 @@ export const pensieveVarSetAction: Action = {
 export const pensieveToolsPlugin: Plugin = {
 	name: "@detour/plugin-pensieve-tools",
 	description:
-		"Lets the agent read/write/search the Pensieve, link entities, render templates, and set prompt variables.",
+		"Lets the agent read/write/search the Pensieve, link entities, create/update/render templates, and set prompt variables.",
 	providers: [pensieveChroniclerProvider],
 	actions: [
 		pensieveWriteAction,
@@ -470,6 +521,7 @@ export const pensieveToolsPlugin: Plugin = {
 		pensieveListAction,
 		pensieveSearchAction,
 		pensieveLinkAction,
+		pensieveTemplateUpsertAction,
 		pensieveTemplateRenderAction,
 		pensieveVarSetAction,
 	],
