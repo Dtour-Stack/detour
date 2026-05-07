@@ -38,6 +38,7 @@ import {
 	vaultToolsPlugin,
 } from "@detour/plugin-vault-tools";
 import { cronToolsPlugin } from "@detour/plugin-cron-tools";
+import { workspaceToolsPlugin } from "@detour/plugin-workspace-tools";
 import { xTweetsPlugin } from "@detour/plugin-x-tweets";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
@@ -834,6 +835,7 @@ export class RuntimeService {
 			dpeFallbackPlugin,
 			xTweetsPlugin,
 			cronToolsPlugin,
+			workspaceToolsPlugin,
 			...(this.ownerBind ? [makeOwnerBindPlugin(this.ownerBind)] : []),
 		];
 	}

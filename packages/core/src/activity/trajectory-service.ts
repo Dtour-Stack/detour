@@ -12,6 +12,7 @@
  */
 
 import type { IAgentRuntime } from "@elizaos/core";
+import { buildZip, type ZipEntry } from "./zip";
 
 const SERVICE_TYPE = "trajectories";
 
@@ -142,6 +143,28 @@ export interface ActivityTrajectoryListOptions {
 	q?: string;
 }
 
+export interface ActivityTrajectoryZipExportOptions {
+	ids?: string[];
+	includePrompts?: boolean;
+}
+
+export interface ActivityTrajectoryZipExport {
+	filename: string;
+	mimeType: "application/zip";
+	data: Uint8Array;
+	count: number;
+}
+
+type RuntimeTrajectoryZipExportOptions = {
+	trajectoryIds?: string[];
+	includePrompts?: boolean;
+};
+
+type RuntimeTrajectoryZipExport = {
+	filename: string;
+	entries: ZipEntry[];
+};
+
 interface TrajectoriesServiceShape {
 	listTrajectories?: (opts: ActivityTrajectoryListOptions) => Promise<{
 		trajectories: ActivityTrajectoryListItem[];
@@ -155,17 +178,26 @@ interface TrajectoriesServiceShape {
 		status?: "active" | "completed" | "error" | "timeout",
 		metrics?: Record<string, unknown>,
 	) => Promise<void>;
+	exportTrajectoriesZip?: (
+		opts?: RuntimeTrajectoryZipExportOptions,
+	) => Promise<RuntimeTrajectoryZipExport>;
 }
 
-function isTrajectoriesService(value: unknown): value is TrajectoriesServiceShape {
+function isTrajectoriesService(
+	value: unknown,
+): value is TrajectoriesServiceShape {
 	if (!value || typeof value !== "object") return false;
 	const svc = value as TrajectoriesServiceShape;
-	return typeof svc.getTrajectoryDetail === "function"
-		|| typeof svc.listTrajectories === "function"
-		|| typeof svc.endTrajectory === "function";
+	return (
+		typeof svc.getTrajectoryDetail === "function" ||
+		typeof svc.listTrajectories === "function" ||
+		typeof svc.endTrajectory === "function"
+	);
 }
 
-function findRealService(runtime: IAgentRuntime): TrajectoriesServiceShape | null {
+function findRealService(
+	runtime: IAgentRuntime,
+): TrajectoriesServiceShape | null {
 	const r = runtime as unknown as {
 		getService?: (t: string) => unknown;
 		getServicesByType?: (t: string) => unknown[];
@@ -202,7 +234,9 @@ const EMPTY_DETAIL: ActivityTrajectoryDetail = {
 };
 
 function asObject(v: unknown): Record<string, unknown> | null {
-	return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+	return v && typeof v === "object" && !Array.isArray(v)
+		? (v as Record<string, unknown>)
+		: null;
 }
 function asArray(v: unknown): unknown[] {
 	return Array.isArray(v) ? v : [];
@@ -251,7 +285,9 @@ const LLM_STRING_FIELDS = [
 
 const LLM_NUMBER_FIELDS = ["temperature", "maxTokens"] as const;
 
-function llmStringFields(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+function llmStringFields(
+	call: Record<string, unknown>,
+): Partial<ActivityLlmCall> {
 	const fields: Partial<ActivityLlmCall> = {};
 	for (const key of LLM_STRING_FIELDS) {
 		const value = asString(call[key]);
@@ -260,7 +296,9 @@ function llmStringFields(call: Record<string, unknown>): Partial<ActivityLlmCall
 	return fields;
 }
 
-function llmNumberFields(call: Record<string, unknown>): Partial<ActivityLlmCall> {
+function llmNumberFields(
+	call: Record<string, unknown>,
+): Partial<ActivityLlmCall> {
 	const fields: Partial<ActivityLlmCall> = {};
 	for (const key of LLM_NUMBER_FIELDS) {
 		const value = asNumber(call[key]);
@@ -273,7 +311,11 @@ function llmTags(call: Record<string, unknown>): Partial<ActivityLlmCall> {
 	return Array.isArray(call.tags) ? { tags: call.tags.map(String) } : {};
 }
 
-function fallbackLlmCallId(call: Record<string, unknown>, stepNumber: number, fallbackIndex: number): string {
+function fallbackLlmCallId(
+	call: Record<string, unknown>,
+	stepNumber: number,
+	fallbackIndex: number,
+): string {
 	const timestamp = asNumber(call.timestamp) ?? 0;
 	const model = (asString(call.model) ?? "unknown").replace(/[^\w.-]+/g, "_");
 	return `${stepNumber}-${fallbackIndex}-${timestamp}-${model}`;
@@ -283,7 +325,12 @@ function normalizeLlmCall(
 	call: Record<string, unknown>,
 	stepNumber: number,
 	fallbackIndex: number,
-): { call: ActivityLlmCall; promptTokens: number; completionTokens: number; latencyMs?: number } {
+): {
+	call: ActivityLlmCall;
+	promptTokens: number;
+	completionTokens: number;
+	latencyMs?: number;
+} {
 	const promptTokens = asNumber(call.promptTokens) ?? 0;
 	const completionTokens = asNumber(call.completionTokens) ?? 0;
 	const latencyMs = asNumber(call.latencyMs);
@@ -292,7 +339,9 @@ function normalizeLlmCall(
 		completionTokens,
 		...(latencyMs !== undefined ? { latencyMs } : {}),
 		call: {
-			callId: asString(call.callId) ?? fallbackLlmCallId(call, stepNumber, fallbackIndex),
+			callId:
+				asString(call.callId) ??
+				fallbackLlmCallId(call, stepNumber, fallbackIndex),
 			stepNumber,
 			timestamp: asNumber(call.timestamp) ?? 0,
 			model: asString(call.model) ?? "?",
@@ -306,7 +355,11 @@ function normalizeLlmCall(
 	};
 }
 
-function collectLlmCalls(step: Record<string, unknown>, stepNumber: number, acc: FlattenAccumulator): ActivityLlmCall[] {
+function collectLlmCalls(
+	step: Record<string, unknown>,
+	stepNumber: number,
+	acc: FlattenAccumulator,
+): ActivityLlmCall[] {
 	const stepCalls: ActivityLlmCall[] = [];
 	for (const callRaw of asArray(step.llmCalls)) {
 		const call = asObject(callRaw);
@@ -314,26 +367,36 @@ function collectLlmCalls(step: Record<string, unknown>, stepNumber: number, acc:
 		const normalized = normalizeLlmCall(call, stepNumber, acc.llmCalls.length);
 		acc.totalPromptTokens += normalized.promptTokens;
 		acc.totalCompletionTokens += normalized.completionTokens;
-		if (normalized.latencyMs !== undefined) acc.totalLatencyMs += normalized.latencyMs;
+		if (normalized.latencyMs !== undefined)
+			acc.totalLatencyMs += normalized.latencyMs;
 		acc.llmCalls.push(normalized.call);
 		stepCalls.push(normalized.call);
 	}
 	return stepCalls;
 }
 
-function normalizeProviderAccess(acc: Record<string, unknown>, stepNumber: number): ActivityProviderAccess {
+function normalizeProviderAccess(
+	acc: Record<string, unknown>,
+	stepNumber: number,
+): ActivityProviderAccess {
 	return {
 		providerId: asString(acc.providerId) ?? "",
 		providerName: asString(acc.providerName) ?? "unknown",
 		stepNumber,
 		timestamp: asNumber(acc.timestamp) ?? 0,
-		...(asString(acc.purpose) !== undefined && { purpose: asString(acc.purpose)! }),
+		...(asString(acc.purpose) !== undefined && {
+			purpose: asString(acc.purpose)!,
+		}),
 		...(acc.query !== undefined && { query: acc.query }),
 		...(acc.data !== undefined && { data: acc.data }),
 	};
 }
 
-function collectProviderAccesses(step: Record<string, unknown>, stepNumber: number, acc: FlattenAccumulator): ActivityProviderAccess[] {
+function collectProviderAccesses(
+	step: Record<string, unknown>,
+	stepNumber: number,
+	acc: FlattenAccumulator,
+): ActivityProviderAccess[] {
 	const stepProviders: ActivityProviderAccess[] = [];
 	for (const accRaw of asArray(step.providerAccesses)) {
 		const provider = asObject(accRaw);
@@ -345,25 +408,58 @@ function collectProviderAccesses(step: Record<string, unknown>, stepNumber: numb
 	return stepProviders;
 }
 
-function normalizeActionAttempt(action: Record<string, unknown>, stepNumber: number): ActivityActionAttempt {
+function normalizeActionAttempt(
+	action: Record<string, unknown>,
+	stepNumber: number,
+): ActivityActionAttempt {
 	return {
 		attemptId: asString(action.attemptId) ?? `${stepNumber}-action`,
 		stepNumber,
 		timestamp: asNumber(action.timestamp) ?? 0,
-		...(asString(action.actionType) !== undefined && { actionType: asString(action.actionType)! }),
-		...(asString(action.actionName) !== undefined && { actionName: asString(action.actionName)! }),
+		...(asString(action.actionType) !== undefined && {
+			actionType: asString(action.actionType)!,
+		}),
+		...(asString(action.actionName) !== undefined && {
+			actionName: asString(action.actionName)!,
+		}),
 		...(action.parameters !== undefined && { parameters: action.parameters }),
-		...(asString(action.reasoning) !== undefined && { reasoning: asString(action.reasoning)! }),
-		...(asBoolean(action.success) !== undefined && { success: asBoolean(action.success)! }),
+		...(asString(action.reasoning) !== undefined && {
+			reasoning: asString(action.reasoning)!,
+		}),
+		...(asBoolean(action.success) !== undefined && {
+			success: asBoolean(action.success)!,
+		}),
 		...(action.result !== undefined && { result: action.result }),
-		...(asString(action.error) !== undefined && { error: asString(action.error)! }),
-		...(asNumber(action.immediateReward) !== undefined && { immediateReward: asNumber(action.immediateReward)! }),
+		...(asString(action.error) !== undefined && {
+			error: asString(action.error)!,
+		}),
+		...(asNumber(action.immediateReward) !== undefined && {
+			immediateReward: asNumber(action.immediateReward)!,
+		}),
 	};
 }
 
-function collectAction(step: Record<string, unknown>, stepNumber: number, acc: FlattenAccumulator): ActivityActionAttempt | null {
+function isPendingActionPlaceholder(action: Record<string, unknown>): boolean {
+	const parameters = asObject(action.parameters);
+	const result = asObject(action.result);
+	return (
+		asString(action.actionType) === "pending" &&
+		asString(action.actionName) === "pending" &&
+		asBoolean(action.success) === false &&
+		(!parameters || Object.keys(parameters).length === 0) &&
+		(!result || Object.keys(result).length === 0) &&
+		asString(action.error) === undefined
+	);
+}
+
+function collectAction(
+	step: Record<string, unknown>,
+	stepNumber: number,
+	acc: FlattenAccumulator,
+): ActivityActionAttempt | null {
 	const actionRaw = asObject(step.action);
 	if (!actionRaw || Object.keys(actionRaw).length === 0) return null;
+	if (isPendingActionPlaceholder(actionRaw)) return null;
 	const action = normalizeActionAttempt(actionRaw, stepNumber);
 	acc.actions.push(action);
 	return action;
@@ -381,16 +477,25 @@ function stepSummary(
 	return {
 		stepNumber,
 		timestamp: asNumber(step.timestamp) ?? 0,
-		...(asString(step.reasoning) !== undefined && { reasoning: asString(step.reasoning)! }),
-		...(asNumber(step.reward) !== undefined && { reward: asNumber(step.reward)! }),
+		...(asString(step.reasoning) !== undefined && {
+			reasoning: asString(step.reasoning)!,
+		}),
+		...(asNumber(step.reward) !== undefined && {
+			reward: asNumber(step.reward)!,
+		}),
 		...(asBoolean(step.done) !== undefined && { done: asBoolean(step.done)! }),
 		llmCallCount: stepCalls.length,
 		providerAccessCount: stepProviders.length,
 		hasAction: !!stepAction,
-		...(stepAction?.actionName !== undefined && { actionName: stepAction.actionName }),
-		...(stepAction?.success !== undefined && { actionSuccess: stepAction.success }),
+		...(stepAction?.actionName !== undefined && {
+			actionName: stepAction.actionName,
+		}),
+		...(stepAction?.success !== undefined && {
+			actionSuccess: stepAction.success,
+		}),
 		...(step.observation !== undefined && { observation: step.observation }),
-		...(stepEnv && Object.keys(stepEnv).length > 0 && { environmentState: stepEnv }),
+		...(stepEnv &&
+			Object.keys(stepEnv).length > 0 && { environmentState: stepEnv }),
 		...(stepMeta && Object.keys(stepMeta).length > 0 && { metadata: stepMeta }),
 	};
 }
@@ -402,49 +507,93 @@ function collectStep(stepRaw: unknown, acc: FlattenAccumulator): void {
 	const stepCalls = collectLlmCalls(step, stepNumber, acc);
 	const stepProviders = collectProviderAccesses(step, stepNumber, acc);
 	const stepAction = collectAction(step, stepNumber, acc);
-	acc.steps.push(stepSummary(step, stepNumber, stepCalls, stepProviders, stepAction));
+	acc.steps.push(
+		stepSummary(step, stepNumber, stepCalls, stepProviders, stepAction),
+	);
 }
 
 function trajectoryStatus(traj: Record<string, unknown>): string | undefined {
 	return asString(asObject(traj.metrics)?.finalStatus);
 }
 
-function trajectorySummary(traj: Record<string, unknown>, acc: FlattenAccumulator, status: string | undefined): ActivityTrajectoryListItem {
+function trajectorySummary(
+	traj: Record<string, unknown>,
+	acc: FlattenAccumulator,
+	status: string | undefined,
+): ActivityTrajectoryListItem {
 	const id = asString(traj.trajectoryId) ?? asString(traj.id) ?? "";
 	return {
 		id,
-		...(asString(traj.source) !== undefined && { source: asString(traj.source)! }),
+		...(asString(traj.source) !== undefined && {
+			source: asString(traj.source)!,
+		}),
 		...(status !== undefined && { status }),
-		...(asNumber(traj.startTime) !== undefined && { startTime: asNumber(traj.startTime)! }),
-		...(asNumber(traj.endTime) !== undefined && { endTime: asNumber(traj.endTime)! }),
-		...(asNumber(traj.durationMs) !== undefined && { durationMs: asNumber(traj.durationMs)! }),
+		...(asNumber(traj.startTime) !== undefined && {
+			startTime: asNumber(traj.startTime)!,
+		}),
+		...(asNumber(traj.endTime) !== undefined && {
+			endTime: asNumber(traj.endTime)!,
+		}),
+		...(asNumber(traj.durationMs) !== undefined && {
+			durationMs: asNumber(traj.durationMs)!,
+		}),
 		llmCallCount: acc.llmCalls.length,
 		totalPromptTokens: acc.totalPromptTokens,
 		totalCompletionTokens: acc.totalCompletionTokens,
 	};
 }
 
-function trajectoryIdentity(traj: Record<string, unknown>, meta: Record<string, unknown> | null, status: string | undefined): ActivityTrajectoryIdentity {
+function trajectoryIdentity(
+	traj: Record<string, unknown>,
+	meta: Record<string, unknown> | null,
+	status: string | undefined,
+): ActivityTrajectoryIdentity {
 	const id = asString(traj.trajectoryId) ?? asString(traj.id) ?? "";
 	return {
 		id,
-		...(asString(traj.agentId) !== undefined && { agentId: asString(traj.agentId)! }),
-		...(asString(meta?.agentName) !== undefined && { agentName: asString(meta?.agentName)! }),
-		...(asString(meta?.agentModel) !== undefined && { agentModel: asString(meta?.agentModel)! }),
-		...(asString(traj.episodeId) !== undefined && { episodeId: asString(traj.episodeId)! }),
-		...(asString(traj.scenarioId) !== undefined && { scenarioId: asString(traj.scenarioId)! }),
-		...(asString(traj.batchId) !== undefined && { batchId: asString(traj.batchId)! }),
-		...(asNumber(traj.groupIndex) !== undefined && { groupIndex: asNumber(traj.groupIndex)! }),
-		...(asString(traj.source) !== undefined && { source: asString(traj.source)! }),
+		...(asString(traj.agentId) !== undefined && {
+			agentId: asString(traj.agentId)!,
+		}),
+		...(asString(meta?.agentName) !== undefined && {
+			agentName: asString(meta?.agentName)!,
+		}),
+		...(asString(meta?.agentModel) !== undefined && {
+			agentModel: asString(meta?.agentModel)!,
+		}),
+		...(asString(traj.episodeId) !== undefined && {
+			episodeId: asString(traj.episodeId)!,
+		}),
+		...(asString(traj.scenarioId) !== undefined && {
+			scenarioId: asString(traj.scenarioId)!,
+		}),
+		...(asString(traj.batchId) !== undefined && {
+			batchId: asString(traj.batchId)!,
+		}),
+		...(asNumber(traj.groupIndex) !== undefined && {
+			groupIndex: asNumber(traj.groupIndex)!,
+		}),
+		...(asString(traj.source) !== undefined && {
+			source: asString(traj.source)!,
+		}),
 		...(status !== undefined && { status }),
-		...(asNumber(traj.startTime) !== undefined && { startTime: asNumber(traj.startTime)! }),
-		...(asNumber(traj.endTime) !== undefined && { endTime: asNumber(traj.endTime)! }),
-		...(asNumber(traj.durationMs) !== undefined && { durationMs: asNumber(traj.durationMs)! }),
-		...(asNumber(traj.totalReward) !== undefined && { totalReward: asNumber(traj.totalReward)! }),
+		...(asNumber(traj.startTime) !== undefined && {
+			startTime: asNumber(traj.startTime)!,
+		}),
+		...(asNumber(traj.endTime) !== undefined && {
+			endTime: asNumber(traj.endTime)!,
+		}),
+		...(asNumber(traj.durationMs) !== undefined && {
+			durationMs: asNumber(traj.durationMs)!,
+		}),
+		...(asNumber(traj.totalReward) !== undefined && {
+			totalReward: asNumber(traj.totalReward)!,
+		}),
 	};
 }
 
-function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail {
+function flattenDetail(
+	traj: Record<string, unknown>,
+): ActivityTrajectoryDetail {
 	const steps = asArray(traj.steps);
 	const acc = flattenAccumulator();
 
@@ -480,13 +629,16 @@ function flattenDetail(traj: Record<string, unknown>): ActivityTrajectoryDetail 
 export class ActivityTrajectoryService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
 
-	async list(opts: ActivityTrajectoryListOptions = {}): Promise<ActivityTrajectoryListResult> {
+	async list(
+		opts: ActivityTrajectoryListOptions = {},
+	): Promise<ActivityTrajectoryListResult> {
 		const runtime = this.resolveRuntime();
 		const limit = opts.limit ?? 50;
 		const offset = opts.offset ?? 0;
 		if (!runtime) return { trajectories: [], total: 0, limit, offset };
 		const svc = findRealService(runtime);
-		if (!svc?.listTrajectories) return { trajectories: [], total: 0, limit, offset };
+		if (!svc?.listTrajectories)
+			return { trajectories: [], total: 0, limit, offset };
 		const result = await svc.listTrajectories(opts);
 		return {
 			trajectories: result.trajectories,
@@ -515,11 +667,14 @@ export class ActivityTrajectoryService {
 	 *
 	 * Returns the number closed. Safe to call repeatedly.
 	 */
-	async sweepStale(olderThanMs = 5 * 60_000): Promise<{ closed: number; checked: number }> {
+	async sweepStale(
+		olderThanMs = 5 * 60_000,
+	): Promise<{ closed: number; checked: number }> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return { closed: 0, checked: 0 };
 		const svc = findRealService(runtime);
-		if (!svc?.listTrajectories || !svc.endTrajectory) return { closed: 0, checked: 0 };
+		if (!svc?.listTrajectories || !svc.endTrajectory)
+			return { closed: 0, checked: 0 };
 		const now = Date.now();
 		const result = await svc.listTrajectories({ status: "active", limit: 500 });
 		let closed = 0;
@@ -540,5 +695,95 @@ export class ActivityTrajectoryService {
 	/** For the bulk-export button — fetches detail for every trajectory in `ids`. */
 	async getMany(ids: string[]): Promise<ActivityTrajectoryDetail[]> {
 		return Promise.all(ids.map((id) => this.get(id)));
+	}
+
+	async exportZip(
+		options: ActivityTrajectoryZipExportOptions = {},
+	): Promise<ActivityTrajectoryZipExport> {
+		const runtime = this.resolveRuntime();
+		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+		if (!runtime) {
+			return {
+				filename: `trajectories-${timestamp}.zip`,
+				mimeType: "application/zip",
+				data: buildZip([
+					{
+						name: "manifest.json",
+						data: JSON.stringify(
+							{ exportedAt: new Date().toISOString(), trajectories: [] },
+							null,
+							2,
+						),
+					},
+				]),
+				count: 0,
+			};
+		}
+		const svc = findRealService(runtime);
+		if (svc?.exportTrajectoriesZip) {
+			const result = await svc.exportTrajectoriesZip({
+				...(options.ids?.length ? { trajectoryIds: options.ids } : {}),
+				...(typeof options.includePrompts === "boolean"
+					? { includePrompts: options.includePrompts }
+					: {}),
+			});
+			return {
+				filename: result.filename,
+				mimeType: "application/zip",
+				data: buildZip(result.entries),
+				count: Math.floor(Math.max(0, result.entries.length - 1) / 2),
+			};
+		}
+		const ids = options.ids?.length
+			? options.ids
+			: (await this.list({ limit: 500 })).trajectories.map(
+					(trajectory) => trajectory.id,
+				);
+		const details = await this.getMany(ids);
+		const entries: ZipEntry[] = [
+			{
+				name: "manifest.json",
+				data: JSON.stringify(
+					{
+						exportedAt: new Date().toISOString(),
+						trajectories: details
+							.map((detail) => detail.trajectory?.id)
+							.filter((id): id is string => typeof id === "string"),
+					},
+					null,
+					2,
+				),
+			},
+		];
+		for (const detail of details) {
+			const id = detail.trajectory?.id;
+			if (!id) continue;
+			entries.push({
+				name: `${id}/trajectory.json`,
+				data: JSON.stringify(detail.raw ?? detail, null, 2),
+			});
+			entries.push({
+				name: `${id}/summary.json`,
+				data: JSON.stringify(
+					{
+						id,
+						source: detail.trajectory?.source,
+						status: detail.trajectory?.status,
+						startTime: detail.trajectory?.startTime,
+						endTime: detail.trajectory?.endTime,
+						durationMs: detail.trajectory?.durationMs,
+						totals: detail.totals,
+					},
+					null,
+					2,
+				),
+			});
+		}
+		return {
+			filename: `trajectories-${timestamp}.zip`,
+			mimeType: "application/zip",
+			data: buildZip(entries),
+			count: details.length,
+		};
 	}
 }

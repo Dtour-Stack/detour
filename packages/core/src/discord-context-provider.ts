@@ -1,17 +1,17 @@
-import {
-	type Entity,
-	type IAgentRuntime,
-	type Memory,
-	type Plugin,
-	type Provider,
-	type ProviderResult,
-	type Relationship,
-	type State,
-	type UUID,
-} from "@elizaos/core";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type {
+	Entity,
+	IAgentRuntime,
+	Memory,
+	Plugin,
+	Provider,
+	ProviderResult,
+	Relationship,
+	State,
+	UUID,
+} from "@elizaos/core";
 import { PensieveMemoryService } from "./pensieve/memory-service";
 
 type GatewayDirection = "in" | "out" | "deleted" | "interaction";
@@ -41,6 +41,8 @@ interface SpeakerSummary {
 
 const MAX_LOG_LINES = 5000;
 const MAX_RECENT_TURNS = 14;
+const MAX_OTHER_ROOM_TURNS = 6;
+const MAX_OTHER_ROOMS = 4;
 const MAX_PEOPLE = 12;
 const MAX_SAMPLE_LEN = 180;
 
@@ -53,7 +55,7 @@ function resolveStateDir(): string {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === "object" && !Array.isArray(value)
-		? value as Record<string, unknown>
+		? (value as Record<string, unknown>)
 		: null;
 }
 
@@ -61,58 +63,82 @@ function isGatewayMessage(value: unknown): value is GatewayMessage {
 	const item = asRecord(value);
 	return Boolean(
 		item &&
-		typeof item.id === "string" &&
-		typeof item.time === "number" &&
-		typeof item.direction === "string" &&
-		typeof item.channel === "string" &&
-		typeof item.source === "string" &&
-		typeof item.roomId === "string" &&
-		typeof item.entityId === "string" &&
-		typeof item.text === "string",
+			typeof item.id === "string" &&
+			typeof item.time === "number" &&
+			typeof item.direction === "string" &&
+			typeof item.channel === "string" &&
+			typeof item.source === "string" &&
+			typeof item.roomId === "string" &&
+			typeof item.entityId === "string" &&
+			typeof item.text === "string",
 	);
 }
 
 function readGatewayMessages(): GatewayMessage[] {
 	const path = join(resolveStateDir(), "gateway", "messages.jsonl");
 	if (!existsSync(path)) return [];
-	const lines = readFileSync(path, "utf8").trim().split("\n").slice(-MAX_LOG_LINES);
+	const lines = readFileSync(path, "utf8")
+		.trim()
+		.split("\n")
+		.slice(-MAX_LOG_LINES);
 	const out: GatewayMessage[] = [];
 	for (const line of lines) {
 		if (!line.trim()) continue;
 		try {
 			const parsed = JSON.parse(line) as unknown;
 			if (isGatewayMessage(parsed)) out.push(parsed);
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return out;
 }
 
 function isDiscordMessage(message: Memory): boolean {
-	const source = typeof message.content?.source === "string" ? message.content.source.toLowerCase() : "";
-	const text = typeof message.content?.text === "string" ? message.content.text : "";
+	const source =
+		typeof message.content?.source === "string"
+			? message.content.source.toLowerCase()
+			: "";
+	const text =
+		typeof message.content?.text === "string" ? message.content.text : "";
 	const metadata = asRecord(message.metadata);
-	return source.includes("discord") ||
+	return (
+		source.includes("discord") ||
 		text.startsWith("[Discord ") ||
 		metadata?.source === "discord" ||
 		metadata?.provider === "discord" ||
-		metadata?.discord !== undefined;
+		metadata?.discord !== undefined
+	);
 }
 
 function compactText(text: string, limit = MAX_SAMPLE_LEN): string {
 	const compact = text.replace(/\s+/g, " ").trim();
-	return compact.length > limit ? `${compact.slice(0, limit - 1).trim()}...` : compact;
+	return compact.length > limit
+		? `${compact.slice(0, limit - 1).trim()}...`
+		: compact;
 }
 
 function stripDiscordPrefix(text: string): string {
 	return text
-		.replace(/^\[Discord [^\]]+\]\s+@.+?\([^)]+\)(?: replying to @[^:]+)?:\s*/s, "")
+		.replace(
+			/^\[Discord [^\]]+\]\s+@.+?\([^)]+\)(?: replying to @[^:]+)?:\s*/s,
+			"",
+		)
 		.trim();
 }
 
+function discordLabel(
+	text: string,
+): { channel: string; server?: string } | null {
+	const match = text.match(/^\[Discord #(.+?)(?:\s+\|\s+([^\]]+))?\]/s);
+	const channel = match?.[1]?.trim();
+	if (!channel) return null;
+	const server = match?.[2]?.trim();
+	return { channel, ...(server ? { server } : {}) };
+}
+
 function internalFailureText(text: string): boolean {
-	return /dynamicPromptExecFromState|discord_generation_failed|reply generation failed|provider path|server_is_overloaded|apiKey=|x-api-key|authorization/i.test(text);
+	return /dynamicPromptExecFromState|discord_generation_failed|reply generation failed|provider path|server_is_overloaded|apiKey=|x-api-key|authorization/i.test(
+		text,
+	);
 }
 
 function publicTurnText(message: GatewayMessage, max = MAX_SAMPLE_LEN): string {
@@ -129,22 +155,34 @@ function nameFromGatewayText(text: string): string | null {
 }
 
 function entityName(entity: Entity | undefined): string | null {
-	const first = entity?.names?.find((name) => typeof name === "string" && name.trim().length > 0);
+	const first = entity?.names?.find(
+		(name) => typeof name === "string" && name.trim().length > 0,
+	);
 	return first?.trim() || null;
 }
 
 function relationshipIsDiscord(rel: Relationship): boolean {
 	const metadata = asRecord(rel.metadata);
-	return rel.tags?.includes("discord") === true ||
+	return (
+		rel.tags?.includes("discord") === true ||
 		rel.tags?.includes("discord-user") === true ||
-		metadata?.channel === "discord";
+		metadata?.channel === "discord"
+	);
 }
 
-async function discordEntityNames(runtime: IAgentRuntime): Promise<Map<string, string>> {
-	if (typeof runtime.getRelationships !== "function" || typeof runtime.getEntitiesByIds !== "function") {
+async function discordEntityNames(
+	runtime: IAgentRuntime,
+): Promise<Map<string, string>> {
+	if (
+		typeof runtime.getRelationships !== "function" ||
+		typeof runtime.getEntitiesByIds !== "function"
+	) {
 		return new Map();
 	}
-	const rels = await runtime.getRelationships({ entityIds: [runtime.agentId], limit: 500 });
+	const rels = await runtime.getRelationships({
+		entityIds: [runtime.agentId],
+		limit: 500,
+	});
 	const ids = new Set<string>();
 	for (const rel of rels) {
 		if (!relationshipIsDiscord(rel)) continue;
@@ -154,15 +192,26 @@ async function discordEntityNames(runtime: IAgentRuntime): Promise<Map<string, s
 	}
 	if (ids.size === 0) return new Map();
 	const entities = await runtime.getEntitiesByIds([...ids] as UUID[]);
-	return new Map(entities.map((entity) => [String(entity.id), entityName(entity) ?? String(entity.id)]));
+	return new Map(
+		entities.map((entity) => [
+			String(entity.id),
+			entityName(entity) ?? String(entity.id),
+		]),
+	);
 }
 
-function speakerName(message: GatewayMessage, names: Map<string, string>, agentId: UUID): string {
+function speakerName(
+	message: GatewayMessage,
+	names: Map<string, string>,
+	agentId: UUID,
+): string {
 	if (message.entityId === String(agentId)) return "Detour Squirrel";
-	return names.get(message.entityId) ??
+	return (
+		names.get(message.entityId) ??
 		nameFromGatewayText(message.text) ??
 		message.externalHandle ??
-		message.entityId;
+		message.entityId
+	);
 }
 
 function summarizeSpeakers(
@@ -172,12 +221,15 @@ function summarizeSpeakers(
 ): SpeakerSummary[] {
 	const summaries = new Map<string, SpeakerSummary>();
 	for (const message of messages) {
-		if (message.direction !== "in" || message.entityId === String(agentId)) continue;
+		if (message.direction !== "in" || message.entityId === String(agentId))
+			continue;
 		const name = speakerName(message, names, agentId);
 		const summary = summaries.get(message.entityId) ?? {
 			entityId: message.entityId,
 			name,
-			...(message.externalHandle ? { externalHandle: message.externalHandle } : {}),
+			...(message.externalHandle
+				? { externalHandle: message.externalHandle }
+				: {}),
 			messageCount: 0,
 			lastSeen: 0,
 			samples: [],
@@ -187,42 +239,126 @@ function summarizeSpeakers(
 		summary.messageCount += 1;
 		summary.lastSeen = Math.max(summary.lastSeen, message.time);
 		const sample = publicTurnText(message);
-		if (sample && !summary.samples.includes(sample)) summary.samples = [sample, ...summary.samples].slice(0, 2);
+		if (sample && !summary.samples.includes(sample))
+			summary.samples = [sample, ...summary.samples].slice(0, 2);
 		summaries.set(message.entityId, summary);
 	}
-	return [...summaries.values()].sort((a, b) => b.lastSeen - a.lastSeen || b.messageCount - a.messageCount);
+	return [...summaries.values()].sort(
+		(a, b) => b.lastSeen - a.lastSeen || b.messageCount - a.messageCount,
+	);
 }
 
-function currentSpeakerLine(message: Memory, speakers: SpeakerSummary[], names: Map<string, string>): string | null {
+function currentSpeakerLine(
+	message: Memory,
+	speakers: SpeakerSummary[],
+	names: Map<string, string>,
+): string | null {
 	const entityId = String(message.entityId ?? "");
 	const matched = speakers.find((speaker) => speaker.entityId === entityId);
-	const name = matched?.name ?? names.get(entityId) ?? nameFromGatewayText(String(message.content?.text ?? ""));
+	const name =
+		matched?.name ??
+		names.get(entityId) ??
+		nameFromGatewayText(String(message.content?.text ?? ""));
 	if (!name) return null;
 	const parts = [`Current speaker: ${name}`];
-	if (matched?.externalHandle) parts.push(`discord id ${matched.externalHandle}`);
-	if (/dexploarer/i.test(name)) parts.push("Detour's dev/operator; treat as trusted builder context");
-	if (matched) parts.push(`${matched.messageCount} recent captured room message${matched.messageCount === 1 ? "" : "s"}`);
+	if (matched?.externalHandle)
+		parts.push(`discord id ${matched.externalHandle}`);
+	if (/dexploarer/i.test(name))
+		parts.push("Detour's dev/operator; treat as trusted builder context");
+	if (matched)
+		parts.push(
+			`${matched.messageCount} recent captured room message${matched.messageCount === 1 ? "" : "s"}`,
+		);
 	return parts.join(" | ");
 }
 
-function recentTurnLines(messages: GatewayMessage[], names: Map<string, string>, agentId: UUID): string[] {
-	return messages
-		.slice(-MAX_RECENT_TURNS)
-		.map((message) => {
+function recentTurnLines(
+	messages: GatewayMessage[],
+	names: Map<string, string>,
+	agentId: UUID,
+): string[] {
+	return messages.slice(-MAX_RECENT_TURNS).map((message) => {
+		const name = speakerName(message, names, agentId);
+		return `- ${name}: ${publicTurnText(message, 220)}`;
+	});
+}
+
+function sameServerHistory(
+	allDiscordHistory: GatewayMessage[],
+	currentRoomHistory: GatewayMessage[],
+	currentText: string,
+): GatewayMessage[] {
+	const server =
+		discordLabel(currentText)?.server ??
+		currentRoomHistory
+			.map((message) => discordLabel(message.text)?.server)
+			.find(
+				(value): value is string =>
+					typeof value === "string" && value.length > 0,
+			);
+	if (!server)
+		return allDiscordHistory.filter((message) => discordLabel(message.text));
+	return allDiscordHistory.filter(
+		(message) => discordLabel(message.text)?.server === server,
+	);
+}
+
+function otherRoomLines(
+	messages: GatewayMessage[],
+	currentRoomId: string,
+	names: Map<string, string>,
+	agentId: UUID,
+): string[] {
+	const rooms = new Map<string, GatewayMessage[]>();
+	for (const message of messages) {
+		if (message.roomId === currentRoomId || !discordLabel(message.text))
+			continue;
+		const entries = rooms.get(message.roomId) ?? [];
+		entries.push(message);
+		rooms.set(message.roomId, entries);
+	}
+	const orderedRooms = [...rooms.entries()]
+		.map(([roomId, entries]) => ({
+			roomId,
+			entries,
+			latest: entries.reduce((max, entry) => Math.max(max, entry.time), 0),
+			label: discordLabel(entries.at(-1)?.text ?? ""),
+		}))
+		.filter((room) => room.label)
+		.sort((a, b) => b.latest - a.latest)
+		.slice(0, MAX_OTHER_ROOMS);
+	const lines: string[] = [];
+	for (const room of orderedRooms) {
+		const label = room.label;
+		if (!label) continue;
+		lines.push(
+			`## #${label.channel}${label.server ? ` | ${label.server}` : ""}`,
+		);
+		for (const message of room.entries.slice(-MAX_OTHER_ROOM_TURNS)) {
 			const name = speakerName(message, names, agentId);
-			return `- ${name}: ${publicTurnText(message, 220)}`;
-		});
+			lines.push(`- ${name}: ${publicTurnText(message, 220)}`);
+		}
+	}
+	return lines;
 }
 
 function speakerLines(speakers: SpeakerSummary[]): string[] {
 	return speakers.slice(0, MAX_PEOPLE).map((speaker) => {
-		const samples = speaker.samples.length > 0 ? ` recent: ${speaker.samples.join(" | ")}` : "";
-		const dev = /dexploarer/i.test(speaker.name) ? " Detour's dev/operator." : "";
+		const samples =
+			speaker.samples.length > 0
+				? ` recent: ${speaker.samples.join(" | ")}`
+				: "";
+		const dev = /dexploarer/i.test(speaker.name)
+			? " Detour's dev/operator."
+			: "";
 		return `- ${speaker.name}: ${speaker.messageCount} captured room messages.${dev}${samples}`;
 	});
 }
 
-async function savedDiscordContextLines(runtime: IAgentRuntime, roomId: string): Promise<string[]> {
+async function savedDiscordContextLines(
+	runtime: IAgentRuntime,
+	roomId: string,
+): Promise<string[]> {
 	const memories = new PensieveMemoryService(() => runtime);
 	const [notes, facts] = await Promise.all([
 		memories.list({
@@ -247,27 +383,64 @@ async function savedDiscordContextLines(runtime: IAgentRuntime, roomId: string):
 	return lines;
 }
 
-async function buildDiscordContextForMessage(runtime: IAgentRuntime, message: Memory): Promise<string> {
+async function buildDiscordContextForMessage(
+	runtime: IAgentRuntime,
+	message: Memory,
+): Promise<string> {
 	if (!isDiscordMessage(message)) return "";
 	const names = await discordEntityNames(runtime);
 	const roomId = String(message.roomId ?? "");
-	const history = readGatewayMessages()
-		.filter((entry) => entry.channel === "discord" && (!roomId || entry.roomId === roomId))
+	const currentText =
+		typeof message.content?.text === "string" ? message.content.text : "";
+	const allDiscordHistory = readGatewayMessages()
+		.filter((entry) => entry.channel === "discord")
 		.sort((a, b) => a.time - b.time);
+	const history = allDiscordHistory.filter(
+		(entry) => !roomId || entry.roomId === roomId,
+	);
+	const crossRoomHistory = sameServerHistory(
+		allDiscordHistory,
+		history,
+		currentText,
+	);
 	const speakers = summarizeSpeakers(history, names, runtime.agentId);
 	const current = currentSpeakerLine(message, speakers, names);
-	const savedContext = roomId ? await savedDiscordContextLines(runtime, roomId) : [];
+	const savedContext = roomId
+		? await savedDiscordContextLines(runtime, roomId)
+		: [];
+	const otherRooms = otherRoomLines(
+		crossRoomHistory,
+		roomId,
+		names,
+		runtime.agentId,
+	);
 	const sections: string[] = ["# Discord Context"];
 	if (current) sections.push(current);
-	if (speakers.length > 0) sections.push("Known Discord people:\n" + speakerLines(speakers).join("\n"));
-	if (savedContext.length > 0) sections.push("Saved Discord notes/facts:\n" + savedContext.join("\n"));
-	if (history.length > 0) sections.push("Recent captured room turns:\n" + recentTurnLines(history, names, runtime.agentId).join("\n"));
+	if (speakers.length > 0)
+		sections.push(
+			`Known Discord people:\n${speakerLines(speakers).join("\n")}`,
+		);
+	if (savedContext.length > 0)
+		sections.push(`Saved Discord notes/facts:\n${savedContext.join("\n")}`);
+	if (otherRooms.length > 0)
+		sections.push(
+			`Recent captured same-server channels:\n${otherRooms.join("\n")}`,
+		);
+	if (history.length > 0)
+		sections.push(
+			`Recent captured room turns:\n${recentTurnLines(history, names, runtime.agentId).join("\n")}`,
+		);
 	if (sections.length === 1 && names.size === 0) return "";
-	sections.push("Use this as factual room context. Do not invent identities, roles, or Discord history beyond it.");
+	sections.push(
+		"Use this as factual Discord context. When asked about another channel shown here, answer from the captured channel turns instead of claiming it is unavailable. Do not invent identities, roles, or Discord history beyond it.",
+	);
 	return sections.join("\n\n").slice(0, 6000);
 }
 
-export async function discordContextForMessage(runtime: IAgentRuntime, message: Memory): Promise<string> {
+export async function discordContextForMessage(
+	runtime: IAgentRuntime,
+	message: Memory,
+): Promise<string> {
 	try {
 		return await buildDiscordContextForMessage(runtime, message);
 	} catch (error) {
@@ -286,9 +459,20 @@ export async function discordContextForMessage(runtime: IAgentRuntime, message: 
 
 export const discordContextProvider: Provider = {
 	name: "DISCORD_CONTEXT",
-	description: "Known Discord room participants, speaker identity, and persisted recent room history.",
+	description:
+		"Known Discord participants, speaker identity, persisted recent room history, and recent same-server Discord channel turns.",
 	position: 54,
-	relevanceKeywords: ["discord", "who", "context", "people", "room", "server"],
+	relevanceKeywords: [
+		"discord",
+		"who",
+		"context",
+		"people",
+		"room",
+		"server",
+		"channel",
+		"milady",
+		"recent messages",
+	],
 	get: async (
 		runtime: IAgentRuntime,
 		message: Memory,
@@ -305,6 +489,7 @@ export const discordContextProvider: Provider = {
 
 export const discordContextPlugin: Plugin = {
 	name: "detour-discord-context",
-	description: "Adds persisted Discord room identity and conversation context to state composition.",
+	description:
+		"Adds persisted Discord room identity and conversation context to state composition.",
 	providers: [discordContextProvider],
 };

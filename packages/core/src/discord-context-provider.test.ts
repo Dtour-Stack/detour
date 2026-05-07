@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import type { Entity, IAgentRuntime, Memory, Relationship, UUID } from "@elizaos/core";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+	Entity,
+	IAgentRuntime,
+	Memory,
+	Relationship,
+	UUID,
+} from "@elizaos/core";
 import { discordContextForMessage } from "./discord-context-provider";
 
 function withStateDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
@@ -16,29 +22,60 @@ function withStateDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
 	});
 }
 
-function writeGatewayLog(dir: string, rows: Array<Record<string, unknown>>): void {
+function writeGatewayLog(
+	dir: string,
+	rows: Array<Record<string, unknown>>,
+): void {
 	const gatewayDir = join(dir, "gateway");
 	mkdirSync(gatewayDir, { recursive: true });
-	writeFileSync(join(gatewayDir, "messages.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n"));
+	writeFileSync(
+		join(gatewayDir, "messages.jsonl"),
+		rows.map((row) => JSON.stringify(row)).join("\n"),
+	);
 }
 
-function runtime(memories: Partial<Record<string, Memory[]>> = {}): IAgentRuntime {
+function runtime(
+	memories: Partial<Record<string, Memory[]>> = {},
+): IAgentRuntime {
 	const agentId = "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID;
 	const entities = new Map<string, Entity>([
-		["c2269992-d475-04ad-ab68-7dff9209c695", { id: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID, names: ["dEXploarer"] } as Entity],
-		["e9fcbf6b-8987-0787-b463-af50b1b9ff00", { id: "e9fcbf6b-8987-0787-b463-af50b1b9ff00" as UUID, names: ["fishai"] } as Entity],
+		[
+			"c2269992-d475-04ad-ab68-7dff9209c695",
+			{
+				id: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
+				names: ["dEXploarer"],
+			} as Entity,
+		],
+		[
+			"e9fcbf6b-8987-0787-b463-af50b1b9ff00",
+			{
+				id: "e9fcbf6b-8987-0787-b463-af50b1b9ff00" as UUID,
+				names: ["fishai"],
+			} as Entity,
+		],
 	]);
 	return {
 		agentId,
-		getRelationships: async () => [
-			{ sourceEntityId: agentId, targetEntityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID, tags: ["discord", "discord-user"] },
-			{ sourceEntityId: agentId, targetEntityId: "e9fcbf6b-8987-0787-b463-af50b1b9ff00" as UUID, tags: ["discord", "discord-user"] },
-		] as Relationship[],
-		getEntitiesByIds: async (ids: UUID[]) => ids.flatMap((id) => {
-			const entity = entities.get(String(id));
-			return entity ? [entity] : [];
-		}),
-		getMemories: async (params: Record<string, unknown>) => memories[String(params.tableName)] ?? [],
+		getRelationships: async () =>
+			[
+				{
+					sourceEntityId: agentId,
+					targetEntityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
+					tags: ["discord", "discord-user"],
+				},
+				{
+					sourceEntityId: agentId,
+					targetEntityId: "e9fcbf6b-8987-0787-b463-af50b1b9ff00" as UUID,
+					tags: ["discord", "discord-user"],
+				},
+			] as Relationship[],
+		getEntitiesByIds: async (ids: UUID[]) =>
+			ids.flatMap((id) => {
+				const entity = entities.get(String(id));
+				return entity ? [entity] : [];
+			}),
+		getMemories: async (params: Record<string, unknown>) =>
+			memories[String(params.tableName)] ?? [],
 	} as never;
 }
 
@@ -116,24 +153,39 @@ describe("discord context provider", () => {
 				entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
 				content: { source: "discord", text: "Detour what happened?" },
 			};
-			const text = await discordContextForMessage(runtime({
-				memories: [{
-					id: "note-1" as UUID,
-					roomId: roomId as UUID,
-					entityId: "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID,
-					content: { text: "Dexploarer expects Detour to inspect X notifications directly." },
-					metadata: { type: "description", ...{ path: `/discord/rooms/${roomId}/observations` } },
-					createdAt: 1,
-				}],
-				facts: [{
-					id: "fact-1" as UUID,
-					roomId: roomId as UUID,
-					entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
-					content: { text: "Dexploarer is Detour's dev/operator." },
-					metadata: { type: "custom", ...{ path: "/facts/discord/people" } },
-					createdAt: 2,
-				}],
-			}), message);
+			const text = await discordContextForMessage(
+				runtime({
+					memories: [
+						{
+							id: "note-1" as UUID,
+							roomId: roomId as UUID,
+							entityId: "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID,
+							content: {
+								text: "Dexploarer expects Detour to inspect X notifications directly.",
+							},
+							metadata: {
+								type: "description",
+								...{ path: `/discord/rooms/${roomId}/observations` },
+							},
+							createdAt: 1,
+						},
+					],
+					facts: [
+						{
+							id: "fact-1" as UUID,
+							roomId: roomId as UUID,
+							entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
+							content: { text: "Dexploarer is Detour's dev/operator." },
+							metadata: {
+								type: "custom",
+								...{ path: "/facts/discord/people" },
+							},
+							createdAt: 2,
+						},
+					],
+				}),
+				message,
+			);
 
 			expect(text).toContain("Saved Discord notes/facts");
 			expect(text).toContain("inspect X notifications directly");
@@ -141,6 +193,62 @@ describe("discord context provider", () => {
 			expect(text).toContain("internal generation failure");
 			expect(text).not.toContain("server_is_overloaded");
 			expect(text).not.toContain("apiKey=set");
+		});
+	});
+
+	test("surfaces recent same-server messages from other Discord channels", async () => {
+		await withStateDir(async (dir) => {
+			const developmentRoomId = "70e6cd35-f25a-0acb-b6b0-d0ff57ec1e68";
+			const miladyRoomId = "cdfea3ca-9b95-0125-8155-dc4308f7f806";
+			writeGatewayLog(dir, [
+				{
+					id: "1",
+					time: 1,
+					direction: "in",
+					channel: "discord",
+					source: "discord",
+					roomId: miladyRoomId,
+					entityId: "c2269992-d475-04ad-ab68-7dff9209c695",
+					externalHandle: "458148462639316993",
+					text: "[Discord #🪼｜milady | Cozy Devs] @dEXploarer (Thu): generate the Cozy Dev group image",
+				},
+				{
+					id: "2",
+					time: 2,
+					direction: "in",
+					channel: "discord",
+					source: "discord",
+					roomId: "other-server-room",
+					entityId: "e9fcbf6b-8987-0787-b463-af50b1b9ff00",
+					text: "[Discord #random | Other Server] @fishai (Thu): unrelated server message",
+				},
+				{
+					id: "3",
+					time: 3,
+					direction: "in",
+					channel: "discord",
+					source: "discord",
+					roomId: developmentRoomId,
+					entityId: "c2269992-d475-04ad-ab68-7dff9209c695",
+					externalHandle: "458148462639316993",
+					text: "[Discord #💬｜development | Cozy Devs] @dEXploarer (Thu): what is going on in the milady channel?",
+				},
+			]);
+			const message: Memory = {
+				roomId: developmentRoomId as UUID,
+				entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
+				content: {
+					source: "discord",
+					text: "[Discord #💬｜development | Cozy Devs] @dEXploarer (Thu): what is going on in the milady channel?",
+				},
+			};
+
+			const text = await discordContextForMessage(runtime(), message);
+
+			expect(text).toContain("Recent captured same-server channels");
+			expect(text).toContain("#🪼｜milady | Cozy Devs");
+			expect(text).toContain("generate the Cozy Dev group image");
+			expect(text).not.toContain("unrelated server message");
 		});
 	});
 });

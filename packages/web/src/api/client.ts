@@ -5,7 +5,6 @@ import type {
 	ActivityDbTableDetail,
 	ActivityLogEntry,
 	ActivityPluginsSnapshot,
-	ChannelsSnapshot,
 	ActivityRuntimeSnapshot,
 	ActivityTasksSnapshot,
 	ActivityTrajectoryDetail,
@@ -18,6 +17,7 @@ import type {
 	BrowserCommand,
 	BrowserCommandInput,
 	BrowserCommandResult,
+	ChannelsSnapshot,
 	ChroniclerConfig,
 	ChroniclerObservation,
 	ChroniclerStatus,
@@ -33,8 +33,8 @@ import type {
 	PensieveMemorySummary,
 	PensieveMemoryTree,
 	PensievePersonDetail,
-	PensieveRelationshipSummary,
 	PensievePromptVariable,
+	PensieveRelationshipSummary,
 	PensieveTemplateDetail,
 	PensieveTemplateRenderResult,
 	PensieveTemplateSummary,
@@ -43,6 +43,11 @@ import type {
 	SigninResult,
 	UiPreferences,
 	WindowConfig,
+	WorkspaceAgentLog,
+	WorkspaceAgentsSnapshot,
+	WorkspaceProjectFile,
+	WorkspaceProjectFilesSnapshot,
+	WorkspaceProjectsSnapshot,
 	WsClientMessage,
 	WsServerMessage,
 } from "@detour/shared";
@@ -56,7 +61,11 @@ export type DiscordCatchUpResult = {
 	alreadyAnswered: number;
 	replied: number;
 	errors: number;
-	errorDetails?: Array<{ channelId: string; channelName?: string; error: string }>;
+	errorDetails?: Array<{
+		channelId: string;
+		channelName?: string;
+		error: string;
+	}>;
 };
 
 export class WebClient {
@@ -133,7 +142,10 @@ export class WebClient {
 	}
 
 	async getEnabledBackends(): Promise<string[]> {
-		const res = await this.json<{ enabled: string[] }>("GET", "/api/backends/enabled");
+		const res = await this.json<{ enabled: string[] }>(
+			"GET",
+			"/api/backends/enabled",
+		);
 		return res.enabled;
 	}
 
@@ -145,21 +157,42 @@ export class WebClient {
 	listVaultInventory(): Promise<any[]> {
 		return this.json("GET", "/api/vault/inventory");
 	}
-	vaultStats(): Promise<{ total: number; sensitive: number; nonSensitive: number; references: number }> {
+	vaultStats(): Promise<{
+		total: number;
+		sensitive: number;
+		nonSensitive: number;
+		references: number;
+	}> {
 		return this.json("GET", "/api/vault/stats");
 	}
-	getVaultKey(key: string, reveal = false): Promise<{ key: string; descriptor: any; value?: string }> {
-		return this.json("GET", `/api/vault/keys/${encodeURIComponent(key)}${reveal ? "?reveal=1" : ""}`);
+	getVaultKey(
+		key: string,
+		reveal = false,
+	): Promise<{ key: string; descriptor: any; value?: string }> {
+		return this.json(
+			"GET",
+			`/api/vault/keys/${encodeURIComponent(key)}${reveal ? "?reveal=1" : ""}`,
+		);
 	}
-	async setVaultKey(key: string, value: string, sensitive = true): Promise<void> {
-		await this.json("PUT", `/api/vault/keys/${encodeURIComponent(key)}`, { value, sensitive });
+	async setVaultKey(
+		key: string,
+		value: string,
+		sensitive = true,
+	): Promise<void> {
+		await this.json("PUT", `/api/vault/keys/${encodeURIComponent(key)}`, {
+			value,
+			sensitive,
+		});
 	}
 	async removeVaultKey(key: string): Promise<void> {
 		await this.json("DELETE", `/api/vault/keys/${encodeURIComponent(key)}`);
 	}
 
 	// --- saved logins ---
-	listSavedLogins(): Promise<{ logins: any[]; failures: { source: string; message: string }[] }> {
+	listSavedLogins(): Promise<{
+		logins: any[];
+		failures: { source: string; message: string }[];
+	}> {
 		return this.json("GET", "/api/saved-logins");
 	}
 	revealSavedLogin(source: string, identifier: string): Promise<any> {
@@ -170,7 +203,11 @@ export class WebClient {
 	}
 
 	// --- install helpers ---
-	getBackendInstall(): Promise<{ platform: string; packageManagers: any; specs: any[] }> {
+	getBackendInstall(): Promise<{
+		platform: string;
+		packageManagers: any;
+		specs: any[];
+	}> {
 		return this.json("GET", "/api/backends/install");
 	}
 
@@ -234,11 +271,22 @@ export class WebClient {
 		return this.json("GET", "/api/os/permissions");
 	}
 	async openOsPermissionPane(id: OsPermissionId): Promise<void> {
-		await this.json("POST", `/api/os/permissions/${encodeURIComponent(id)}/open`);
+		await this.json(
+			"POST",
+			`/api/os/permissions/${encodeURIComponent(id)}/open`,
+		);
 	}
 
 	// --- Activity (operational: logs, runtime introspection, trajectories, tasks) ---
-	activityLogs(params: { level?: string; source?: string; q?: string; limit?: number; since?: number } = {}): Promise<ActivityLogEntry[]> {
+	activityLogs(
+		params: {
+			level?: string;
+			source?: string;
+			q?: string;
+			limit?: number;
+			since?: number;
+		} = {},
+	): Promise<ActivityLogEntry[]> {
 		const qs = new URLSearchParams();
 		if (params.level) qs.set("level", params.level);
 		if (params.source) qs.set("source", params.source);
@@ -251,7 +299,49 @@ export class WebClient {
 	activityRuntime(): Promise<ActivityRuntimeSnapshot> {
 		return this.json("GET", "/api/activity/runtime");
 	}
-	activityTrajectories(params: { limit?: number; offset?: number; status?: string; source?: string; q?: string } = {}): Promise<ActivityTrajectoryListResult> {
+	activityWorkspaceAgents(): Promise<WorkspaceAgentsSnapshot> {
+		return this.json("GET", "/api/activity/workspace-agents");
+	}
+	activityWorkspaceProjects(): Promise<WorkspaceProjectsSnapshot> {
+		return this.json("GET", "/api/activity/workspace-projects");
+	}
+	activityWorkspaceProjectFiles(
+		projectId: string,
+		path = "",
+	): Promise<WorkspaceProjectFilesSnapshot> {
+		const qs = new URLSearchParams();
+		if (path) qs.set("path", path);
+		const query = qs.toString();
+		return this.json(
+			"GET",
+			`/api/activity/workspace-projects/${encodeURIComponent(projectId)}/files${query ? `?${query}` : ""}`,
+		);
+	}
+	activityWorkspaceProjectFile(
+		projectId: string,
+		path: string,
+	): Promise<WorkspaceProjectFile> {
+		const qs = new URLSearchParams({ path });
+		return this.json(
+			"GET",
+			`/api/activity/workspace-projects/${encodeURIComponent(projectId)}/file?${qs}`,
+		);
+	}
+	activityWorkspaceAgentLog(id: string, offset = 0): Promise<WorkspaceAgentLog> {
+		return this.json(
+			"GET",
+			`/api/activity/workspace-agents/${encodeURIComponent(id)}/log?offset=${offset}`,
+		);
+	}
+	activityTrajectories(
+		params: {
+			limit?: number;
+			offset?: number;
+			status?: string;
+			source?: string;
+			q?: string;
+		} = {},
+	): Promise<ActivityTrajectoryListResult> {
 		const qs = new URLSearchParams();
 		if (params.limit) qs.set("limit", String(params.limit));
 		if (params.offset) qs.set("offset", String(params.offset));
@@ -262,10 +352,38 @@ export class WebClient {
 		return this.json("GET", `/api/activity/trajectories${s ? `?${s}` : ""}`);
 	}
 	activityTrajectory(id: string): Promise<ActivityTrajectoryDetail> {
-		return this.json("GET", `/api/activity/trajectories/${encodeURIComponent(id)}`);
+		return this.json(
+			"GET",
+			`/api/activity/trajectories/${encodeURIComponent(id)}`,
+		);
 	}
-	activityExportTrajectories(ids?: string[]): Promise<ActivityTrajectoryExport> {
-		return this.json("POST", "/api/activity/trajectories/export", ids?.length ? { ids } : {});
+	activityExportTrajectories(
+		ids?: string[],
+	): Promise<ActivityTrajectoryExport> {
+		return this.json(
+			"POST",
+			"/api/activity/trajectories/export",
+			ids?.length ? { ids } : {},
+		);
+	}
+	async activityExportTrajectoriesZip(
+		ids?: string[],
+	): Promise<{ blob: Blob; filename: string }> {
+		const path = "/api/activity/trajectories/export.zip";
+		const res = await fetch(`${this.base}${path}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(ids?.length ? { ids } : {}),
+		});
+		if (!res.ok) {
+			const err = await res.text().catch(() => res.statusText);
+			throw new Error(`API POST ${path}: ${err}`);
+		}
+		const disposition = res.headers.get("content-disposition") ?? "";
+		const filename =
+			disposition.match(/filename="([^"]+)"/)?.[1] ??
+			`detour-trajectories-${Date.now()}.zip`;
+		return { blob: await res.blob(), filename };
 	}
 	activityTasks(): Promise<ActivityTasksSnapshot> {
 		return this.json("GET", "/api/activity/tasks");
@@ -273,22 +391,36 @@ export class WebClient {
 	activityAutonomy(): Promise<ActivityAutonomySnapshot> {
 		return this.json("GET", "/api/activity/autonomy");
 	}
-	activitySetXAutonomy(update: ActivityXAutonomyUpdate): Promise<ActivityAutonomySnapshot> {
+	activitySetXAutonomy(
+		update: ActivityXAutonomyUpdate,
+	): Promise<ActivityAutonomySnapshot> {
 		return this.json("POST", "/api/activity/autonomy/x", update);
 	}
 	activityPlugins(): Promise<ActivityPluginsSnapshot> {
 		return this.json("GET", "/api/activity/plugins");
 	}
-	activityDbTables(): Promise<{ available: boolean; tables: ActivityDbTable[] }> {
+	activityDbTables(): Promise<{
+		available: boolean;
+		tables: ActivityDbTable[];
+	}> {
 		return this.json("GET", "/api/activity/db/tables");
 	}
-	activityDbTable(schema: string, name: string): Promise<ActivityDbTableDetail> {
-		return this.json("GET", `/api/activity/db/tables/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`);
+	activityDbTable(
+		schema: string,
+		name: string,
+	): Promise<ActivityDbTableDetail> {
+		return this.json(
+			"GET",
+			`/api/activity/db/tables/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`,
+		);
 	}
 	async activityDbQuery(sqlText: string): Promise<ActivityDbQueryResult> {
 		return this.json("POST", "/api/activity/db/query", { sql: sqlText });
 	}
-	async activityRebuildRuntime(): Promise<{ ok: boolean; provider: string | null }> {
+	async activityRebuildRuntime(): Promise<{
+		ok: boolean;
+		provider: string | null;
+	}> {
 		return this.json("POST", "/api/activity/plugins/rebuild");
 	}
 
@@ -300,7 +432,10 @@ export class WebClient {
 		await this.json("POST", "/api/channels/credentials", { key, value });
 	}
 	async channelClearCredential(key: string): Promise<void> {
-		await this.json("DELETE", `/api/channels/credentials/${encodeURIComponent(key)}`);
+		await this.json(
+			"DELETE",
+			`/api/channels/credentials/${encodeURIComponent(key)}`,
+		);
 	}
 	async channelsReload(): Promise<{ ok: boolean; provider: string | null }> {
 		return this.json("POST", "/api/channels/reload");
@@ -324,29 +459,69 @@ export class WebClient {
 	async ownerBindUnbind(connector: "telegram" | "discord"): Promise<void> {
 		await this.json("DELETE", `/api/owner-bind/${connector}`);
 	}
-	async discordGuilds(): Promise<{ guilds: Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> }> {
+	async discordGuilds(): Promise<{
+		guilds: Array<{
+			id: string;
+			name: string;
+			channels: Array<{ id: string; name: string; type: number }>;
+		}>;
+	}> {
 		return this.json("GET", "/api/channels/discord/guilds");
 	}
-	async discordBackfill(channelId: string, limit = 200, force = false): Promise<{ ok: boolean; scheduled: boolean; channelId: string }> {
-		return this.json("POST", "/api/channels/discord/backfill", { channelId, limit, force });
+	async discordBackfill(
+		channelId: string,
+		limit = 200,
+		force = false,
+	): Promise<{ ok: boolean; scheduled: boolean; channelId: string }> {
+		return this.json("POST", "/api/channels/discord/backfill", {
+			channelId,
+			limit,
+			force,
+		});
 	}
-	async discordCatchUp(channelId: string, limit = 100, maxAgeHours = 24): Promise<{ ok: boolean; scheduled: boolean; channelId?: string; result?: DiscordCatchUpResult }> {
-		return this.json("POST", "/api/channels/discord/catch-up", { channelId, limit, maxAgeHours, wait: true });
+	async discordCatchUp(
+		channelId: string,
+		limit = 100,
+		maxAgeHours = 24,
+	): Promise<{
+		ok: boolean;
+		scheduled: boolean;
+		channelId?: string;
+		result?: DiscordCatchUpResult;
+	}> {
+		return this.json("POST", "/api/channels/discord/catch-up", {
+			channelId,
+			limit,
+			maxAgeHours,
+			wait: true,
+		});
 	}
 	async activitySetAutonomy(enabled: boolean): Promise<void> {
-		await this.json("POST", `/api/activity/autonomy/${enabled ? "enable" : "disable"}`);
+		await this.json(
+			"POST",
+			`/api/activity/autonomy/${enabled ? "enable" : "disable"}`,
+		);
 	}
 	async activitySetAutonomyInterval(intervalMs: number): Promise<void> {
 		await this.json("POST", "/api/activity/autonomy/interval", { intervalMs });
 	}
 	async activityRunTask(id: string): Promise<void> {
-		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/run`);
+		await this.json(
+			"POST",
+			`/api/activity/tasks/${encodeURIComponent(id)}/run`,
+		);
 	}
 	async activityPauseTask(id: string): Promise<void> {
-		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/pause`);
+		await this.json(
+			"POST",
+			`/api/activity/tasks/${encodeURIComponent(id)}/pause`,
+		);
 	}
 	async activityResumeTask(id: string): Promise<void> {
-		await this.json("POST", `/api/activity/tasks/${encodeURIComponent(id)}/resume`);
+		await this.json(
+			"POST",
+			`/api/activity/tasks/${encodeURIComponent(id)}/resume`,
+		);
 	}
 	async activityDeleteTask(id: string): Promise<void> {
 		await this.json("DELETE", `/api/activity/tasks/${encodeURIComponent(id)}`);
@@ -357,28 +532,59 @@ export class WebClient {
 		return this.json("GET", "/api/pensieve/templates");
 	}
 	pensieveTemplate(id: string): Promise<PensieveTemplateDetail> {
-		return this.json("GET", `/api/pensieve/templates/${encodeURIComponent(id)}`);
+		return this.json(
+			"GET",
+			`/api/pensieve/templates/${encodeURIComponent(id)}`,
+		);
 	}
-	async pensieveCreateTemplate(input: { name: string; body: string; tags?: string[] }): Promise<{ id: string }> {
+	async pensieveCreateTemplate(input: {
+		name: string;
+		body: string;
+		tags?: string[];
+	}): Promise<{ id: string }> {
 		return this.json("POST", "/api/pensieve/templates", input);
 	}
-	async pensieveUpdateTemplate(id: string, patch: { body?: string; tags?: string[]; path?: string }): Promise<void> {
-		await this.json("PATCH", `/api/pensieve/templates/${encodeURIComponent(id)}`, patch);
+	async pensieveUpdateTemplate(
+		id: string,
+		patch: { body?: string; tags?: string[]; path?: string },
+	): Promise<void> {
+		await this.json(
+			"PATCH",
+			`/api/pensieve/templates/${encodeURIComponent(id)}`,
+			patch,
+		);
 	}
 	async pensieveDeleteTemplate(id: string): Promise<void> {
-		await this.json("DELETE", `/api/pensieve/templates/${encodeURIComponent(id)}`);
+		await this.json(
+			"DELETE",
+			`/api/pensieve/templates/${encodeURIComponent(id)}`,
+		);
 	}
-	pensieveRenderTemplate(id: string, vars: Record<string, string> = {}): Promise<PensieveTemplateRenderResult> {
-		return this.json("POST", `/api/pensieve/templates/${encodeURIComponent(id)}/render`, { vars });
+	pensieveRenderTemplate(
+		id: string,
+		vars: Record<string, string> = {},
+	): Promise<PensieveTemplateRenderResult> {
+		return this.json(
+			"POST",
+			`/api/pensieve/templates/${encodeURIComponent(id)}/render`,
+			{ vars },
+		);
 	}
 	pensieveTemplateVars(): Promise<PensievePromptVariable[]> {
 		return this.json("GET", "/api/pensieve/template-vars");
 	}
 	async pensieveSetTemplateVar(name: string, value: string): Promise<void> {
-		await this.json("PUT", `/api/pensieve/template-vars/${encodeURIComponent(name)}`, { value });
+		await this.json(
+			"PUT",
+			`/api/pensieve/template-vars/${encodeURIComponent(name)}`,
+			{ value },
+		);
 	}
 	async pensieveDeleteTemplateVar(name: string): Promise<void> {
-		await this.json("DELETE", `/api/pensieve/template-vars/${encodeURIComponent(name)}`);
+		await this.json(
+			"DELETE",
+			`/api/pensieve/template-vars/${encodeURIComponent(name)}`,
+		);
 	}
 	pensieveMemoryTree(): Promise<PensieveMemoryTree> {
 		return this.json("GET", "/api/pensieve/memories/tree");
@@ -395,7 +601,9 @@ export class WebClient {
 	pensieveChroniclerConfig(): Promise<ChroniclerConfig> {
 		return this.json("GET", "/api/pensieve/chronicler/config");
 	}
-	pensieveSetChroniclerConfig(input: Partial<ChroniclerConfig>): Promise<ChroniclerConfig> {
+	pensieveSetChroniclerConfig(
+		input: Partial<ChroniclerConfig>,
+	): Promise<ChroniclerConfig> {
 		return this.json("PUT", "/api/pensieve/chronicler/config", input);
 	}
 	pensieveChroniclerSample(): Promise<ChroniclerObservation> {
@@ -409,7 +617,11 @@ export class WebClient {
 		content: string;
 		contentType?: string;
 		metadata?: Record<string, unknown>;
-	}): Promise<{ clientDocumentId: string; storedDocumentMemoryId: string; fragmentCount: number }> {
+	}): Promise<{
+		clientDocumentId: string;
+		storedDocumentMemoryId: string;
+		fragmentCount: number;
+	}> {
 		return this.json("POST", "/api/pensieve/knowledge/ingest", input);
 	}
 	async pensieveCreateMemory(input: {
@@ -421,7 +633,17 @@ export class WebClient {
 	}): Promise<{ id: string }> {
 		return this.json("POST", "/api/pensieve/memories", input);
 	}
-	pensieveMemories(params: { limit?: number; type?: string; roomId?: string; entityId?: string; tag?: string; q?: string; pathPrefix?: string } = {}): Promise<PensieveMemorySummary[]> {
+	pensieveMemories(
+		params: {
+			limit?: number;
+			type?: string;
+			roomId?: string;
+			entityId?: string;
+			tag?: string;
+			q?: string;
+			pathPrefix?: string;
+		} = {},
+	): Promise<PensieveMemorySummary[]> {
 		const qs = new URLSearchParams();
 		for (const [k, v] of Object.entries(params)) {
 			if (v != null && v !== "") qs.set(k, String(v));
@@ -429,46 +651,96 @@ export class WebClient {
 		const s = qs.toString();
 		return this.json("GET", `/api/pensieve/memories${s ? `?${s}` : ""}`);
 	}
-	pensieveSearchMemories(text: string, limit = 30): Promise<PensieveMemorySummary[]> {
+	pensieveSearchMemories(
+		text: string,
+		limit = 30,
+	): Promise<PensieveMemorySummary[]> {
 		return this.json("POST", "/api/pensieve/memories/search", { text, limit });
 	}
 	pensieveMemory(id: string): Promise<PensieveMemoryDetail> {
 		return this.json("GET", `/api/pensieve/memories/${encodeURIComponent(id)}`);
 	}
-	async pensieveUpdateMemory(id: string, patch: { contentText?: string; tags?: string[]; path?: string }): Promise<void> {
-		await this.json("PATCH", `/api/pensieve/memories/${encodeURIComponent(id)}`, patch);
+	async pensieveUpdateMemory(
+		id: string,
+		patch: { contentText?: string; tags?: string[]; path?: string },
+	): Promise<void> {
+		await this.json(
+			"PATCH",
+			`/api/pensieve/memories/${encodeURIComponent(id)}`,
+			patch,
+		);
 	}
 	async pensieveDeleteMemory(id: string): Promise<void> {
-		await this.json("DELETE", `/api/pensieve/memories/${encodeURIComponent(id)}`);
+		await this.json(
+			"DELETE",
+			`/api/pensieve/memories/${encodeURIComponent(id)}`,
+		);
 	}
 	pensievePersons(limit = 100): Promise<PensieveEntitySummary[]> {
-		return this.json("GET", `/api/pensieve/relationships/persons?limit=${limit}`);
+		return this.json(
+			"GET",
+			`/api/pensieve/relationships/persons?limit=${limit}`,
+		);
 	}
 	pensievePerson(id: string): Promise<PensievePersonDetail> {
-		return this.json("GET", `/api/pensieve/relationships/${encodeURIComponent(id)}`);
+		return this.json(
+			"GET",
+			`/api/pensieve/relationships/${encodeURIComponent(id)}`,
+		);
 	}
-	pensieveRelationships(params: { entityIds?: string[]; tags?: string[]; limit?: number } = {}): Promise<PensieveRelationshipSummary[]> {
+	pensieveRelationships(
+		params: { entityIds?: string[]; tags?: string[]; limit?: number } = {},
+	): Promise<PensieveRelationshipSummary[]> {
 		const qs = new URLSearchParams();
-		if (params.entityIds?.length) qs.set("entityIds", params.entityIds.join(","));
+		if (params.entityIds?.length)
+			qs.set("entityIds", params.entityIds.join(","));
 		if (params.tags?.length) qs.set("tags", params.tags.join(","));
 		if (params.limit) qs.set("limit", String(params.limit));
 		const s = qs.toString();
 		return this.json("GET", `/api/pensieve/relationships${s ? `?${s}` : ""}`);
 	}
-	async pensieveCreateRelationship(rel: { sourceEntityId: string; targetEntityId: string; tags?: string[]; metadata?: Record<string, unknown> }): Promise<void> {
+	async pensieveCreateRelationship(rel: {
+		sourceEntityId: string;
+		targetEntityId: string;
+		tags?: string[];
+		metadata?: Record<string, unknown>;
+	}): Promise<void> {
 		await this.json("POST", "/api/pensieve/relationships", rel);
 	}
-	async pensieveUpdateRelationship(source: string, target: string, patch: { tags?: string[]; metadata?: Record<string, unknown> }): Promise<void> {
-		await this.json("PATCH", `/api/pensieve/relationships/${encodeURIComponent(source)}/${encodeURIComponent(target)}`, patch);
+	async pensieveUpdateRelationship(
+		source: string,
+		target: string,
+		patch: { tags?: string[]; metadata?: Record<string, unknown> },
+	): Promise<void> {
+		await this.json(
+			"PATCH",
+			`/api/pensieve/relationships/${encodeURIComponent(source)}/${encodeURIComponent(target)}`,
+			patch,
+		);
 	}
-	async pensieveDeleteRelationship(source: string, target: string): Promise<void> {
-		await this.json("DELETE", `/api/pensieve/relationships/${encodeURIComponent(source)}/${encodeURIComponent(target)}`);
+	async pensieveDeleteRelationship(
+		source: string,
+		target: string,
+	): Promise<void> {
+		await this.json(
+			"DELETE",
+			`/api/pensieve/relationships/${encodeURIComponent(source)}/${encodeURIComponent(target)}`,
+		);
 	}
-	pensieveGraph(filter: { dateFrom?: number; dateTo?: number; entityIds?: string[]; types?: string[]; tags?: string[] } = {}): Promise<PensieveGraphSnapshot> {
+	pensieveGraph(
+		filter: {
+			dateFrom?: number;
+			dateTo?: number;
+			entityIds?: string[];
+			types?: string[];
+			tags?: string[];
+		} = {},
+	): Promise<PensieveGraphSnapshot> {
 		const qs = new URLSearchParams();
 		if (filter.dateFrom) qs.set("dateFrom", String(filter.dateFrom));
 		if (filter.dateTo) qs.set("dateTo", String(filter.dateTo));
-		if (filter.entityIds?.length) qs.set("entityIds", filter.entityIds.join(","));
+		if (filter.entityIds?.length)
+			qs.set("entityIds", filter.entityIds.join(","));
 		if (filter.types?.length) qs.set("types", filter.types.join(","));
 		if (filter.tags?.length) qs.set("tags", filter.tags.join(","));
 		const s = qs.toString();
@@ -479,18 +751,29 @@ export class WebClient {
 	async openExternal(url: string): Promise<void> {
 		await this.json("POST", "/api/external/open", { url });
 	}
-	browserCommands(params: { after?: string; since?: number } = {}): Promise<{ commands: BrowserCommand[] }> {
+	browserCommands(
+		params: { after?: string; since?: number } = {},
+	): Promise<{ commands: BrowserCommand[] }> {
 		const qs = new URLSearchParams();
 		if (params.after) qs.set("after", params.after);
 		if (params.since) qs.set("since", String(params.since));
 		const s = qs.toString();
 		return this.json("GET", `/api/browser/commands${s ? `?${s}` : ""}`);
 	}
-	queueBrowserCommand(command: BrowserCommandInput): Promise<{ command: BrowserCommand }> {
+	queueBrowserCommand(
+		command: BrowserCommandInput,
+	): Promise<{ command: BrowserCommand }> {
 		return this.json("POST", "/api/browser/commands", command);
 	}
-	reportBrowserCommandResult(commandId: string, result: Omit<BrowserCommandResult, "time">): Promise<{ result: BrowserCommandResult }> {
-		return this.json("POST", `/api/browser/commands/${encodeURIComponent(commandId)}/result`, result);
+	reportBrowserCommandResult(
+		commandId: string,
+		result: Omit<BrowserCommandResult, "time">,
+	): Promise<{ result: BrowserCommandResult }> {
+		return this.json(
+			"POST",
+			`/api/browser/commands/${encodeURIComponent(commandId)}/result`,
+			result,
+		);
 	}
 
 	// --- window control (tray popup) ---
@@ -510,7 +793,11 @@ export class WebClient {
 	}
 
 	// --- auth: account providers ---
-	getAuthProviders(): Promise<{ subscription: string[]; direct: string[]; all: string[] }> {
+	getAuthProviders(): Promise<{
+		subscription: string[];
+		direct: string[];
+		all: string[];
+	}> {
 		return this.json("GET", "/api/auth/providers");
 	}
 	listAllAccounts(): Promise<Record<string, any[]>> {
@@ -522,21 +809,40 @@ export class WebClient {
 			`/api/auth/accounts/${encodeURIComponent(provider)}/${encodeURIComponent(accountId)}`,
 		);
 	}
-	startAuthFlow(provider: string, label: string): Promise<{ sessionId: string; authUrl: string; needsCodeSubmission: boolean }> {
+	startAuthFlow(
+		provider: string,
+		label: string,
+	): Promise<{
+		sessionId: string;
+		authUrl: string;
+		needsCodeSubmission: boolean;
+	}> {
 		return this.json("POST", "/api/auth/flows", { provider, label });
 	}
 	getAuthFlow(sessionId: string): Promise<any> {
 		return this.json("GET", `/api/auth/flows/${encodeURIComponent(sessionId)}`);
 	}
-	async submitFlowCode(sessionId: string, code: string): Promise<{ ok: boolean }> {
-		return this.json("POST", `/api/auth/flows/${encodeURIComponent(sessionId)}/code`, { code });
+	async submitFlowCode(
+		sessionId: string,
+		code: string,
+	): Promise<{ ok: boolean }> {
+		return this.json(
+			"POST",
+			`/api/auth/flows/${encodeURIComponent(sessionId)}/code`,
+			{ code },
+		);
 	}
 	async cancelFlow(sessionId: string): Promise<void> {
-		await this.json("DELETE", `/api/auth/flows/${encodeURIComponent(sessionId)}`);
+		await this.json(
+			"DELETE",
+			`/api/auth/flows/${encodeURIComponent(sessionId)}`,
+		);
 	}
 
 	// --- Inbox (notifications + actionable channel signals) ---
-	listInbox(opts: { status?: string; kind?: string; limit?: number } = {}): Promise<{ items: InboxItem[]; total: number }> {
+	listInbox(
+		opts: { status?: string; kind?: string; limit?: number } = {},
+	): Promise<{ items: InboxItem[]; total: number }> {
 		const params = new URLSearchParams();
 		if (opts.status) params.set("status", opts.status);
 		if (opts.kind) params.set("kind", opts.kind);
@@ -544,18 +850,34 @@ export class WebClient {
 		const q = params.toString();
 		return this.json("GET", `/api/inbox${q ? `?${q}` : ""}`);
 	}
-	postInboxNotification(body: { title: string; body: string; prompt?: boolean }): Promise<{ ok: boolean; item: InboxItem }> {
+	postInboxNotification(body: {
+		title: string;
+		body: string;
+		prompt?: boolean;
+	}): Promise<{ ok: boolean; item: InboxItem }> {
 		return this.json("POST", "/api/inbox", { kind: "notification", ...body });
 	}
-	updateInboxStatus(id: string, status: string): Promise<{ ok: boolean; item: InboxItem }> {
-		return this.json("PATCH", `/api/inbox/${encodeURIComponent(id)}/status`, { status });
+	updateInboxStatus(
+		id: string,
+		status: string,
+	): Promise<{ ok: boolean; item: InboxItem }> {
+		return this.json("PATCH", `/api/inbox/${encodeURIComponent(id)}/status`, {
+			status,
+		});
 	}
 	actInboxItem(id: string): Promise<{ ok: boolean; item: InboxItem }> {
 		return this.json("POST", `/api/inbox/${encodeURIComponent(id)}/act`);
 	}
 
 	// --- Gateway (unified inbound/outbound feed across channels) ---
-	listGatewayFeed(opts: { channel?: string; direction?: string; q?: string; limit?: number } = {}): Promise<{ messages: GatewayMessage[]; total: number }> {
+	listGatewayFeed(
+		opts: {
+			channel?: string;
+			direction?: string;
+			q?: string;
+			limit?: number;
+		} = {},
+	): Promise<{ messages: GatewayMessage[]; total: number }> {
 		const params = new URLSearchParams();
 		if (opts.channel) params.set("channel", opts.channel);
 		if (opts.direction) params.set("direction", opts.direction);
@@ -637,7 +959,11 @@ export interface LlamaServerStatus {
 	readonly pid: number | null;
 	readonly startedAt: number | null;
 	readonly lastError: string | null;
-	readonly downloadProgress?: { downloadedBytes: number; totalBytes: number; percent: number } | null;
+	readonly downloadProgress?: {
+		downloadedBytes: number;
+		totalBytes: number;
+		percent: number;
+	} | null;
 }
 
 /**
@@ -671,7 +997,9 @@ function installWebviewLogForwarder(client: WebClient): void {
 	// console.log calls during the same turn carry it.
 	client.on((m) => {
 		if (
-			(m.kind === "chat:delta" || m.kind === "chat:complete" || m.kind === "chat:error") &&
+			(m.kind === "chat:delta" ||
+				m.kind === "chat:complete" ||
+				m.kind === "chat:error") &&
 			typeof (m as { traceId?: string }).traceId === "string"
 		) {
 			lastServerTraceId = (m as { traceId?: string }).traceId;
@@ -688,14 +1016,14 @@ function installWebviewLogForwarder(client: WebClient): void {
 					typeof a === "string"
 						? a
 						: a instanceof Error
-						? `${a.name}: ${a.message}`
-						: (() => {
-								try {
-									return JSON.stringify(a);
-								} catch {
-									return String(a);
-								}
-						  })(),
+							? `${a.name}: ${a.message}`
+							: (() => {
+									try {
+										return JSON.stringify(a);
+									} catch {
+										return String(a);
+									}
+								})(),
 				)
 				.join(" ");
 			client.send({
@@ -721,7 +1049,9 @@ function installWebviewLogForwarder(client: WebClient): void {
 
 	if (typeof window !== "undefined") {
 		window.addEventListener("error", (ev) => {
-			send("error", [`${ev.message} @ ${ev.filename}:${ev.lineno}:${ev.colno}`]);
+			send("error", [
+				`${ev.message} @ ${ev.filename}:${ev.lineno}:${ev.colno}`,
+			]);
 		});
 		window.addEventListener("unhandledrejection", (ev) => {
 			const r = ev.reason;

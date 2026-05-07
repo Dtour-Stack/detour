@@ -1,31 +1,70 @@
-import type { Server, ServerWebSocket } from "bun";
-import type { Memory, UUID } from "@elizaos/core";
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import type { RuntimeService } from "../runtime";
-import { runDiscordCatchUp } from "../discord-catchup";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import type {
+	ActivityXAutonomyUpdate,
+	BrowserCommand,
+	BrowserCommandInput,
+	BrowserCommandResult,
+	ChroniclerConfig,
+	ProviderId,
+	SetActiveProviderBody,
+	SetEnabledBackendsBody,
+	SetProviderKeyBody,
+	WorkspaceAgentRecord,
+	WorkspaceAgentStatus,
+	WorkspaceProjectFile,
+	WorkspaceProjectFileNode,
+	WorkspaceProjectFilesSnapshot,
+	WorkspaceProjectRecord,
+	WorkspaceProjectsSnapshot,
+	WsClientMessage,
+	WsServerMessage,
+} from "@detour/shared";
+import { ModelType, type Memory, type UUID } from "@elizaos/core";
+import type { Server, ServerWebSocket } from "bun";
+import type { ActivityService } from "../activity";
+import { xAutonomyRuntimeSettings } from "../activity/autonomy-service";
 import type { AccountCredentialProvider, AuthService } from "../auth";
 import { ALL_PROVIDER_IDS, PROVIDER_ENV } from "../auth";
 import type { BackendOps, InstallableBackendId } from "../backend-ops";
-import type { ConfigService } from "../config-service";
-import type { ActivityService } from "../activity";
-import { xAutonomyRuntimeSettings } from "../activity/autonomy-service";
 import type { ChannelsService } from "../channels";
-import type { ChannelGatewayService, GatewayChannel, GatewayDirection, ListOptions as GatewayListOptions } from "../channels/gateway";
+import type {
+	ChannelGatewayService,
+	GatewayChannel,
+	GatewayDirection,
+	ListOptions as GatewayListOptions,
+} from "../channels/gateway";
+import type { ConfigService } from "../config-service";
 import type { CronService } from "../cron-service";
-import type { OwnerBindService, OwnerConnector } from "../owner-bind";
-import { newTraceId, traceScope } from "../trace";
-import type { InboxService, InboxKind, InboxStatus } from "../inbox";
+import { runDiscordCatchUp } from "../discord-catchup";
+import type { InboxKind, InboxService, InboxStatus } from "../inbox";
 import type { LlamaServerService } from "../llama/server-service";
-import type { GraphFilter, PensieveService } from "../pensieve";
-import { KNOWN_MEMORY_TABLES } from "../pensieve/memory-service";
-import { pensieveAudit } from "../pensieve";
-import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
 import { fetchOpenRouterModels } from "../openrouter-models";
 import {
+	listPermissions,
+	openPermissionPane,
+	type PermissionId,
+} from "../os-permissions";
+import type { OwnerBindService, OwnerConnector } from "../owner-bind";
+import type { GraphFilter, PensieveService } from "../pensieve";
+import { pensieveAudit } from "../pensieve";
+import { KNOWN_MEMORY_TABLES } from "../pensieve/memory-service";
+import type { RuntimeService } from "../runtime";
+import { newTraceId, traceScope } from "../trace";
+import {
 	BACKEND_INSTALL_SPECS,
+	type BackendId,
 	buildInstallCommand,
 	categorizeKey,
 	currentPlatform,
@@ -33,35 +72,23 @@ import {
 	detectPackageManagers,
 	inferProviderId,
 	listVaultInventory,
+	type RoutingConfig,
 	readEntryMeta,
 	readRoutingConfig,
 	removeEntryMeta,
 	resolveRunnableMethods,
+	type SavedLogin,
 	setEntryMeta,
 	setSavedLogin,
-	type BackendId,
-	type SavedLogin,
-	type RoutingConfig,
 	type VaultService,
 	writeRoutingConfig,
 } from "../vault";
-import type {
-	WsClientMessage,
-	WsServerMessage,
-	SetProviderKeyBody,
-	SetActiveProviderBody,
-	SetEnabledBackendsBody,
-	ChroniclerConfig,
-	ProviderId,
-	BrowserCommand,
-	BrowserCommandInput,
-	BrowserCommandResult,
-	ActivityXAutonomyUpdate,
-} from "@detour/shared";
 
 const VERSION = "0.0.1";
 
-type WsData = { id: string };
+type WsData =
+	| { id: string; kind?: "app" }
+	| { id: string; kind: "agent-log"; agentId: string; offset: number };
 
 type Listener = (msg: WsServerMessage) => void;
 
@@ -81,16 +108,71 @@ type ApiRouteHandler = (ctx: ApiRequestContext) => Promise<Response | null>;
 
 const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
 const MAX_BROWSER_COMMANDS = 100;
-const INBOX_STATUSES = new Set(["pending", "acting", "acknowledged", "acted", "dismissed"]);
+const WORKSPACE_AGENT_STATE_DIR = join(homedir(), ".detour", "workspace-agents");
+const WORKSPACE_AGENT_STATE_FILE = join(WORKSPACE_AGENT_STATE_DIR, "sessions.json");
+const MAX_WORKSPACE_AGENT_LOG_CHARS = 200_000;
+const MAX_WORKSPACE_FILE_BYTES = 300_000;
+const MAX_WORKSPACE_DIRECTORY_ENTRIES = 400;
+const PREVIEW_URL_PATTERN =
+	/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s"'<>),\]}]*)?/gi;
+const WORKSPACE_IGNORED_ENTRIES = new Set([
+	".git",
+	".next",
+	".turbo",
+	".cache",
+	"build",
+	"coverage",
+	"dist",
+	"node_modules",
+]);
+const INBOX_STATUSES = new Set([
+	"pending",
+	"acting",
+	"acknowledged",
+	"acted",
+	"dismissed",
+]);
 const MEMORY_TABLES = new Set<string>(KNOWN_MEMORY_TABLES);
 
 function parseInboxStatus(value: unknown): InboxStatus | null {
-	return typeof value === "string" && INBOX_STATUSES.has(value) ? value as InboxStatus : null;
+	return typeof value === "string" && INBOX_STATUSES.has(value)
+		? (value as InboxStatus)
+		: null;
 }
 
-function parseMemoryTable(value: string | null): { ok: true; tableName?: string } | { ok: false; error: string } {
+function publicJson(data: unknown, status = 200): Response {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: {
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "GET, OPTIONS",
+			"access-control-allow-headers": "content-type",
+			"content-type": "application/json",
+		},
+	});
+}
+
+function publicOptions(): Response {
+	return new Response(null, {
+		status: 204,
+		headers: {
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "GET, OPTIONS",
+			"access-control-allow-headers": "content-type",
+		},
+	});
+}
+
+function publicError(message: string, status = 400): Response {
+	return publicJson({ error: message }, status);
+}
+
+function parseMemoryTable(
+	value: string | null,
+): { ok: true; tableName?: string } | { ok: false; error: string } {
 	if (!value) return { ok: true };
-	if (!MEMORY_TABLES.has(value)) return { ok: false, error: `unknown memory table: ${value}` };
+	if (!MEMORY_TABLES.has(value))
+		return { ok: false, error: `unknown memory table: ${value}` };
 	return { ok: true, tableName: value };
 }
 
@@ -111,44 +193,322 @@ function parseBackendIds(values: string[]): BackendId[] | null {
 	return enabled;
 }
 
+function stringValue(value: unknown): string | null {
+	return typeof value === "string" ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function workspaceAgentStatus(value: unknown): WorkspaceAgentStatus | null {
+	if (
+		value === "running" ||
+		value === "completed" ||
+		value === "failed" ||
+		value === "stopped"
+	) {
+		return value;
+	}
+	return null;
+}
+
+function workspaceAgentProvider(value: unknown): WorkspaceAgentRecord["provider"] | null {
+	if (value === "acpx" || value === "codex" || value === "claude") return value;
+	return null;
+}
+
+function workspacePreviewUrl(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1";
+		return url.toString();
+	} catch {
+		return null;
+	}
+}
+
+function previewUrlFromLog(logPath: string): string | null {
+	if (!existsSync(logPath)) return null;
+	const text = readFileSync(logPath, "utf8");
+	for (const match of text.matchAll(PREVIEW_URL_PATTERN)) {
+		const previewUrl = workspacePreviewUrl(match[0]);
+		if (previewUrl) return previewUrl;
+	}
+	return null;
+}
+
+function parseWorkspaceAgent(value: unknown): WorkspaceAgentRecord | null {
+	const source = recordValue(value);
+	if (!source) return null;
+	const id = stringValue(source.id);
+	const provider = workspaceAgentProvider(source.provider);
+	const agentType = stringValue(source.agentType);
+	const task = stringValue(source.task);
+	const cwd = stringValue(source.cwd);
+	const status = workspaceAgentStatus(source.status);
+	const command = stringValue(source.command);
+	const startedAt = numberValue(source.startedAt);
+	const logPath = stringValue(source.logPath);
+	const args = Array.isArray(source.args)
+		? source.args.map(stringValue).filter((item) => item !== null)
+		: null;
+	if (
+		!id ||
+		!provider ||
+		!agentType ||
+		!task ||
+		!cwd ||
+		!status ||
+		!command ||
+		!args ||
+		!logPath ||
+		startedAt === null
+	) {
+		return null;
+	}
+	const pid = numberValue(source.pid);
+	const exitCode = source.exitCode === null ? null : numberValue(source.exitCode);
+	const signal = stringValue(source.signal);
+	const endedAt = numberValue(source.endedAt);
+	const previewUrl = workspacePreviewUrl(source.previewUrl);
+	const detectedPreviewUrl = previewUrl ?? previewUrlFromLog(logPath);
+	return {
+		id,
+		provider,
+		agentType,
+		task,
+		cwd,
+		status,
+		command,
+		args,
+		logPath,
+		...(detectedPreviewUrl ? { previewUrl: detectedPreviewUrl } : {}),
+		startedAt,
+		...(pid !== null ? { pid } : {}),
+		...(exitCode !== null || source.exitCode === null ? { exitCode } : {}),
+		...(signal !== null ? { signal } : {}),
+		...(endedAt !== null ? { endedAt } : {}),
+	};
+}
+
+function readWorkspaceAgents(): WorkspaceAgentRecord[] {
+	if (!existsSync(WORKSPACE_AGENT_STATE_FILE)) return [];
+	const parsed = recordValue(JSON.parse(readFileSync(WORKSPACE_AGENT_STATE_FILE, "utf8")));
+	const rawAgents = Array.isArray(parsed?.agents) ? parsed.agents : [];
+	return rawAgents
+		.map(parseWorkspaceAgent)
+		.filter((agent): agent is WorkspaceAgentRecord => agent !== null)
+		.sort((a, b) => b.startedAt - a.startedAt);
+}
+
+function safeWorkspaceAgentLogPath(agent: WorkspaceAgentRecord): string | null {
+	const expected = join(WORKSPACE_AGENT_STATE_DIR, `${agent.id}.log`);
+	return agent.logPath === expected ? expected : null;
+}
+
+function workspaceProjectId(cwd: string): string {
+	return Buffer.from(cwd, "utf8").toString("base64url");
+}
+
+function readWorkspaceProjects(): WorkspaceProjectRecord[] {
+	const byCwd = new Map<string, WorkspaceProjectRecord>();
+	for (const agent of readWorkspaceAgents()) {
+		const existing = byCwd.get(agent.cwd);
+		if (!existing) {
+			byCwd.set(agent.cwd, {
+				id: workspaceProjectId(agent.cwd),
+				name: basename(agent.cwd) || agent.cwd,
+				cwd: agent.cwd,
+				agentIds: [agent.id],
+				runningCount: agent.status === "running" ? 1 : 0,
+				completedCount: agent.status === "completed" ? 1 : 0,
+				failedCount: agent.status === "failed" ? 1 : 0,
+				latestStartedAt: agent.startedAt,
+				...(agent.previewUrl ? { previewUrl: agent.previewUrl } : {}),
+			});
+			continue;
+		}
+		existing.agentIds.push(agent.id);
+		if (agent.status === "running") existing.runningCount += 1;
+		if (agent.status === "completed") existing.completedCount += 1;
+		if (agent.status === "failed") existing.failedCount += 1;
+		if (agent.startedAt > existing.latestStartedAt) {
+			existing.latestStartedAt = agent.startedAt;
+			if (agent.previewUrl) existing.previewUrl = agent.previewUrl;
+		}
+	}
+	return [...byCwd.values()].sort((a, b) => b.latestStartedAt - a.latestStartedAt);
+}
+
+function resolveWorkspaceProject(projectId: string): WorkspaceProjectRecord | null {
+	return readWorkspaceProjects().find((project) => project.id === projectId) ?? null;
+}
+
+function projectSubpath(value: string | null): string {
+	const cleaned = value?.trim().replace(/\\/g, "/") ?? "";
+	return cleaned === "." ? "" : cleaned.replace(/^\/+/, "");
+}
+
+function safeProjectPath(project: WorkspaceProjectRecord, subpath: string): string | null {
+	if (!existsSync(project.cwd)) return null;
+	const root = realpathSync(project.cwd);
+	const target = resolve(root, subpath);
+	if (!existsSync(target)) return null;
+	const realTarget = realpathSync(target);
+	const rel = relative(root, realTarget);
+	if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+		return realTarget;
+	}
+	return null;
+}
+
+function languageForPath(filePath: string): string {
+	const lower = filePath.toLowerCase();
+	if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
+	if (lower.endsWith(".js") || lower.endsWith(".jsx") || lower.endsWith(".mjs")) return "javascript";
+	if (lower.endsWith(".css")) return "css";
+	if (lower.endsWith(".html")) return "html";
+	if (lower.endsWith(".json")) return "json";
+	if (lower.endsWith(".md") || lower.endsWith(".mdx")) return "markdown";
+	if (lower.endsWith(".py")) return "python";
+	if (lower.endsWith(".rs")) return "rust";
+	if (lower.endsWith(".go")) return "go";
+	if (lower.endsWith(".toml")) return "toml";
+	if (lower.endsWith(".yml") || lower.endsWith(".yaml")) return "yaml";
+	if (lower.endsWith(".sh") || lower.endsWith(".zsh")) return "shell";
+	return "text";
+}
+
+function readWorkspaceProjectFiles(
+	project: WorkspaceProjectRecord,
+	pathValue: string,
+): WorkspaceProjectFilesSnapshot | { error: string; status: number } {
+	const target = safeProjectPath(project, pathValue);
+	if (!target) return { error: "project path not found", status: 404 };
+	const stat = statSync(target);
+	if (!stat.isDirectory()) return { error: "project path is not a directory", status: 400 };
+	const root = realpathSync(project.cwd);
+	const entries: WorkspaceProjectFileNode[] = readdirSync(target, { withFileTypes: true })
+		.filter((entry) => !WORKSPACE_IGNORED_ENTRIES.has(entry.name))
+		.slice(0, MAX_WORKSPACE_DIRECTORY_ENTRIES)
+		.map((entry) => {
+			const absolute = join(target, entry.name);
+			const entryStat = statSync(absolute);
+			const relPath = relative(root, realpathSync(absolute)).replace(/\\/g, "/");
+			const type: WorkspaceProjectFileNode["type"] = entryStat.isDirectory()
+				? "directory"
+				: "file";
+			return {
+				name: entry.name,
+				path: relPath,
+				type,
+				...(entryStat.isFile() ? { size: entryStat.size } : {}),
+				updatedAt: entryStat.mtimeMs,
+			};
+		})
+		.sort((a, b) => {
+			if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+			return a.name.localeCompare(b.name);
+		});
+	return { projectId: project.id, cwd: project.cwd, path: pathValue, entries };
+}
+
+function readWorkspaceProjectFile(
+	project: WorkspaceProjectRecord,
+	pathValue: string,
+): WorkspaceProjectFile | { error: string; status: number } {
+	if (!pathValue) return { error: "path required", status: 400 };
+	const target = safeProjectPath(project, pathValue);
+	if (!target) return { error: "project file not found", status: 404 };
+	const stat = statSync(target);
+	if (!stat.isFile()) return { error: "project path is not a file", status: 400 };
+	if (stat.size > MAX_WORKSPACE_FILE_BYTES * 4) {
+		return { error: "file too large for public preview", status: 413 };
+	}
+	const raw = readFileSync(target);
+	if (raw.includes(0)) return { error: "binary files are not previewed", status: 415 };
+	const content = raw.subarray(0, MAX_WORKSPACE_FILE_BYTES).toString("utf8");
+	return {
+		projectId: project.id,
+		cwd: project.cwd,
+		path: pathValue,
+		name: basename(pathValue),
+		language: languageForPath(pathValue),
+		content,
+		size: stat.size,
+		updatedAt: stat.mtimeMs,
+		truncated: raw.byteLength > MAX_WORKSPACE_FILE_BYTES,
+	};
+}
+
 function recordValue(body: unknown): Record<string, unknown> | null {
 	return body && typeof body === "object" && !Array.isArray(body)
-		? body as Record<string, unknown>
+		? (body as Record<string, unknown>)
 		: null;
 }
 
-function optionalString(bag: Record<string, unknown>, key: string): string | undefined {
+function optionalString(
+	bag: Record<string, unknown>,
+	key: string,
+): string | undefined {
 	return typeof bag[key] === "string" ? bag[key] : undefined;
 }
 
-function optionalNumber(bag: Record<string, unknown>, key: string): number | undefined {
+function optionalNumber(
+	bag: Record<string, unknown>,
+	key: string,
+): number | undefined {
 	return typeof bag[key] === "number" ? bag[key] : undefined;
 }
 
-function optionalBoolean(bag: Record<string, unknown>, key: string): boolean | undefined {
+function optionalBoolean(
+	bag: Record<string, unknown>,
+	key: string,
+): boolean | undefined {
 	return typeof bag[key] === "boolean" ? bag[key] : undefined;
 }
 
-function optionalTypeError(bag: Record<string, unknown>, key: string, expected: "boolean" | "number"): string | null {
-	return bag[key] !== undefined && typeof bag[key] !== expected ? `${key} must be ${expected}` : null;
+function optionalTypeError(
+	bag: Record<string, unknown>,
+	key: string,
+	expected: "boolean" | "number",
+): string | null {
+	return bag[key] !== undefined && typeof bag[key] !== expected
+		? `${key} must be ${expected}`
+		: null;
 }
 
-function parseChroniclerConfig(raw: unknown): { ok: true; body: Partial<ChroniclerConfig> } | { ok: false; error: string } {
+function parseChroniclerConfig(
+	raw: unknown,
+):
+	| { ok: true; body: Partial<ChroniclerConfig> }
+	| { ok: false; error: string } {
 	const body = recordValue(raw);
 	if (!body) return { ok: false, error: "invalid chronicler config" };
 	const typeError =
-		optionalTypeError(body, "enabled", "boolean")
-		?? optionalTypeError(body, "includeWindowTitles", "boolean")
-		?? optionalTypeError(body, "intervalMs", "number")
-		?? optionalTypeError(body, "maxWindowsPerScreen", "number");
+		optionalTypeError(body, "enabled", "boolean") ??
+		optionalTypeError(body, "includeWindowTitles", "boolean") ??
+		optionalTypeError(body, "intervalMs", "number") ??
+		optionalTypeError(body, "maxWindowsPerScreen", "number");
 	if (typeError) return { ok: false, error: typeError };
 	return {
 		ok: true,
 		body: {
-			...(optionalBoolean(body, "enabled") !== undefined ? { enabled: optionalBoolean(body, "enabled") } : {}),
-			...(optionalNumber(body, "intervalMs") !== undefined ? { intervalMs: optionalNumber(body, "intervalMs") } : {}),
-			...(optionalBoolean(body, "includeWindowTitles") !== undefined ? { includeWindowTitles: optionalBoolean(body, "includeWindowTitles") } : {}),
-			...(optionalNumber(body, "maxWindowsPerScreen") !== undefined ? { maxWindowsPerScreen: optionalNumber(body, "maxWindowsPerScreen") } : {}),
+			...(optionalBoolean(body, "enabled") !== undefined
+				? { enabled: optionalBoolean(body, "enabled") }
+				: {}),
+			...(optionalNumber(body, "intervalMs") !== undefined
+				? { intervalMs: optionalNumber(body, "intervalMs") }
+				: {}),
+			...(optionalBoolean(body, "includeWindowTitles") !== undefined
+				? { includeWindowTitles: optionalBoolean(body, "includeWindowTitles") }
+				: {}),
+			...(optionalNumber(body, "maxWindowsPerScreen") !== undefined
+				? { maxWindowsPerScreen: optionalNumber(body, "maxWindowsPerScreen") }
+				: {}),
 		},
 	};
 }
@@ -181,7 +541,11 @@ const X_AUTONOMY_BOOLEAN_FIELDS: XAutonomyBooleanField[] = [
 	"proactiveEngagementEnabled",
 	"followEnabled",
 ];
-const X_AUTONOMY_NUMBER_FIELDS: Array<{ key: XAutonomyNumberField; min: number; max: number }> = [
+const X_AUTONOMY_NUMBER_FIELDS: Array<{
+	key: XAutonomyNumberField;
+	min: number;
+	max: number;
+}> = [
 	{ key: "intervalMs", min: 30_000, max: 30 * 60_000 },
 	{ key: "statusIntervalMs", min: 15 * 60_000, max: 24 * 60 * 60_000 },
 	{ key: "discoveryIntervalMs", min: 5 * 60_000, max: 24 * 60 * 60_000 },
@@ -189,10 +553,14 @@ const X_AUTONOMY_NUMBER_FIELDS: Array<{ key: XAutonomyNumberField; min: number; 
 	{ key: "maxDiscoveryPerTick", min: 0, max: 8 },
 ];
 
-function readBooleanUpdate(bag: Record<string, unknown>, key: string): XAutonomyFieldResult<boolean> {
+function readBooleanUpdate(
+	bag: Record<string, unknown>,
+	key: string,
+): XAutonomyFieldResult<boolean> {
 	const value = bag[key];
 	if (value === undefined) return { ok: true };
-	if (typeof value !== "boolean") return { ok: false, error: `${key} must be boolean` };
+	if (typeof value !== "boolean")
+		return { ok: false, error: `${key} must be boolean` };
 	return { ok: true, value };
 }
 
@@ -204,11 +572,14 @@ function readNumberUpdate(
 ): XAutonomyFieldResult<number> {
 	const value = bag[key];
 	if (value === undefined) return { ok: true };
-	if (typeof value !== "number" || !Number.isFinite(value)) return { ok: false, error: `${key} must be a finite number` };
+	if (typeof value !== "number" || !Number.isFinite(value))
+		return { ok: false, error: `${key} must be a finite number` };
 	return { ok: true, value: Math.max(min, Math.min(max, Math.round(value))) };
 }
 
-function readBooleanUpdates(bag: Record<string, unknown>): XAutonomyFieldResult<Partial<Record<XAutonomyBooleanField, boolean>>> {
+function readBooleanUpdates(
+	bag: Record<string, unknown>,
+): XAutonomyFieldResult<Partial<Record<XAutonomyBooleanField, boolean>>> {
 	const values: Partial<Record<XAutonomyBooleanField, boolean>> = {};
 	for (const key of X_AUTONOMY_BOOLEAN_FIELDS) {
 		const parsed = readBooleanUpdate(bag, key);
@@ -218,7 +589,9 @@ function readBooleanUpdates(bag: Record<string, unknown>): XAutonomyFieldResult<
 	return { ok: true, value: values };
 }
 
-function readNumberUpdates(bag: Record<string, unknown>): XAutonomyFieldResult<Partial<Record<XAutonomyNumberField, number>>> {
+function readNumberUpdates(
+	bag: Record<string, unknown>,
+): XAutonomyFieldResult<Partial<Record<XAutonomyNumberField, number>>> {
 	const values: Partial<Record<XAutonomyNumberField, number>> = {};
 	for (const field of X_AUTONOMY_NUMBER_FIELDS) {
 		const parsed = readNumberUpdate(bag, field.key, field.min, field.max);
@@ -228,12 +601,22 @@ function readNumberUpdates(bag: Record<string, unknown>): XAutonomyFieldResult<P
 	return { ok: true, value: values };
 }
 
-function readDiscoveryQueriesUpdate(bag: Record<string, unknown>): XAutonomyFieldResult<string[]> {
+function readDiscoveryQueriesUpdate(
+	bag: Record<string, unknown>,
+): XAutonomyFieldResult<string[]> {
 	if (bag.discoveryQueries !== undefined) {
-		if (!Array.isArray(bag.discoveryQueries)) return { ok: false, error: "discoveryQueries must be an array of strings" };
+		if (!Array.isArray(bag.discoveryQueries))
+			return {
+				ok: false,
+				error: "discoveryQueries must be an array of strings",
+			};
 		const queries: string[] = [];
 		for (const item of bag.discoveryQueries) {
-			if (typeof item !== "string") return { ok: false, error: "discoveryQueries must be an array of strings" };
+			if (typeof item !== "string")
+				return {
+					ok: false,
+					error: "discoveryQueries must be an array of strings",
+				};
 			const query = item.trim();
 			if (query.length > 0) queries.push(query);
 		}
@@ -257,7 +640,9 @@ function parseXAutonomyUpdate(body: unknown): XAutonomyUpdateParseResult {
 		update: {
 			...booleans.value,
 			...numbers.value,
-			...(discoveryQueries.value !== undefined ? { discoveryQueries: discoveryQueries.value } : {}),
+			...(discoveryQueries.value !== undefined
+				? { discoveryQueries: discoveryQueries.value }
+				: {}),
 		},
 	};
 }
@@ -309,52 +694,84 @@ function pensieveGraphFilter(url: URL): GraphFilter {
 	return filter;
 }
 
-function parseBrowserOpenCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
+function parseBrowserOpenCommand(
+	bag: Record<string, unknown>,
+): BrowserCommandInput | null {
 	const url = optionalString(bag, "url")?.trim() ?? "";
 	if (!url || url.length > 2048) return null;
 	return {
 		kind: "open",
 		url,
-		...(optionalBoolean(bag, "newTab") !== undefined ? { newTab: optionalBoolean(bag, "newTab") } : {}),
-		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
+		...(optionalBoolean(bag, "newTab") !== undefined
+			? { newTab: optionalBoolean(bag, "newTab") }
+			: {}),
+		...(optionalString(bag, "tabId")
+			? { tabId: optionalString(bag, "tabId") }
+			: {}),
 		source: "api",
 	};
 }
 
-function parseBrowserInspectCommand(bag: Record<string, unknown>): BrowserCommandInput {
+function parseBrowserInspectCommand(
+	bag: Record<string, unknown>,
+): BrowserCommandInput {
 	return {
 		kind: "inspect",
-		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
-		...(optionalNumber(bag, "timeoutMs") !== undefined ? { timeoutMs: optionalNumber(bag, "timeoutMs") } : {}),
+		...(optionalString(bag, "tabId")
+			? { tabId: optionalString(bag, "tabId") }
+			: {}),
+		...(optionalNumber(bag, "timeoutMs") !== undefined
+			? { timeoutMs: optionalNumber(bag, "timeoutMs") }
+			: {}),
 		source: "api",
 	};
 }
 
-function parseBrowserScriptCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
+function parseBrowserScriptCommand(
+	bag: Record<string, unknown>,
+): BrowserCommandInput | null {
 	const script = optionalString(bag, "script")?.trim() ?? "";
 	if (!script || script.length > 100_000) return null;
 	return {
 		kind: "script",
 		script,
-		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
-		...(optionalNumber(bag, "timeoutMs") !== undefined ? { timeoutMs: optionalNumber(bag, "timeoutMs") } : {}),
+		...(optionalString(bag, "tabId")
+			? { tabId: optionalString(bag, "tabId") }
+			: {}),
+		...(optionalNumber(bag, "timeoutMs") !== undefined
+			? { timeoutMs: optionalNumber(bag, "timeoutMs") }
+			: {}),
 		source: "api",
 	};
 }
 
-function parseBrowserLoginCommand(bag: Record<string, unknown>): BrowserCommandInput | null {
+function parseBrowserLoginCommand(
+	bag: Record<string, unknown>,
+): BrowserCommandInput | null {
 	const source = bag.source;
 	const identifier = optionalString(bag, "identifier")?.trim() ?? "";
-	if ((source !== "in-house" && source !== "1password" && source !== "bitwarden") || !identifier) return null;
+	if (
+		(source !== "in-house" &&
+			source !== "1password" &&
+			source !== "bitwarden") ||
+		!identifier
+	)
+		return null;
 	const targetUrl = optionalString(bag, "targetUrl")?.trim();
 	return {
 		kind: "fill-login",
 		source,
 		identifier,
 		...(targetUrl ? { targetUrl } : {}),
-		...(optionalBoolean(bag, "newTab") !== undefined ? { newTab: optionalBoolean(bag, "newTab") } : {}),
-		...(optionalString(bag, "tabId") ? { tabId: optionalString(bag, "tabId") } : {}),
-		...(optionalNumber(bag, "timeoutMs") !== undefined ? { timeoutMs: optionalNumber(bag, "timeoutMs") } : {}),
+		...(optionalBoolean(bag, "newTab") !== undefined
+			? { newTab: optionalBoolean(bag, "newTab") }
+			: {}),
+		...(optionalString(bag, "tabId")
+			? { tabId: optionalString(bag, "tabId") }
+			: {}),
+		...(optionalNumber(bag, "timeoutMs") !== undefined
+			? { timeoutMs: optionalNumber(bag, "timeoutMs") }
+			: {}),
 	};
 }
 
@@ -377,7 +794,10 @@ function parseBrowserCommandInput(body: unknown): BrowserCommandInput | null {
 
 type BrowserControlGlobal = {
 	enqueue(command: BrowserCommandInput): BrowserCommand;
-	enqueueAndWait(command: BrowserCommandInput, timeoutMs?: number): Promise<BrowserCommandResult>;
+	enqueueAndWait(
+		command: BrowserCommandInput,
+		timeoutMs?: number,
+	): Promise<BrowserCommandResult>;
 };
 
 type DebugEmbeddingBody = { text?: string; storeAs?: string };
@@ -387,22 +807,50 @@ type DebugEmbeddingRuntime = {
 	getService?: (type: string) => unknown;
 	adapter?: { embeddingDimension?: string };
 	createMemory?: (memory: Memory, table: string) => Promise<string>;
-	updateMemory?: (memory: { id: string; embedding: number[] }) => Promise<boolean>;
+	updateMemory?: (memory: {
+		id: string;
+		embedding: number[];
+	}) => Promise<boolean>;
 	agentId?: UUID;
 };
-type DebugEmbeddingWriteResult = { ok: boolean; memoryId?: string; error?: string };
-type DebugEmbeddingModelResult = { vector: number[]; modelErr: string | null; durationMs: number };
+type DebugEmbeddingWriteResult = {
+	ok: boolean;
+	memoryId?: string;
+	error?: string;
+};
+type DebugEmbeddingModelResult = {
+	vector: number[];
+	modelErr: string | null;
+	durationMs: number;
+};
+type DebugImageBody = { prompt?: string; size?: string };
+type DebugImageRuntime = {
+	useModel?: (
+		type: string,
+		params: { prompt: string; size?: string },
+	) => Promise<unknown>;
+};
+type GeneratedImage = {
+	url: string;
+	revisedPrompt?: string;
+};
 
 function embeddingVector(value: unknown): number[] {
-	return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number") : [];
+	return Array.isArray(value)
+		? value.filter((item): item is number => typeof item === "number")
+		: [];
 }
 
-async function runDebugEmbeddingModel(runtime: DebugEmbeddingRuntime, text: string): Promise<DebugEmbeddingModelResult> {
+async function runDebugEmbeddingModel(
+	runtime: DebugEmbeddingRuntime,
+	text: string,
+): Promise<DebugEmbeddingModelResult> {
 	let raw: unknown = null;
 	let modelErr: string | null = null;
 	const t0 = Date.now();
 	try {
-		if (runtime.useModel) raw = await runtime.useModel("TEXT_EMBEDDING", { text });
+		if (runtime.useModel)
+			raw = await runtime.useModel("TEXT_EMBEDDING", { text });
 	} catch (err) {
 		modelErr = err instanceof Error ? err.message : String(err);
 	}
@@ -419,21 +867,95 @@ async function writeDebugEmbedding(
 	text: string,
 	embedding: number[],
 ): Promise<DebugEmbeddingWriteResult | null> {
-	if (!body.storeAs || !runtime.createMemory || !runtime.updateMemory) return null;
+	if (!body.storeAs || !runtime.createMemory || !runtime.updateMemory)
+		return null;
 	if (!runtime.agentId) return null;
 	try {
-		const memId = await runtime.createMemory({
-			entityId: runtime.agentId,
-			roomId: runtime.agentId,
-			agentId: runtime.agentId,
-			content: { text, source: "debug" },
-			createdAt: Date.now(),
-		}, body.storeAs);
+		const memId = await runtime.createMemory(
+			{
+				entityId: runtime.agentId,
+				roomId: runtime.agentId,
+				agentId: runtime.agentId,
+				content: { text, source: "debug" },
+				createdAt: Date.now(),
+			},
+			body.storeAs,
+		);
 		await runtime.updateMemory({ id: memId, embedding });
 		return { ok: true, memoryId: String(memId) };
 	} catch (err) {
-		return { ok: false, error: err instanceof Error ? err.message : String(err) };
+		return {
+			ok: false,
+			error: err instanceof Error ? err.message : String(err),
+		};
 	}
+}
+
+function generatedImage(value: unknown): GeneratedImage | null {
+	if (!Array.isArray(value)) return null;
+	for (const item of value) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const bag = item as Record<string, unknown>;
+		if (typeof bag.url !== "string" || bag.url.length === 0) continue;
+		return {
+			url: bag.url,
+			...(typeof bag.revisedPrompt === "string"
+				? { revisedPrompt: bag.revisedPrompt }
+				: {}),
+		};
+	}
+	return null;
+}
+
+function imageExtension(contentType: string): string {
+	const subtype = contentType.split("/")[1]?.split(";")[0]?.trim().toLowerCase();
+	if (!subtype) return "png";
+	if (subtype === "jpeg") return "jpg";
+	const safe = subtype.replace(/[^a-z0-9]/g, "");
+	return safe.length > 0 ? safe : "png";
+}
+
+function copiedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	const buffer = new ArrayBuffer(bytes.byteLength);
+	new Uint8Array(buffer).set(bytes);
+	return buffer;
+}
+
+async function imageResponseFromUrl(url: string): Promise<Response> {
+	const dataUrl = url.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+	if (dataUrl) {
+		const contentType = dataUrl[1] ?? "image/png";
+		const bytes = Buffer.from(dataUrl[2] ?? "", "base64");
+		return new Response(copiedArrayBuffer(bytes), {
+			headers: {
+				"content-type": contentType,
+				"content-disposition": `attachment; filename="detour-image-proof.${imageExtension(contentType)}"`,
+			},
+		});
+	}
+	if (/^https?:\/\//i.test(url)) {
+		const image = await fetch(url);
+		if (!image.ok) throw new Error(`image download failed: HTTP ${image.status}`);
+		const contentType = image.headers.get("content-type") ?? "image/png";
+		return new Response(await image.arrayBuffer(), {
+			headers: {
+				"content-type": contentType,
+				"content-disposition": `attachment; filename="detour-image-proof.${imageExtension(contentType)}"`,
+			},
+		});
+	}
+	if (existsSync(url)) {
+		const contentType = url.toLowerCase().endsWith(".jpg") || url.toLowerCase().endsWith(".jpeg")
+			? "image/jpeg"
+			: "image/png";
+		return new Response(Bun.file(url), {
+			headers: {
+				"content-type": contentType,
+				"content-disposition": `attachment; filename="detour-image-proof.${imageExtension(contentType)}"`,
+			},
+		});
+	}
+	throw new Error("image result URL was not fetchable");
 }
 
 export type WindowCommand =
@@ -452,10 +974,14 @@ export class ApiServer {
 	private channelReloadTimer: ReturnType<typeof setTimeout> | null = null;
 	private browserCommands: BrowserCommand[] = [];
 	private browserResults = new Map<string, BrowserCommandResult>();
-	private browserWaiters = new Map<string, {
-		resolve: (result: BrowserCommandResult) => void;
-		timer: ReturnType<typeof setTimeout>;
-	}>();
+	private agentStreamTimers = new Map<string, ReturnType<typeof setInterval>>();
+	private browserWaiters = new Map<
+		string,
+		{
+			resolve: (result: BrowserCommandResult) => void;
+			timer: ReturnType<typeof setTimeout>;
+		}
+	>();
 
 	/**
 	 * Debounce runtime reloads triggered by channel credential changes.
@@ -476,9 +1002,12 @@ export class ApiServer {
 	}
 
 	private installBrowserControlGlobal(): void {
-		(globalThis as Record<symbol, BrowserControlGlobal>)[BROWSER_CONTROL_GLOBAL] = {
+		(globalThis as Record<symbol, BrowserControlGlobal>)[
+			BROWSER_CONTROL_GLOBAL
+		] = {
 			enqueue: (command) => this.enqueueBrowserCommand(command),
-			enqueueAndWait: (command, timeoutMs) => this.enqueueBrowserCommandAndWait(command, timeoutMs),
+			enqueueAndWait: (command, timeoutMs) =>
+				this.enqueueBrowserCommandAndWait(command, timeoutMs),
 		};
 	}
 
@@ -497,14 +1026,20 @@ export class ApiServer {
 		} as BrowserCommand;
 		this.browserCommands.push(command);
 		if (this.browserCommands.length > MAX_BROWSER_COMMANDS) {
-			this.browserCommands.splice(0, this.browserCommands.length - MAX_BROWSER_COMMANDS);
+			this.browserCommands.splice(
+				0,
+				this.browserCommands.length - MAX_BROWSER_COMMANDS,
+			);
 		}
 		this.broadcast({ kind: "ui:open-browser" });
 		this.broadcast({ kind: "browser:command", command });
 		return command;
 	}
 
-	private enqueueBrowserCommandAndWait(input: BrowserCommandInput, timeoutMs = 30_000): Promise<BrowserCommandResult> {
+	private enqueueBrowserCommandAndWait(
+		input: BrowserCommandInput,
+		timeoutMs = 30_000,
+	): Promise<BrowserCommandResult> {
 		const command = this.enqueueBrowserCommand(input);
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
@@ -519,7 +1054,10 @@ export class ApiServer {
 		});
 	}
 
-	private finishBrowserCommand(commandId: string, result: Omit<BrowserCommandResult, "time"> & { time?: number }): BrowserCommandResult {
+	private finishBrowserCommand(
+		commandId: string,
+		result: Omit<BrowserCommandResult, "time"> & { time?: number },
+	): BrowserCommandResult {
 		const complete: BrowserCommandResult = {
 			...result,
 			time: typeof result.time === "number" ? result.time : Date.now(),
@@ -562,15 +1100,19 @@ export class ApiServer {
 		private readonly ownerBind: OwnerBindService,
 	) {}
 
-	private async updateChroniclerConfig(ctx: ApiRequestContext): Promise<Response> {
+	private async updateChroniclerConfig(
+		ctx: ApiRequestContext,
+	): Promise<Response> {
 		const parsed = parseChroniclerConfig(await ctx.req.json());
 		if (!parsed.ok) return ctx.error(parsed.error, 400);
 		const current = this.pensieve.chronicler.getConfig();
 		const next = await this.pensieve.chronicler.configure({
 			enabled: parsed.body.enabled ?? current.enabled,
 			intervalMs: parsed.body.intervalMs ?? current.intervalMs,
-			includeWindowTitles: parsed.body.includeWindowTitles ?? current.includeWindowTitles,
-			maxWindowsPerScreen: parsed.body.maxWindowsPerScreen ?? current.maxWindowsPerScreen,
+			includeWindowTitles:
+				parsed.body.includeWindowTitles ?? current.includeWindowTitles,
+			maxWindowsPerScreen:
+				parsed.body.maxWindowsPerScreen ?? current.maxWindowsPerScreen,
 		});
 		pensieveAudit({
 			action: "chronicler.configure",
@@ -582,9 +1124,16 @@ export class ApiServer {
 		return ctx.json(next);
 	}
 
-	private async updateMemory(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+	private async updateMemory(
+		ctx: ApiRequestContext,
+		rawId: string,
+	): Promise<Response> {
 		const id = decodeURIComponent(rawId) as never;
-		const body = (await ctx.req.json()) as { contentText?: string; tags?: string[]; path?: string };
+		const body = (await ctx.req.json()) as {
+			contentText?: string;
+			tags?: string[];
+			path?: string;
+		};
 		let success = false;
 		let errMsg: string | undefined;
 		try {
@@ -603,7 +1152,10 @@ export class ApiServer {
 		return success ? ctx.ok() : ctx.error(errMsg ?? "update failed", 400);
 	}
 
-	private async deleteMemory(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+	private async deleteMemory(
+		ctx: ApiRequestContext,
+		rawId: string,
+	): Promise<Response> {
 		const id = decodeURIComponent(rawId) as never;
 		let success = false;
 		let errMsg: string | undefined;
@@ -624,7 +1176,9 @@ export class ApiServer {
 	}
 
 	private async createRelationship(ctx: ApiRequestContext): Promise<Response> {
-		const body = (await ctx.req.json()) as Parameters<typeof this.pensieve.relationships.create>[0];
+		const body = (await ctx.req.json()) as Parameters<
+			typeof this.pensieve.relationships.create
+		>[0];
 		let success = false;
 		let errMsg: string | undefined;
 		try {
@@ -643,10 +1197,17 @@ export class ApiServer {
 		return success ? ctx.ok() : ctx.error(errMsg ?? "create failed", 400);
 	}
 
-	private async updateRelationship(ctx: ApiRequestContext, rawSource: string, rawTarget: string): Promise<Response> {
+	private async updateRelationship(
+		ctx: ApiRequestContext,
+		rawSource: string,
+		rawTarget: string,
+	): Promise<Response> {
 		const source = decodeURIComponent(rawSource) as never;
 		const target = decodeURIComponent(rawTarget) as never;
-		const body = (await ctx.req.json()) as { tags?: string[]; metadata?: Record<string, unknown> };
+		const body = (await ctx.req.json()) as {
+			tags?: string[];
+			metadata?: Record<string, unknown>;
+		};
 		let success = false;
 		let errMsg: string | undefined;
 		try {
@@ -665,7 +1226,11 @@ export class ApiServer {
 		return success ? ctx.ok() : ctx.error(errMsg ?? "update failed", 400);
 	}
 
-	private async deleteRelationship(ctx: ApiRequestContext, rawSource: string, rawTarget: string): Promise<Response> {
+	private async deleteRelationship(
+		ctx: ApiRequestContext,
+		rawSource: string,
+		rawTarget: string,
+	): Promise<Response> {
 		const source = decodeURIComponent(rawSource) as never;
 		const target = decodeURIComponent(rawTarget) as never;
 		let success = false;
@@ -686,9 +1251,16 @@ export class ApiServer {
 		return success ? ctx.ok() : ctx.error(errMsg ?? "delete failed", 400);
 	}
 
-	private async updateTemplate(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+	private async updateTemplate(
+		ctx: ApiRequestContext,
+		rawId: string,
+	): Promise<Response> {
 		const id = decodeURIComponent(rawId);
-		const body = (await ctx.req.json()) as { body?: string; tags?: string[]; path?: string };
+		const body = (await ctx.req.json()) as {
+			body?: string;
+			tags?: string[];
+			path?: string;
+		};
 		let success = false;
 		let errMsg: string | undefined;
 		try {
@@ -707,7 +1279,10 @@ export class ApiServer {
 		return success ? ctx.ok() : ctx.error(errMsg ?? "update failed", 400);
 	}
 
-	private async deleteTemplate(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+	private async deleteTemplate(
+		ctx: ApiRequestContext,
+		rawId: string,
+	): Promise<Response> {
 		const id = decodeURIComponent(rawId);
 		let success = false;
 		let errMsg: string | undefined;
@@ -734,11 +1309,19 @@ export class ApiServer {
 		if (!live) return ctx.error("runtime not built", 503);
 		const runtime = live as DebugEmbeddingRuntime;
 		const model = await runDebugEmbeddingModel(runtime, text);
-		const embSvc = runtime.getService?.("embedding-generation") as {
-			isDisabled?: boolean;
-			batchQueue?: { size?: number; isStarted?: boolean } | null;
-		} | null | undefined;
-		const writeResult = await writeDebugEmbedding(runtime, body, text, model.vector);
+		const embSvc = runtime.getService?.("embedding-generation") as
+			| {
+					isDisabled?: boolean;
+					batchQueue?: { size?: number; isStarted?: boolean } | null;
+			  }
+			| null
+			| undefined;
+		const writeResult = await writeDebugEmbedding(
+			runtime,
+			body,
+			text,
+			model.vector,
+		);
 		return ctx.json({
 			hasModel: runtime.getModel?.("TEXT_EMBEDDING") !== undefined,
 			adapterEmbeddingDimension: runtime.adapter?.embeddingDimension ?? null,
@@ -755,7 +1338,31 @@ export class ApiServer {
 		});
 	}
 
-	private async deleteActivityTask(ctx: ApiRequestContext, rawId: string): Promise<Response> {
+	private async debugImage(ctx: ApiRequestContext): Promise<Response> {
+		const body = (await ctx.req.json().catch(() => ({}))) as DebugImageBody;
+		const prompt =
+			typeof body.prompt === "string" && body.prompt.trim().length > 0
+				? body.prompt.trim()
+				: "A small proof image of a neon command console with the words Detour image pipeline works, crisp bitmap, square.";
+		const live = this.runtime.peek();
+		if (!live) return ctx.error("runtime not built", 503);
+		const runtime = live as DebugImageRuntime;
+		if (!runtime.useModel) return ctx.error("runtime.useModel is not a function", 503);
+		const result = await runtime.useModel(ModelType.IMAGE, {
+			prompt,
+			...(typeof body.size === "string" && body.size.trim().length > 0
+				? { size: body.size.trim() }
+				: {}),
+		});
+		const image = generatedImage(result);
+		if (!image) return ctx.error("image generation returned no image", 502);
+		return imageResponseFromUrl(image.url);
+	}
+
+	private async deleteActivityTask(
+		ctx: ApiRequestContext,
+		rawId: string,
+	): Promise<Response> {
 		const id = decodeURIComponent(rawId);
 		let success = false;
 		let errMsg: string | undefined;
@@ -782,7 +1389,9 @@ export class ApiServer {
 			return await this.tryStart(preferredPort);
 		} catch (err) {
 			if ((err as { code?: string }).code === "EADDRINUSE") {
-				console.warn(`[core] port ${preferredPort} in use, falling back to ephemeral`);
+				console.warn(
+					`[core] port ${preferredPort} in use, falling back to ephemeral`,
+				);
 				return this.tryStart(0);
 			}
 			throw err;
@@ -807,12 +1416,21 @@ export class ApiServer {
 			},
 			websocket: {
 				open: (ws) => {
+					if (ws.data.kind === "agent-log") {
+						this.openAgentLogStream(ws);
+						return;
+					}
 					this.subscribers.set(ws.data.id, ws);
 				},
 				close: (ws) => {
+					if (ws.data.kind === "agent-log") {
+						this.closeAgentLogStream(ws.data.id);
+						return;
+					}
 					this.subscribers.delete(ws.data.id);
 				},
 				message: async (ws, raw) => {
+					if (ws.data.kind === "agent-log") return;
 					let msg: WsClientMessage;
 					try {
 						msg = JSON.parse(raw.toString()) as WsClientMessage;
@@ -856,14 +1474,25 @@ export class ApiServer {
 						await traceScope(traceId, async () => {
 							try {
 								await this.runtime.sendMessage(text, (delta) => {
-									this.broadcast({ kind: "chat:delta", convId, delta, traceId });
+									this.broadcast({
+										kind: "chat:delta",
+										convId,
+										delta,
+										traceId,
+									});
 									armIdle();
 								});
 								fireComplete();
 							} catch (err) {
 								if (idleTimer) clearTimeout(idleTimer);
-								const message = err instanceof Error ? err.message : String(err);
-								this.broadcast({ kind: "chat:error", convId, message, traceId });
+								const message =
+									err instanceof Error ? err.message : String(err);
+								this.broadcast({
+									kind: "chat:error",
+									convId,
+									message,
+									traceId,
+								});
 							}
 						});
 					}
@@ -902,7 +1531,7 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/providers/openrouter/models") {
 				const manager = await this.vault.manager();
-				const apiKey = await manager.has("OPENROUTER_API_KEY")
+				const apiKey = (await manager.has("OPENROUTER_API_KEY"))
 					? await manager.get("OPENROUTER_API_KEY")
 					: undefined;
 				return json(await fetchOpenRouterModels({ apiKey }));
@@ -1002,7 +1631,9 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			const signInMatch = path.match(/^\/api\/backends\/([^/]+)\/signin$/);
 			if (req.method === "POST" && signInMatch) {
-				const id = decodeURIComponent(signInMatch[1] ?? "") as InstallableBackendId;
+				const id = decodeURIComponent(
+					signInMatch[1] ?? "",
+				) as InstallableBackendId;
 				const body = (await req.json()) as Omit<
 					Parameters<typeof this.backendOps.signIn>[0],
 					"backendId"
@@ -1017,7 +1648,9 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			const signOutMatch = path.match(/^\/api\/backends\/([^/]+)\/signout$/);
 			if (req.method === "POST" && signOutMatch) {
-				const id = decodeURIComponent(signOutMatch[1] ?? "") as InstallableBackendId;
+				const id = decodeURIComponent(
+					signOutMatch[1] ?? "",
+				) as InstallableBackendId;
 				await this.backendOps.signOut(id);
 				this.broadcast({ kind: "backend:changed", backendId: id });
 				return ok();
@@ -1039,7 +1672,11 @@ export class ApiServer {
 							? "start"
 							: "xdg-open";
 				const { spawn: sp } = await import("node:child_process");
-				sp(cmd, [body.url], { stdio: "ignore", detached: true, shell: false }).unref();
+				sp(cmd, [body.url], {
+					stdio: "ignore",
+					detached: true,
+					shell: false,
+				}).unref();
 				return ok();
 			}
 			return null;
@@ -1048,14 +1685,23 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/browser/commands") {
 				const after = url.searchParams.get("after") ?? "";
-				const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : 0;
+				const since = url.searchParams.get("since")
+					? Number(url.searchParams.get("since"))
+					: 0;
 				const afterIndex = after
 					? this.browserCommands.findIndex((command) => command.id === after)
 					: -1;
-				const commands = afterIndex >= 0
-					? this.browserCommands.slice(afterIndex + 1)
-					: this.browserCommands.filter((command) => !since || command.time >= since);
-				return json({ commands: commands.filter((command) => !this.browserResults.has(command.id)) });
+				const commands =
+					afterIndex >= 0
+						? this.browserCommands.slice(afterIndex + 1)
+						: this.browserCommands.filter(
+								(command) => !since || command.time >= since,
+							);
+				return json({
+					commands: commands.filter(
+						(command) => !this.browserResults.has(command.id),
+					),
+				});
 			}
 			return null;
 		},
@@ -1070,10 +1716,12 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const browserResultMatch = path.match(/^\/api\/browser\/commands\/([^/]+)\/result$/);
+			const browserResultMatch = path.match(
+				/^\/api\/browser\/commands\/([^/]+)\/result$/,
+			);
 			if (req.method === "POST" && browserResultMatch) {
 				const id = decodeURIComponent(browserResultMatch[1] ?? "");
-				const body = await req.json() as Record<string, unknown>;
+				const body = (await req.json()) as Record<string, unknown>;
 				const okResult = body.ok === true;
 				const result = this.finishBrowserCommand(id, {
 					ok: okResult,
@@ -1149,7 +1797,9 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "PUT" && path === "/api/config/agent") {
-				const body = (await req.json()) as Parameters<ConfigService["setAgent"]>[0];
+				const body = (await req.json()) as Parameters<
+					ConfigService["setAgent"]
+				>[0];
 				await this.config.setAgent(body);
 				return ok();
 			}
@@ -1165,7 +1815,9 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "PUT" && path === "/api/config/character") {
-				const body = (await req.json()) as Parameters<ConfigService["setCharacter"]>[0];
+				const body = (await req.json()) as Parameters<
+					ConfigService["setCharacter"]
+				>[0];
 				await this.config.setCharacter(body);
 				await this.runtime.rebuild().catch(() => {});
 				return ok();
@@ -1182,7 +1834,9 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "PUT" && path === "/api/config/models") {
-				const body = (await req.json()) as Parameters<ConfigService["setModels"]>[0];
+				const body = (await req.json()) as Parameters<
+					ConfigService["setModels"]
+				>[0];
 				await this.config.setModels(body);
 				// Rebuild runtime so new model names take effect immediately
 				await this.runtime.rebuild().catch(() => {});
@@ -1200,7 +1854,9 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "PUT" && path === "/api/config/window") {
-				const body = (await req.json()) as Parameters<ConfigService["setWindow"]>[0];
+				const body = (await req.json()) as Parameters<
+					ConfigService["setWindow"]
+				>[0];
 				await this.config.setWindow(body);
 				return ok();
 			}
@@ -1211,8 +1867,12 @@ export class ApiServer {
 			// --- UI preferences (theme + accent), persisted to vault ---
 			if (req.method === "GET" && path === "/api/ui/preferences") {
 				const v = await this.vault.vault();
-				const theme = (await v.has("ui.theme")) ? await v.get("ui.theme") : "system";
-				const accent = (await v.has("ui.accent")) ? await v.get("ui.accent") : "#0a84ff";
+				const theme = (await v.has("ui.theme"))
+					? await v.get("ui.theme")
+					: "system";
+				const accent = (await v.has("ui.accent"))
+					? await v.get("ui.accent")
+					: "#0a84ff";
 				return json({ theme, accent });
 			}
 			return null;
@@ -1223,14 +1883,16 @@ export class ApiServer {
 				const body = (await req.json()) as { theme?: string; accent?: string };
 				const v = await this.vault.vault();
 				if (typeof body.theme === "string") await v.set("ui.theme", body.theme);
-				if (typeof body.accent === "string") await v.set("ui.accent", body.accent);
+				if (typeof body.accent === "string")
+					await v.set("ui.accent", body.accent);
 				// Broadcast so other open windows (Pensieve, Activity, Channels)
 				// can re-apply the new theme/accent live without a reload.
-				const theme = ((await v.has("ui.theme")) ? await v.get("ui.theme") : "system") as
-					| "system"
-					| "light"
-					| "dark";
-				const accent = (await v.has("ui.accent")) ? await v.get("ui.accent") : "#0a84ff";
+				const theme = (
+					(await v.has("ui.theme")) ? await v.get("ui.theme") : "system"
+				) as "system" | "light" | "dark";
+				const accent = (await v.has("ui.accent"))
+					? await v.get("ui.accent")
+					: "#0a84ff";
 				this.broadcast({
 					kind: "ui:preferences-changed",
 					preferences: { theme, accent },
@@ -1266,7 +1928,9 @@ export class ApiServer {
 						...item,
 						category: categorizeKey(item.key),
 						provider: inferProviderId(item.key) ?? null,
-						meta: await readEntryMeta(manager.vault, item.key).catch(() => null),
+						meta: await readEntryMeta(manager.vault, item.key).catch(
+							() => null,
+						),
 					})),
 				);
 				return json(enriched);
@@ -1362,9 +2026,7 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const reveal = path.match(
-				/^\/api\/saved-logins\/([^/]+)\/(.+)$/,
-			);
+			const reveal = path.match(/^\/api\/saved-logins\/([^/]+)\/(.+)$/);
 			if (reveal) {
 				const source = decodeURIComponent(reveal[1] ?? "") as
 					| "in-house"
@@ -1438,19 +2100,103 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
+			if (req.method === "OPTIONS" && path.startsWith("/api/activity/workspace-")) {
+				return publicOptions();
+			}
+			if (req.method === "GET" && path === "/api/activity/workspace-agents") {
+				return publicJson({
+					agents: readWorkspaceAgents(),
+					stateDir: WORKSPACE_AGENT_STATE_DIR,
+					updatedAt: Date.now(),
+				});
+			}
+			if (req.method === "GET" && path === "/api/activity/workspace-projects") {
+				return publicJson({
+					projects: readWorkspaceProjects(),
+					updatedAt: Date.now(),
+				});
+			}
+			const projectFiles = path.match(
+				/^\/api\/activity\/workspace-projects\/([^/]+)\/files$/,
+			);
+			if (req.method === "GET" && projectFiles) {
+				const project = resolveWorkspaceProject(decodeURIComponent(projectFiles[1] ?? ""));
+				if (!project) return publicError("workspace project not found", 404);
+				const result = readWorkspaceProjectFiles(
+					project,
+					projectSubpath(url.searchParams.get("path")),
+				);
+				if ("error" in result) return publicError(result.error, result.status);
+				return publicJson(result);
+			}
+			const projectFile = path.match(
+				/^\/api\/activity\/workspace-projects\/([^/]+)\/file$/,
+			);
+			if (req.method === "GET" && projectFile) {
+				const project = resolveWorkspaceProject(decodeURIComponent(projectFile[1] ?? ""));
+				if (!project) return publicError("workspace project not found", 404);
+				const result = readWorkspaceProjectFile(
+					project,
+					projectSubpath(url.searchParams.get("path")),
+				);
+				if ("error" in result) return publicError(result.error, result.status);
+				return publicJson(result);
+			}
+			const logMatch = path.match(
+				/^\/api\/activity\/workspace-agents\/([^/]+)\/log$/,
+			);
+			if (req.method === "GET" && logMatch) {
+				const id = decodeURIComponent(logMatch[1] ?? "");
+				const agent = readWorkspaceAgents().find((item) => item.id === id);
+				if (!agent) return publicError("workspace agent not found", 404);
+				const logPath = safeWorkspaceAgentLogPath(agent);
+				if (!logPath || !existsSync(logPath)) {
+					return publicJson({
+						id,
+						offset: 0,
+						nextOffset: 0,
+						text: "",
+						truncated: false,
+					});
+				}
+				const rawOffset = Number(url.searchParams.get("offset") ?? 0);
+				const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+				const data = readFileSync(logPath);
+				const start = Math.min(offset, data.byteLength);
+				const available = data.byteLength - start;
+				const take = Math.min(available, MAX_WORKSPACE_AGENT_LOG_CHARS);
+				const text = data.subarray(start, start + take).toString("utf8");
+				return publicJson({
+					id,
+					offset: start,
+					nextOffset: start + take,
+					text,
+					truncated: available > take,
+				});
+			}
+			return null;
+		},
+		async (ctx) => {
+			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/activity/logs") {
 				const level = url.searchParams.get("level") ?? undefined;
 				const source = url.searchParams.get("source") ?? undefined;
 				const q = url.searchParams.get("q") ?? undefined;
-				const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
-				const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : undefined;
-				return json(this.activity.logs.list({
-					...(level ? { level } : {}),
-					...(source ? { source } : {}),
-					...(q ? { q } : {}),
-					...(limit ? { limit } : {}),
-					...(since ? { since } : {}),
-				}));
+				const limit = url.searchParams.get("limit")
+					? Number(url.searchParams.get("limit"))
+					: undefined;
+				const since = url.searchParams.get("since")
+					? Number(url.searchParams.get("since"))
+					: undefined;
+				return json(
+					this.activity.logs.list({
+						...(level ? { level } : {}),
+						...(source ? { source } : {}),
+						...(q ? { q } : {}),
+						...(limit ? { limit } : {}),
+						...(since ? { since } : {}),
+					}),
+				);
 			}
 			return null;
 		},
@@ -1462,12 +2208,15 @@ export class ApiServer {
 				const status = url.searchParams.get("status") ?? undefined;
 				const source = url.searchParams.get("source") ?? undefined;
 				const q = url.searchParams.get("q") ?? undefined;
-				return json(await this.activity.trajectories.list({
-					limit, offset,
-					...(status ? { status } : {}),
-					...(source ? { source } : {}),
-					...(q ? { q } : {}),
-				}));
+				return json(
+					await this.activity.trajectories.list({
+						limit,
+						offset,
+						...(status ? { status } : {}),
+						...(source ? { source } : {}),
+						...(q ? { q } : {}),
+					}),
+				);
 			}
 			return null;
 		},
@@ -1475,13 +2224,49 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			const trajGet = path.match(/^\/api\/activity\/trajectories\/([^/]+)$/);
 			if (req.method === "GET" && trajGet) {
-				return json(await this.activity.trajectories.get(decodeURIComponent(trajGet[1] ?? "")));
+				return json(
+					await this.activity.trajectories.get(
+						decodeURIComponent(trajGet[1] ?? ""),
+					),
+				);
 			}
-			if (req.method === "POST" && path === "/api/activity/trajectories/export") {
+			if (
+				req.method === "POST" &&
+				path === "/api/activity/trajectories/export.zip"
+			) {
+				const body = (await req.json().catch(() => ({}))) as {
+					ids?: string[];
+					includePrompts?: boolean;
+				};
+				const exported = await this.activity.trajectories.exportZip({
+					...(Array.isArray(body.ids) && body.ids.length > 0
+						? { ids: body.ids }
+						: {}),
+					...(typeof body.includePrompts === "boolean"
+						? { includePrompts: body.includePrompts }
+						: {}),
+				});
+				const responseBody = new ArrayBuffer(exported.data.byteLength);
+				new Uint8Array(responseBody).set(exported.data);
+				return new Response(responseBody, {
+					headers: {
+						"content-type": exported.mimeType,
+						"content-disposition": `attachment; filename="${exported.filename}"`,
+						"x-trajectory-count": String(exported.count),
+					},
+				});
+			}
+			if (
+				req.method === "POST" &&
+				path === "/api/activity/trajectories/export"
+			) {
 				const body = (await req.json().catch(() => ({}))) as { ids?: string[] };
-				const ids = Array.isArray(body.ids) && body.ids.length > 0
-					? body.ids
-					: ((await this.activity.trajectories.list({ limit: 500 })).trajectories.map((t) => t.id));
+				const ids =
+					Array.isArray(body.ids) && body.ids.length > 0
+						? body.ids
+						: (
+								await this.activity.trajectories.list({ limit: 500 })
+							).trajectories.map((t) => t.id);
 				const details = await this.activity.trajectories.getMany(ids);
 				return json({
 					exportedAt: Date.now(),
@@ -1497,9 +2282,11 @@ export class ApiServer {
 			if (req.method === "GET" && path === "/api/pensieve/memories/tree") {
 				const table = parseMemoryTable(url.searchParams.get("tableName"));
 				if (!table.ok) return error(table.error, 400);
-				return json(await this.pensieve.memories.tree({
-					...(table.tableName ? { tableName: table.tableName } : {}),
-				}));
+				return json(
+					await this.pensieve.memories.tree({
+						...(table.tableName ? { tableName: table.tableName } : {}),
+					}),
+				);
 			}
 			return null;
 		},
@@ -1512,11 +2299,22 @@ export class ApiServer {
 					limit: Number(url.searchParams.get("limit") ?? 100),
 					...(table.tableName ? { tableName: table.tableName } : {}),
 				};
-				for (const key of ["roomId", "entityId", "type", "tag", "q", "pathPrefix"]) {
+				for (const key of [
+					"roomId",
+					"entityId",
+					"type",
+					"tag",
+					"q",
+					"pathPrefix",
+				]) {
 					const v = url.searchParams.get(key);
 					if (v) opts[key] = v;
 				}
-				return json(await this.pensieve.memories.list(opts as Parameters<typeof this.pensieve.memories.list>[0]));
+				return json(
+					await this.pensieve.memories.list(
+						opts as Parameters<typeof this.pensieve.memories.list>[0],
+					),
+				);
 			}
 			return null;
 		},
@@ -1622,7 +2420,7 @@ export class ApiServer {
 					ts: Date.now(),
 				});
 				return success
-					? json({ ok: true, ...result as Record<string, unknown> })
+					? json({ ok: true, ...(result as Record<string, unknown>) })
 					: error(errMsg ?? "knowledge service not available", 400);
 			}
 			return null;
@@ -1655,7 +2453,9 @@ export class ApiServer {
 					caller: "ui-pensieve",
 					ts: Date.now(),
 				});
-				return success ? json({ ok: true, id: createdId }) : error(errMsg ?? "create failed", 400);
+				return success
+					? json({ ok: true, id: createdId })
+					: error(errMsg ?? "create failed", 400);
 			}
 			return null;
 		},
@@ -1663,7 +2463,9 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/pensieve/memories/search") {
 				const body = (await req.json()) as { text: string; limit?: number };
-				return json(await this.pensieve.memories.search(body.text, body.limit ?? 30));
+				return json(
+					await this.pensieve.memories.search(body.text, body.limit ?? 30),
+				);
 			}
 			return null;
 		},
@@ -1674,7 +2476,9 @@ export class ApiServer {
 				const id = decodeURIComponent(memGet[1] ?? "") as never;
 				const detail = await this.pensieve.memories.get(id);
 				if (!detail) return error("not found", 404);
-				const backlinks = await this.pensieve.graph.backlinksForMemory(memGet[1] ?? "");
+				const backlinks = await this.pensieve.graph.backlinksForMemory(
+					memGet[1] ?? "",
+				);
 				return json({ ...detail, backlinks });
 			}
 			return null;
@@ -1697,7 +2501,10 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json } = ctx;
-			if (req.method === "GET" && path === "/api/pensieve/relationships/persons") {
+			if (
+				req.method === "GET" &&
+				path === "/api/pensieve/relationships/persons"
+			) {
 				const limit = Number(url.searchParams.get("limit") ?? 100);
 				return json(await this.pensieve.relationships.listPersons(limit));
 			}
@@ -1717,10 +2524,16 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/pensieve/relationships") {
-				const ids = (url.searchParams.get("entityIds") ?? "").split(",").filter(Boolean) as never[];
-				const tags = (url.searchParams.get("tags") ?? "").split(",").filter(Boolean);
+				const ids = (url.searchParams.get("entityIds") ?? "")
+					.split(",")
+					.filter(Boolean) as never[];
+				const tags = (url.searchParams.get("tags") ?? "")
+					.split(",")
+					.filter(Boolean);
 				const limit = Number(url.searchParams.get("limit") ?? 200);
-				return json(await this.pensieve.relationships.listRelationships(ids, tags, limit));
+				return json(
+					await this.pensieve.relationships.listRelationships(ids, tags, limit),
+				);
 			}
 			return null;
 		},
@@ -1733,7 +2546,9 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, path } = ctx;
-			const relPair = path.match(/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/);
+			const relPair = path.match(
+				/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/,
+			);
 			if (req.method === "PATCH" && relPair) {
 				return this.updateRelationship(ctx, relPair[1] ?? "", relPair[2] ?? "");
 			}
@@ -1741,7 +2556,9 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, path } = ctx;
-			const relPair = path.match(/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/);
+			const relPair = path.match(
+				/^\/api\/pensieve\/relationships\/([^/]+)\/([^/]+)$/,
+			);
 			if (req.method === "DELETE" && relPair) {
 				return this.deleteRelationship(ctx, relPair[1] ?? "", relPair[2] ?? "");
 			}
@@ -1758,7 +2575,11 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/pensieve/templates") {
-				const body = (await req.json()) as { name: string; body: string; tags?: string[] };
+				const body = (await req.json()) as {
+					name: string;
+					body: string;
+					tags?: string[];
+				};
 				let success = false;
 				let id: string | undefined;
 				let errMsg: string | undefined;
@@ -1777,7 +2598,9 @@ export class ApiServer {
 					caller: "ui-pensieve",
 					ts: Date.now(),
 				});
-				return success ? json({ ok: true, id }) : error(errMsg ?? "create failed", 400);
+				return success
+					? json({ ok: true, id })
+					: error(errMsg ?? "create failed", 400);
 			}
 			return null;
 		},
@@ -1809,11 +2632,18 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const tplRender = path.match(/^\/api\/pensieve\/templates\/([^/]+)\/render$/);
+			const tplRender = path.match(
+				/^\/api\/pensieve\/templates\/([^/]+)\/render$/,
+			);
 			if (req.method === "POST" && tplRender) {
 				const id = decodeURIComponent(tplRender[1] ?? "");
-				const body = (await req.json().catch(() => ({}))) as { vars?: Record<string, string> };
-				const result = await this.pensieve.templates.renderTemplate(id, body.vars ?? {});
+				const body = (await req.json().catch(() => ({}))) as {
+					vars?: Record<string, string>;
+				};
+				const result = await this.pensieve.templates.renderTemplate(
+					id,
+					body.vars ?? {},
+				);
 				pensieveAudit({
 					action: "template.render",
 					target: id,
@@ -1859,10 +2689,23 @@ export class ApiServer {
 					success = await this.pensieve.templates.deleteVariable(name);
 				} catch (err) {
 					const m = err instanceof Error ? err.message : String(err);
-					pensieveAudit({ action: "promptvar.delete", target: name, success: false, error: m, caller: "ui-pensieve", ts: Date.now() });
+					pensieveAudit({
+						action: "promptvar.delete",
+						target: name,
+						success: false,
+						error: m,
+						caller: "ui-pensieve",
+						ts: Date.now(),
+					});
 					return error(m, 400);
 				}
-				pensieveAudit({ action: "promptvar.delete", target: name, success, caller: "ui-pensieve", ts: Date.now() });
+				pensieveAudit({
+					action: "promptvar.delete",
+					target: name,
+					success,
+					caller: "ui-pensieve",
+					ts: Date.now(),
+				});
 				return success ? ok() : error("not found", 404);
 			}
 			return null;
@@ -1881,21 +2724,32 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/channels/credentials") {
-				const body = (await req.json()) as { key: string; value: string; skipValidate?: boolean };
+				const body = (await req.json()) as {
+					key: string;
+					value: string;
+					skipValidate?: boolean;
+				};
 				// Pre-flight validation against the channel's authoritative
 				// API. We'd rather reject a dead token loudly than save it
 				// and have the user wonder why the bot is silently broken
 				// (the historical Discord pain point). Pass skipValidate=true
 				// to bypass — useful if the API is briefly down.
 				if (!body.skipValidate) {
-					const validation = await validateChannelCredential(body.key, body.value);
+					const validation = await validateChannelCredential(
+						body.key,
+						body.value,
+					);
 					if (!validation.ok) {
 						return error(validation.error, 400);
 					}
 				}
 				await this.channels.setCredential(body.key, body.value);
 				this.scheduleChannelReload();
-				return json({ ok: true, reloadScheduled: true, validated: !body.skipValidate });
+				return json({
+					ok: true,
+					reloadScheduled: true,
+					validated: !body.skipValidate,
+				});
 			}
 			return null;
 		},
@@ -1903,7 +2757,9 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			const credDelete = path.match(/^\/api\/channels\/credentials\/([^/]+)$/);
 			if (req.method === "DELETE" && credDelete) {
-				await this.channels.clearCredential(decodeURIComponent(credDelete[1] ?? ""));
+				await this.channels.clearCredential(
+					decodeURIComponent(credDelete[1] ?? ""),
+				);
 				this.scheduleChannelReload();
 				return json({ ok: true, reloadScheduled: true });
 			}
@@ -1927,18 +2783,44 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/channels/discord/guilds") {
 				const live = this.runtime.peek();
-				const svc = live ? (live as unknown as { getService?: (t: string) => unknown }).getService?.("discord") as
-					{ client?: { guilds?: { cache?: Map<string, { id: string; name: string; channels?: { cache?: Map<string, { id: string; name: string; type?: number }> } }> } } } | null
+				const svc = live
+					? ((
+							live as unknown as { getService?: (t: string) => unknown }
+						).getService?.("discord") as {
+							client?: {
+								guilds?: {
+									cache?: Map<
+										string,
+										{
+											id: string;
+											name: string;
+											channels?: {
+												cache?: Map<
+													string,
+													{ id: string; name: string; type?: number }
+												>;
+											};
+										}
+									>;
+								};
+							};
+						} | null)
 					: null;
 				const cache = svc?.client?.guilds?.cache;
 				if (!cache) return json({ guilds: [] });
-				const out: Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> = [];
+				const out: Array<{
+					id: string;
+					name: string;
+					channels: Array<{ id: string; name: string; type: number }>;
+				}> = [];
 				for (const [, g] of cache) {
-					const channels: Array<{ id: string; name: string; type: number }> = [];
+					const channels: Array<{ id: string; name: string; type: number }> =
+						[];
 					const ch = g.channels?.cache;
-					if (ch) for (const [, c] of ch) {
-						channels.push({ id: c.id, name: c.name, type: c.type ?? -1 });
-					}
+					if (ch)
+						for (const [, c] of ch) {
+							channels.push({ id: c.id, name: c.name, type: c.type ?? -1 });
+						}
 					out.push({ id: g.id, name: g.name, channels });
 				}
 				return json({ guilds: out });
@@ -1950,16 +2832,49 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/channels/discord/backfill") {
-				const body = (await req.json()) as { channelId: string; limit?: number; force?: boolean };
+				const body = (await req.json()) as {
+					channelId: string;
+					limit?: number;
+					force?: boolean;
+				};
 				const live = this.runtime.peek();
-				const svc = live ? (live as unknown as { getService?: (t: string) => unknown }).getService?.("discord") as
-					{ fetchChannelHistory?: (channelId: string, opts: { limit?: number; force?: boolean }) => Promise<{ stats: { fetched: number; stored: number; pages: number; fullyBackfilled: boolean } }> }
+				const svc = live
+					? ((
+							live as unknown as { getService?: (t: string) => unknown }
+						).getService?.("discord") as {
+							fetchChannelHistory?: (
+								channelId: string,
+								opts: { limit?: number; force?: boolean },
+							) => Promise<{
+								stats: {
+									fetched: number;
+									stored: number;
+									pages: number;
+									fullyBackfilled: boolean;
+								};
+							}>;
+						})
 					: null;
-				if (!svc?.fetchChannelHistory) return error("Discord service not loaded", 400);
+				if (!svc?.fetchChannelHistory)
+					return error("Discord service not loaded", 400);
 				// Run in background; client polls trajectories/memories to see progress.
-				void svc.fetchChannelHistory(body.channelId, { limit: body.limit ?? 200, force: !!body.force })
-					.then((r) => console.log(`[discord] backfill complete for ${body.channelId}:`, r.stats))
-					.catch((err) => console.warn(`[discord] backfill failed for ${body.channelId}:`, err instanceof Error ? err.message : err));
+				void svc
+					.fetchChannelHistory(body.channelId, {
+						limit: body.limit ?? 200,
+						force: !!body.force,
+					})
+					.then((r) =>
+						console.log(
+							`[discord] backfill complete for ${body.channelId}:`,
+							r.stats,
+						),
+					)
+					.catch((err) =>
+						console.warn(
+							`[discord] backfill failed for ${body.channelId}:`,
+							err instanceof Error ? err.message : err,
+						),
+					);
 				return json({ ok: true, scheduled: true, channelId: body.channelId });
 			}
 			return null;
@@ -1982,7 +2897,12 @@ export class ApiServer {
 				if (wait) {
 					try {
 						const result = await runDiscordCatchUp(live, options);
-						return json({ ok: true, scheduled: false, result, ...(channelId ? { channelId } : {}) });
+						return json({
+							ok: true,
+							scheduled: false,
+							result,
+							...(channelId ? { channelId } : {}),
+						});
 					} catch (err) {
 						return error(err instanceof Error ? err.message : String(err), 400);
 					}
@@ -1998,7 +2918,11 @@ export class ApiServer {
 						"Discord catch-up failed",
 					);
 				});
-				return json({ ok: true, scheduled: true, ...(channelId ? { channelId } : {}) });
+				return json({
+					ok: true,
+					scheduled: true,
+					...(channelId ? { channelId } : {}),
+				});
 			}
 			return null;
 		},
@@ -2015,7 +2939,9 @@ export class ApiServer {
 			if (req.method === "GET" && path === "/api/gateway/identities") {
 				const all = url.searchParams.get("all") === "1";
 				return json({
-					identities: all ? this.gateway.allIdentities() : this.gateway.identityCandidates(),
+					identities: all
+						? this.gateway.allIdentities()
+						: this.gateway.identityCandidates(),
 				});
 			}
 			return null;
@@ -2028,16 +2954,22 @@ export class ApiServer {
 				const kind = url.searchParams.get("kind") as InboxKind | null;
 				const source = url.searchParams.get("source") ?? undefined;
 				const channel = url.searchParams.get("channel") ?? undefined;
-				const since = url.searchParams.get("since") ? Number(url.searchParams.get("since")) : undefined;
-				const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
-				return json(this.inbox.list({
-					...(status ? { status } : {}),
-					...(kind ? { kind } : {}),
-					...(source ? { source } : {}),
-					...(channel ? { channel } : {}),
-					...(since ? { since } : {}),
-					...(limit ? { limit } : {}),
-				}));
+				const since = url.searchParams.get("since")
+					? Number(url.searchParams.get("since"))
+					: undefined;
+				const limit = url.searchParams.get("limit")
+					? Number(url.searchParams.get("limit"))
+					: undefined;
+				return json(
+					this.inbox.list({
+						...(status ? { status } : {}),
+						...(kind ? { kind } : {}),
+						...(source ? { source } : {}),
+						...(channel ? { channel } : {}),
+						...(since ? { since } : {}),
+						...(limit ? { limit } : {}),
+					}),
+				);
 			}
 			return null;
 		},
@@ -2060,7 +2992,10 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			// --- Debug: probe text-model pipeline end-to-end ---
 			if (req.method === "POST" && path === "/api/debug/text-model") {
-				const body = (await req.json().catch(() => ({}))) as { type?: string; prompt?: string };
+				const body = (await req.json().catch(() => ({}))) as {
+					type?: string;
+					prompt?: string;
+				};
 				const modelType = body.type ?? "TEXT_LARGE";
 				const prompt = body.prompt ?? "Reply with the single word: pong";
 				const live = this.runtime.peek();
@@ -2071,14 +3006,24 @@ export class ApiServer {
 					models?: Map<string, unknown[]>;
 				};
 				const handlers = r.models?.get?.(modelType);
-				const handlerCount = Array.isArray(handlers) ? handlers.length : (handlers ? 1 : 0);
-				const hasModel = typeof r.getModel === "function" && r.getModel(modelType) !== undefined;
+				const handlerCount = Array.isArray(handlers)
+					? handlers.length
+					: handlers
+						? 1
+						: 0;
+				const hasModel =
+					typeof r.getModel === "function" &&
+					r.getModel(modelType) !== undefined;
 				let result: unknown = null;
 				let err: string | null = null;
 				const t0 = Date.now();
 				try {
 					if (typeof r.useModel === "function") {
-						result = await r.useModel(modelType, { prompt, maxTokens: 50, temperature: 0 });
+						result = await r.useModel(modelType, {
+							prompt,
+							maxTokens: 50,
+							temperature: 0,
+						});
 					} else {
 						err = "runtime.useModel is not a function";
 					}
@@ -2102,6 +3047,9 @@ export class ApiServer {
 			// --- Debug: probe embedding pipeline end-to-end ---
 			if (req.method === "POST" && path === "/api/debug/embedding") {
 				return this.debugEmbedding(ctx);
+			}
+			if (req.method === "POST" && path === "/api/debug/image") {
+				return this.debugImage(ctx);
 			}
 			return null;
 		},
@@ -2198,8 +3146,16 @@ export class ApiServer {
 			if (req.method === "POST" && path === "/api/owner-bind/code") {
 				const body = (await req.json()) as { connector?: string };
 				const connector = body.connector;
-				if (connector !== "telegram" && connector !== "discord" && connector !== "wechat" && connector !== "matrix") {
-					return error("connector must be telegram | discord | wechat | matrix", 400);
+				if (
+					connector !== "telegram" &&
+					connector !== "discord" &&
+					connector !== "wechat" &&
+					connector !== "matrix"
+				) {
+					return error(
+						"connector must be telegram | discord | wechat | matrix",
+						400,
+					);
 				}
 				const issued = this.ownerBind.generateCode(connector);
 				return json({ ok: true, ...issued, connector });
@@ -2208,7 +3164,9 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const ownerStatus = path.match(/^\/api\/owner-bind\/(telegram|discord|wechat|matrix)$/);
+			const ownerStatus = path.match(
+				/^\/api\/owner-bind\/(telegram|discord|wechat|matrix)$/,
+			);
 			if (ownerStatus) {
 				const connector = (ownerStatus[1] ?? "") as OwnerConnector;
 				if (req.method === "GET") {
@@ -2259,13 +3217,18 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			// --- Activity DB inspector (read-only) ---
 			if (req.method === "GET" && path === "/api/activity/db/tables") {
-				return json({ available: this.activity.db.available(), tables: await this.activity.db.listTables() });
+				return json({
+					available: this.activity.db.available(),
+					tables: await this.activity.db.listTables(),
+				});
 			}
 			return null;
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const dbDescribe = path.match(/^\/api\/activity\/db\/tables\/([^/]+)\/([^/]+)$/);
+			const dbDescribe = path.match(
+				/^\/api\/activity\/db\/tables\/([^/]+)\/([^/]+)$/,
+			);
 			if (req.method === "GET" && dbDescribe) {
 				const schema = decodeURIComponent(dbDescribe[1] ?? "");
 				const name = decodeURIComponent(dbDescribe[2] ?? "");
@@ -2313,8 +3276,15 @@ export class ApiServer {
 				for (const [key, value] of xAutonomyRuntimeSettings(parsed.update)) {
 					await v.set(key, value);
 				}
-				const applied = await this.activity.autonomy.applyXSettings(parsed.update);
-				pensieveAudit({ action: "autonomy.x.configure", success: applied, caller: "ui-activity", ts: Date.now() });
+				const applied = await this.activity.autonomy.applyXSettings(
+					parsed.update,
+				);
+				pensieveAudit({
+					action: "autonomy.x.configure",
+					success: applied,
+					caller: "ui-activity",
+					ts: Date.now(),
+				});
 				return json(await this.activity.autonomy.snapshot());
 			}
 			return null;
@@ -2323,7 +3293,12 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/activity/autonomy/enable") {
 				const success = await this.activity.autonomy.setEnabled(true);
-				pensieveAudit({ action: "autonomy.enable", success, caller: "ui-activity", ts: Date.now() });
+				pensieveAudit({
+					action: "autonomy.enable",
+					success,
+					caller: "ui-activity",
+					ts: Date.now(),
+				});
 				return success ? ok() : error("autonomy service not available", 400);
 			}
 			return null;
@@ -2332,7 +3307,12 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/activity/autonomy/disable") {
 				const success = await this.activity.autonomy.setEnabled(false);
-				pensieveAudit({ action: "autonomy.disable", success, caller: "ui-activity", ts: Date.now() });
+				pensieveAudit({
+					action: "autonomy.disable",
+					success,
+					caller: "ui-activity",
+					ts: Date.now(),
+				});
 				return success ? ok() : error("autonomy service not available", 400);
 			}
 			return null;
@@ -2341,8 +3321,16 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "POST" && path === "/api/activity/autonomy/interval") {
 				const body = (await req.json()) as { intervalMs: number };
-				const success = await this.activity.autonomy.setIntervalMs(body.intervalMs);
-				pensieveAudit({ action: "autonomy.interval", target: String(body.intervalMs), success, caller: "ui-activity", ts: Date.now() });
+				const success = await this.activity.autonomy.setIntervalMs(
+					body.intervalMs,
+				);
+				pensieveAudit({
+					action: "autonomy.interval",
+					target: String(body.intervalMs),
+					success,
+					caller: "ui-activity",
+					ts: Date.now(),
+				});
 				return success ? ok() : error("could not set interval", 400);
 			}
 			return null;
@@ -2357,7 +3345,9 @@ export class ApiServer {
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const taskAction = path.match(/^\/api\/activity\/tasks\/([^/]+)\/(run|pause|resume)$/);
+			const taskAction = path.match(
+				/^\/api\/activity\/tasks\/([^/]+)\/(run|pause|resume)$/,
+			);
 			if (req.method === "POST" && taskAction) {
 				const id = decodeURIComponent(taskAction[1] ?? "");
 				const action = taskAction[2] ?? "";
@@ -2365,8 +3355,10 @@ export class ApiServer {
 				let errMsg: string | undefined;
 				try {
 					if (action === "run") success = await this.activity.tasks.runNow(id);
-					else if (action === "pause") success = await this.activity.tasks.pause(id, true);
-					else if (action === "resume") success = await this.activity.tasks.pause(id, false);
+					else if (action === "pause")
+						success = await this.activity.tasks.pause(id, true);
+					else if (action === "resume")
+						success = await this.activity.tasks.pause(id, false);
 				} catch (err) {
 					errMsg = err instanceof Error ? err.message : String(err);
 				}
@@ -2393,7 +3385,9 @@ export class ApiServer {
 		async (ctx) => {
 			const { req, url, path, json } = ctx;
 			if (req.method === "GET" && path === "/api/pensieve/graph") {
-				return json(await this.pensieve.graph.snapshot(pensieveGraphFilter(url)));
+				return json(
+					await this.pensieve.graph.snapshot(pensieveGraphFilter(url)),
+				);
 			}
 			return null;
 		},
@@ -2420,16 +3414,22 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			const accountList = path.match(/^\/api\/auth\/accounts\/([^/]+)$/);
 			if (req.method === "GET" && accountList) {
-				const provider = decodeURIComponent(accountList[1] ?? "") as AccountCredentialProvider;
+				const provider = decodeURIComponent(
+					accountList[1] ?? "",
+				) as AccountCredentialProvider;
 				return json(this.auth.listAccounts(provider));
 			}
 			return null;
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
-			const accountDelete = path.match(/^\/api\/auth\/accounts\/([^/]+)\/(.+)$/);
+			const accountDelete = path.match(
+				/^\/api\/auth\/accounts\/([^/]+)\/(.+)$/,
+			);
 			if (req.method === "DELETE" && accountDelete) {
-				const provider = decodeURIComponent(accountDelete[1] ?? "") as AccountCredentialProvider;
+				const provider = decodeURIComponent(
+					accountDelete[1] ?? "",
+				) as AccountCredentialProvider;
 				const accountId = decodeURIComponent(accountDelete[2] ?? "");
 				this.auth.deleteAccount(provider, accountId);
 				await this.runtime.rebuild().catch(() => {});
@@ -2467,7 +3467,10 @@ export class ApiServer {
 								});
 							})
 							.catch((err) =>
-								console.error("[runtime] rebuild after OAuth success failed:", err),
+								console.error(
+									"[runtime] rebuild after OAuth success failed:",
+									err,
+								),
 							);
 					}
 				});
@@ -2522,7 +3525,23 @@ export class ApiServer {
 
 		if (path === "/ws") {
 			const id = crypto.randomUUID();
-			if (server.upgrade(req, { data: { id } })) return;
+			if (server.upgrade(req, { data: { id, kind: "app" } })) return;
+			return responses.error("upgrade failed", 426);
+		}
+		const agentStream = path.match(
+			/^\/api\/activity\/workspace-agents\/([^/]+)\/stream$/,
+		);
+		if (agentStream) {
+			const agentId = decodeURIComponent(agentStream[1] ?? "");
+			if (!readWorkspaceAgents().some((agent) => agent.id === agentId)) {
+				return responses.error("workspace agent not found", 404);
+			}
+			const rawOffset = Number(url.searchParams.get("offset") ?? 0);
+			const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+			const id = crypto.randomUUID();
+			if (server.upgrade(req, {
+				data: { id, kind: "agent-log", agentId, offset },
+			})) return;
 			return responses.error("upgrade failed", 426);
 		}
 
@@ -2545,11 +3564,17 @@ export class ApiServer {
 		this.removeLockfile();
 		this.server?.stop(true);
 		this.server = null;
+		for (const timer of this.agentStreamTimers.values()) clearInterval(timer);
+		this.agentStreamTimers.clear();
 		for (const ws of this.subscribers.values()) ws.close();
 		this.subscribers.clear();
 		for (const [id, waiter] of this.browserWaiters.entries()) {
 			clearTimeout(waiter.timer);
-			waiter.resolve({ ok: false, error: `Browser command ${id} canceled because API server stopped.`, time: Date.now() });
+			waiter.resolve({
+				ok: false,
+				error: `Browser command ${id} canceled because API server stopped.`,
+				time: Date.now(),
+			});
 		}
 		this.browserWaiters.clear();
 	}
@@ -2565,6 +3590,36 @@ export class ApiServer {
 
 	private send(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {
 		ws.send(JSON.stringify(msg));
+	}
+
+	private openAgentLogStream(ws: ServerWebSocket<WsData>): void {
+		if (ws.data.kind !== "agent-log") return;
+		const agentId = ws.data.agentId;
+		let offset = ws.data.offset;
+		const sendNext = () => {
+			const agent = readWorkspaceAgents().find((item) => item.id === agentId);
+			if (!agent) {
+				ws.close();
+				return;
+			}
+			const logPath = safeWorkspaceAgentLogPath(agent);
+			if (!logPath || !existsSync(logPath)) return;
+			const data = readFileSync(logPath);
+			const start = Math.min(offset, data.byteLength);
+			const available = data.byteLength - start;
+			if (available <= 0) return;
+			const take = Math.min(available, MAX_WORKSPACE_AGENT_LOG_CHARS);
+			ws.send(data.subarray(start, start + take).toString("utf8"));
+			offset = start + take;
+		};
+		sendNext();
+		this.agentStreamTimers.set(ws.data.id, setInterval(sendNext, 1000));
+	}
+
+	private closeAgentLogStream(id: string): void {
+		const timer = this.agentStreamTimers.get(id);
+		if (timer) clearInterval(timer);
+		this.agentStreamTimers.delete(id);
 	}
 
 	/** Public broadcast — used by features outside the API server (e.g. tray to push `ui:open-settings`). */
@@ -2615,8 +3670,13 @@ export class ApiServer {
  * error: "..."}` only when validation actively failed (auth rejection,
  * network reachable but bad token).
  */
-type CredentialValidationResult = { ok: true; info?: string } | { ok: false; error: string };
-type CredentialValidator = (key: string, trimmed: string) => Promise<CredentialValidationResult>;
+type CredentialValidationResult =
+	| { ok: true; info?: string }
+	| { ok: false; error: string };
+type CredentialValidator = (
+	key: string,
+	trimmed: string,
+) => Promise<CredentialValidationResult>;
 
 const CREDENTIAL_VALIDATION_TIMEOUT_MS = 5000;
 const CREDENTIAL_VALIDATORS: Record<string, CredentialValidator> = {
@@ -2626,13 +3686,17 @@ const CREDENTIAL_VALIDATORS: Record<string, CredentialValidator> = {
 	GITHUB_TOKEN: (_key, trimmed) => validateGitHubCredential(trimmed),
 	GITHUB_USER_PAT: (_key, trimmed) => validateGitHubCredential(trimmed),
 	GITHUB_AGENT_PAT: (_key, trimmed) => validateGitHubCredential(trimmed),
-	OPENAI_EMBEDDING_API_KEY: (_key, trimmed) => validateOpenAICredential(trimmed),
+	OPENAI_EMBEDDING_API_KEY: (_key, trimmed) =>
+		validateOpenAICredential(trimmed),
 	OPENAI_API_KEY: (_key, trimmed) => validateOpenAICredential(trimmed),
 	X_AUTH_TOKEN: validateXCredential,
 	X_CT0: validateXCredential,
 };
 
-async function fetchCredentialValidation(url: string, init: RequestInit = {}): Promise<Response> {
+async function fetchCredentialValidation(
+	url: string,
+	init: RequestInit = {},
+): Promise<Response> {
 	const ctl = new AbortController();
 	const t = setTimeout(() => ctl.abort(), CREDENTIAL_VALIDATION_TIMEOUT_MS);
 	try {
@@ -2642,44 +3706,94 @@ async function fetchCredentialValidation(url: string, init: RequestInit = {}): P
 	}
 }
 
-async function validateChannelCredential(key: string, value: string): Promise<CredentialValidationResult> {
+async function validateChannelCredential(
+	key: string,
+	value: string,
+): Promise<CredentialValidationResult> {
 	const trimmed = value.trim();
 	if (trimmed.length === 0) return { ok: false, error: `${key} is empty` };
 	const validate = CREDENTIAL_VALIDATORS[key];
 	return validate ? validate(key, trimmed) : { ok: true };
 }
 
-async function validateDiscordCredential(trimmed: string): Promise<CredentialValidationResult> {
+async function validateDiscordCredential(
+	trimmed: string,
+): Promise<CredentialValidationResult> {
 	try {
-		const res = await fetchCredentialValidation("https://discord.com/api/v10/users/@me", {
-			headers: { Authorization: `Bot ${trimmed}` },
-		});
-		if (res.status === 401) return { ok: false, error: "Discord rejected the token (401 Unauthorized) — regenerate it in Developer Portal → Bot → Reset Token." };
-		if (res.status === 403) return { ok: false, error: "Discord rejected the token (403 Forbidden) — bot lacks required permissions." };
-		if (!res.ok) return { ok: false, error: `Discord token check failed: HTTP ${res.status}` };
-		const body = await res.json() as { username?: string; id?: string };
-		if (!body.id || !body.username) return { ok: false, error: "Discord responded but token didn't return a bot user" };
+		const res = await fetchCredentialValidation(
+			"https://discord.com/api/v10/users/@me",
+			{
+				headers: { Authorization: `Bot ${trimmed}` },
+			},
+		);
+		if (res.status === 401)
+			return {
+				ok: false,
+				error:
+					"Discord rejected the token (401 Unauthorized) — regenerate it in Developer Portal → Bot → Reset Token.",
+			};
+		if (res.status === 403)
+			return {
+				ok: false,
+				error:
+					"Discord rejected the token (403 Forbidden) — bot lacks required permissions.",
+			};
+		if (!res.ok)
+			return {
+				ok: false,
+				error: `Discord token check failed: HTTP ${res.status}`,
+			};
+		const body = (await res.json()) as { username?: string; id?: string };
+		if (!body.id || !body.username)
+			return {
+				ok: false,
+				error: "Discord responded but token didn't return a bot user",
+			};
 		return { ok: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { ok: false, error: `Could not reach Discord to validate token: ${msg}` };
+		return {
+			ok: false,
+			error: `Could not reach Discord to validate token: ${msg}`,
+		};
 	}
 }
 
-async function validateTelegramCredential(trimmed: string): Promise<CredentialValidationResult> {
+async function validateTelegramCredential(
+	trimmed: string,
+): Promise<CredentialValidationResult> {
 	try {
-		const res = await fetchCredentialValidation(`https://api.telegram.org/bot${encodeURIComponent(trimmed)}/getMe`);
-		const body = await res.json() as { ok?: boolean; description?: string; result?: { username?: string } };
-		if (!body.ok) return { ok: false, error: `Telegram rejected the token: ${body.description ?? "unknown error"}` };
-		if (!body.result?.username) return { ok: false, error: "Telegram responded but didn't return bot info" };
+		const res = await fetchCredentialValidation(
+			`https://api.telegram.org/bot${encodeURIComponent(trimmed)}/getMe`,
+		);
+		const body = (await res.json()) as {
+			ok?: boolean;
+			description?: string;
+			result?: { username?: string };
+		};
+		if (!body.ok)
+			return {
+				ok: false,
+				error: `Telegram rejected the token: ${body.description ?? "unknown error"}`,
+			};
+		if (!body.result?.username)
+			return {
+				ok: false,
+				error: "Telegram responded but didn't return bot info",
+			};
 		return { ok: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { ok: false, error: `Could not reach Telegram to validate token: ${msg}` };
+		return {
+			ok: false,
+			error: `Could not reach Telegram to validate token: ${msg}`,
+		};
 	}
 }
 
-async function validateGitHubCredential(trimmed: string): Promise<CredentialValidationResult> {
+async function validateGitHubCredential(
+	trimmed: string,
+): Promise<CredentialValidationResult> {
 	try {
 		const res = await fetchCredentialValidation("https://api.github.com/user", {
 			headers: {
@@ -2688,32 +3802,69 @@ async function validateGitHubCredential(trimmed: string): Promise<CredentialVali
 				"X-GitHub-Api-Version": "2022-11-28",
 			},
 		});
-		if (res.status === 401) return { ok: false, error: "GitHub rejected the token (401 Unauthorized)." };
-		if (res.status === 403) return { ok: false, error: "GitHub rejected the token (403 Forbidden or rate limited)." };
-		if (!res.ok) return { ok: false, error: `GitHub token check failed: HTTP ${res.status}` };
-		const body = await res.json() as { login?: string };
-		return { ok: true, ...(body.login ? { info: `signed in as @${body.login}` } : {}) };
+		if (res.status === 401)
+			return {
+				ok: false,
+				error: "GitHub rejected the token (401 Unauthorized).",
+			};
+		if (res.status === 403)
+			return {
+				ok: false,
+				error: "GitHub rejected the token (403 Forbidden or rate limited).",
+			};
+		if (!res.ok)
+			return {
+				ok: false,
+				error: `GitHub token check failed: HTTP ${res.status}`,
+			};
+		const body = (await res.json()) as { login?: string };
+		return {
+			ok: true,
+			...(body.login ? { info: `signed in as @${body.login}` } : {}),
+		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { ok: false, error: `Could not reach GitHub to validate token: ${msg}` };
+		return {
+			ok: false,
+			error: `Could not reach GitHub to validate token: ${msg}`,
+		};
 	}
 }
 
-async function validateOpenAICredential(trimmed: string): Promise<CredentialValidationResult> {
+async function validateOpenAICredential(
+	trimmed: string,
+): Promise<CredentialValidationResult> {
 	try {
-		const res = await fetchCredentialValidation("https://api.openai.com/v1/models", {
-			headers: { Authorization: `Bearer ${trimmed}` },
-		});
-		if (res.status === 401) return { ok: false, error: "OpenAI rejected the API key (401 Unauthorized)." };
-		if (!res.ok) return { ok: false, error: `OpenAI key check failed: HTTP ${res.status}` };
+		const res = await fetchCredentialValidation(
+			"https://api.openai.com/v1/models",
+			{
+				headers: { Authorization: `Bearer ${trimmed}` },
+			},
+		);
+		if (res.status === 401)
+			return {
+				ok: false,
+				error: "OpenAI rejected the API key (401 Unauthorized).",
+			};
+		if (!res.ok)
+			return {
+				ok: false,
+				error: `OpenAI key check failed: HTTP ${res.status}`,
+			};
 		return { ok: true };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { ok: false, error: `Could not reach OpenAI to validate key: ${msg}` };
+		return {
+			ok: false,
+			error: `Could not reach OpenAI to validate key: ${msg}`,
+		};
 	}
 }
 
-async function validateXCredential(key: string, trimmed: string): Promise<CredentialValidationResult> {
+async function validateXCredential(
+	key: string,
+	trimmed: string,
+): Promise<CredentialValidationResult> {
 	const otherKey = key === "X_AUTH_TOKEN" ? "X_CT0" : "X_AUTH_TOKEN";
 	const otherValue = process.env[otherKey];
 	if (!otherValue) return { ok: true };
@@ -2729,10 +3880,14 @@ async function validateXCredential(key: string, trimmed: string): Promise<Creden
 		if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
 			return {
 				ok: false,
-				error: "X rejected the cookies (auth_token + ct0). Re-export both from x.com via Cookie-Editor and try again.",
+				error:
+					"X rejected the cookies (auth_token + ct0). Re-export both from x.com via Cookie-Editor and try again.",
 			};
 		}
-		return { ok: false, error: `Could not reach X to validate cookies: ${msg}` };
+		return {
+			ok: false,
+			error: `Could not reach X to validate cookies: ${msg}`,
+		};
 	}
 }
 
@@ -2741,15 +3896,17 @@ async function validateXCredential(key: string, trimmed: string): Promise<Creden
  * even when the password field is missing (passkeys, SSO, identity items).
  * Used as the fallback when eliza's `revealSavedLogin` throws "no password field".
  */
-async function readOnePasswordItemMetadata(
-	externalId: string,
-): Promise<{
+async function readOnePasswordItemMetadata(externalId: string): Promise<{
 	username: string | null;
 	domain: string | null;
 	totp: string | null;
 	note: string;
 }> {
-	const out = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
+	const out = await new Promise<{
+		stdout: string;
+		stderr: string;
+		code: number;
+	}>((resolve) => {
 		const child = spawn("op", ["item", "get", externalId, "--format=json"], {
 			stdio: ["ignore", "pipe", "pipe"],
 			shell: false,
@@ -2772,21 +3929,32 @@ async function readOnePasswordItemMetadata(
 		const item = JSON.parse(out.stdout) as {
 			category?: string;
 			urls?: Array<{ href?: string; primary?: boolean }>;
-			fields?: Array<{ id?: string; label?: string; purpose?: string; value?: string; type?: string }>;
+			fields?: Array<{
+				id?: string;
+				label?: string;
+				purpose?: string;
+				value?: string;
+				type?: string;
+			}>;
 		};
 		const username =
-			item.fields?.find((f) => f.purpose === "USERNAME" && typeof f.value === "string")?.value ??
+			item.fields?.find(
+				(f) => f.purpose === "USERNAME" && typeof f.value === "string",
+			)?.value ??
 			item.fields?.find((f) => f.label?.toLowerCase() === "username")?.value ??
 			null;
 		const totp =
 			item.fields?.find((f) => f.type?.toUpperCase() === "OTP")?.value ??
-			item.fields?.find((f) => f.label?.toLowerCase().includes("one-time"))?.value ??
+			item.fields?.find((f) => f.label?.toLowerCase().includes("one-time"))
+				?.value ??
 			null;
-		const url = item.urls?.find((u) => u.primary)?.href ?? item.urls?.[0]?.href ?? null;
+		const url =
+			item.urls?.find((u) => u.primary)?.href ?? item.urls?.[0]?.href ?? null;
 		const domain = url
 			? (() => {
 					try {
-						return new URL(url.includes("://") ? url : `https://${url}`).hostname;
+						return new URL(url.includes("://") ? url : `https://${url}`)
+							.hostname;
 					} catch {
 						return null;
 					}
@@ -2794,9 +3962,17 @@ async function readOnePasswordItemMetadata(
 			: null;
 		const noteParts: string[] = [];
 		noteParts.push(`Item type: ${item.category ?? "unknown"}.`);
-		const hasPasskey = item.fields?.some((f) => f.type?.toUpperCase() === "PASSKEY");
-		if (hasPasskey) noteParts.push("This is a passkey — passwordless. Use the 1Password app to sign in.");
-		else noteParts.push("This item has no password field (likely SSO / social-login).");
+		const hasPasskey = item.fields?.some(
+			(f) => f.type?.toUpperCase() === "PASSKEY",
+		);
+		if (hasPasskey)
+			noteParts.push(
+				"This is a passkey — passwordless. Use the 1Password app to sign in.",
+			);
+		else
+			noteParts.push(
+				"This item has no password field (likely SSO / social-login).",
+			);
 		return { username, domain, totp, note: noteParts.join(" ") };
 	} catch (err) {
 		return {

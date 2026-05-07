@@ -732,6 +732,84 @@ export type ActivityTasksSnapshot = {
 	};
 };
 
+export type WorkspaceAgentStatus = "running" | "completed" | "failed" | "stopped";
+
+export type WorkspaceAgentRecord = {
+	id: string;
+	provider: "acpx" | "codex" | "claude";
+	agentType: string;
+	task: string;
+	cwd: string;
+	status: WorkspaceAgentStatus;
+	command: string;
+	args: string[];
+	logPath: string;
+	previewUrl?: string;
+	startedAt: number;
+	pid?: number;
+	exitCode?: number | null;
+	signal?: string | null;
+	endedAt?: number;
+};
+
+export type WorkspaceAgentsSnapshot = {
+	agents: WorkspaceAgentRecord[];
+	stateDir: string;
+	updatedAt: number;
+};
+
+export type WorkspaceAgentLog = {
+	id: string;
+	offset: number;
+	nextOffset: number;
+	text: string;
+	truncated: boolean;
+};
+
+export type WorkspaceProjectRecord = {
+	id: string;
+	name: string;
+	cwd: string;
+	agentIds: string[];
+	runningCount: number;
+	completedCount: number;
+	failedCount: number;
+	latestStartedAt: number;
+	previewUrl?: string;
+};
+
+export type WorkspaceProjectsSnapshot = {
+	projects: WorkspaceProjectRecord[];
+	updatedAt: number;
+};
+
+export type WorkspaceProjectFileNode = {
+	name: string;
+	path: string;
+	type: "directory" | "file";
+	size?: number;
+	updatedAt?: number;
+};
+
+export type WorkspaceProjectFilesSnapshot = {
+	projectId: string;
+	cwd: string;
+	path: string;
+	entries: WorkspaceProjectFileNode[];
+};
+
+export type WorkspaceProjectFile = {
+	projectId: string;
+	cwd: string;
+	path: string;
+	name: string;
+	language: string;
+	content: string;
+	size: number;
+	updatedAt: number;
+	truncated: boolean;
+};
+
 export type PensieveMemorySummary = {
 	id: string;
 	type?: string;

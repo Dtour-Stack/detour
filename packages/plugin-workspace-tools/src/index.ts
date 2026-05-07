@@ -1,0 +1,849 @@
+import { spawn, spawnSync } from "node:child_process";
+import {
+	appendFileSync,
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import type {
+	Action,
+	ActionResult,
+	Handler,
+	HandlerCallback,
+	IAgentRuntime,
+	Plugin,
+} from "@elizaos/core";
+
+type ShellRun = {
+	command: string;
+	cwd: string;
+	exitCode: number | null;
+	signal: NodeJS.Signals | null;
+	stdout: string;
+	stderr: string;
+	durationMs: number;
+	timedOut: boolean;
+};
+
+type ProcessRun = {
+	command: string;
+	args: string[];
+	cwd: string;
+	exitCode: number | null;
+	signal: NodeJS.Signals | null;
+	stdout: string;
+	stderr: string;
+	durationMs: number;
+	timedOut: boolean;
+};
+
+type AgentProvider = "acpx" | "codex" | "claude";
+type AgentStatus = "running" | "completed" | "failed" | "stopped";
+
+type AgentRecord = {
+	id: string;
+	provider: AgentProvider;
+	agentType: string;
+	task: string;
+	cwd: string;
+	status: AgentStatus;
+	command: string;
+	args: string[];
+	logPath: string;
+	previewUrl?: string;
+	startedAt: number;
+	pid?: number;
+	exitCode?: number | null;
+	signal?: string | null;
+	endedAt?: number;
+};
+
+type AuditEvent = {
+	action: string;
+	command?: string;
+	args?: string[];
+	cwd?: string;
+	agentId?: string;
+	provider?: string;
+	agentType?: string;
+	exitCode?: number | null;
+	signal?: string | null;
+	timedOut?: boolean;
+	durationMs?: number;
+	success: boolean;
+	error?: string;
+	caller: string;
+	ts: number;
+};
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_OUTPUT = 20_000;
+const WORKSPACE_AUDIT_FILE = `${homedir()}/.eliza/audit/agent-workspace-actions.jsonl`;
+const AGENT_STATE_DIR = `${homedir()}/.detour/workspace-agents`;
+const AGENT_STATE_FILE = join(AGENT_STATE_DIR, "sessions.json");
+
+function caller(runtime: IAgentRuntime): string {
+	return `agent:${runtime.character?.name ?? "unknown"}`;
+}
+
+function paramsBag(options: Record<string, unknown> | undefined): Record<string, unknown> {
+	const params = options?.parameters;
+	return params && typeof params === "object" && !Array.isArray(params)
+		? params as Record<string, unknown>
+		: {};
+}
+
+function stringOption(options: Record<string, unknown> | undefined, keys: readonly string[]): string | undefined {
+	const params = paramsBag(options);
+	for (const source of [params, options]) {
+		if (!source) continue;
+		for (const key of keys) {
+			const value = source[key];
+			if (typeof value === "string" && value.trim().length > 0) return value.trim();
+		}
+	}
+	return undefined;
+}
+
+function boolOption(options: Record<string, unknown> | undefined, keys: readonly string[], fallback: boolean): boolean {
+	const params = paramsBag(options);
+	for (const source of [params, options]) {
+		if (!source) continue;
+		for (const key of keys) {
+			const value = source[key];
+			if (typeof value === "boolean") return value;
+			if (value === "true") return true;
+			if (value === "false") return false;
+		}
+	}
+	return fallback;
+}
+
+function numberOption(options: Record<string, unknown> | undefined, keys: readonly string[], fallback: number): number {
+	const params = paramsBag(options);
+	for (const source of [params, options]) {
+		if (!source) continue;
+		for (const key of keys) {
+			const value = source[key];
+			if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+			if (typeof value === "string" && value.trim().length > 0) {
+				const parsed = Number.parseInt(value, 10);
+				if (Number.isFinite(parsed)) return parsed;
+			}
+		}
+	}
+	return fallback;
+}
+
+function workspaceRoot(): string {
+	const root = process.env.DETOUR_WORKSPACE_ROOT;
+	return typeof root === "string" && root.length > 0 ? resolve(root) : process.cwd();
+}
+
+function resolveCwd(cwd: string | undefined): string {
+	if (!cwd) return workspaceRoot();
+	return isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot(), cwd);
+}
+
+function truncateMiddle(text: string, maxLength: number): string {
+	if (text.length <= maxLength) return text;
+	const head = Math.floor(maxLength * 0.65);
+	const tail = Math.max(0, maxLength - head - 80);
+	return `${text.slice(0, head)}\n\n[output truncated: ${text.length - maxLength} chars omitted]\n\n${text.slice(text.length - tail)}`;
+}
+
+function shellCommand(): { command: string; args: string[] } {
+	if (process.platform === "win32") return { command: "cmd.exe", args: ["/d", "/s", "/c"] };
+	return { command: "/bin/zsh", args: ["-lc"] };
+}
+
+function executablePath(command: string): string | null {
+	const checker = process.platform === "win32" ? "where" : "which";
+	const result = spawnSync(checker, [command], { encoding: "utf8" });
+	if (result.status === 0) return result.stdout.trim().split(/\r?\n/)[0] ?? command;
+	for (const root of [workspaceRoot(), resolve(workspaceRoot(), ".."), process.cwd()]) {
+		const candidate = join(root, "node_modules", ".bin", process.platform === "win32" ? `${command}.cmd` : command);
+		if (existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+function writeAudit(event: AuditEvent): void {
+	mkdirSync(`${homedir()}/.eliza/audit`, { recursive: true });
+	appendFileSync(WORKSPACE_AUDIT_FILE, `${JSON.stringify(event)}\n`);
+}
+
+function readAgents(): AgentRecord[] {
+	if (!existsSync(AGENT_STATE_FILE)) return [];
+	const parsed = JSON.parse(readFileSync(AGENT_STATE_FILE, "utf8")) as { agents?: AgentRecord[] };
+	if (!Array.isArray(parsed.agents)) return [];
+	return parsed.agents;
+}
+
+function writeAgents(agents: AgentRecord[]): void {
+	mkdirSync(AGENT_STATE_DIR, { recursive: true });
+	writeFileSync(AGENT_STATE_FILE, JSON.stringify({ agents }, null, 2));
+}
+
+function upsertAgent(record: AgentRecord): void {
+	const agents = readAgents();
+	const index = agents.findIndex((agent) => agent.id === record.id);
+	if (index >= 0) agents[index] = record;
+	else agents.unshift(record);
+	writeAgents(agents.slice(0, 200));
+}
+
+function updateAgent(id: string, patch: Partial<AgentRecord>): AgentRecord | null {
+	const agents = readAgents();
+	const index = agents.findIndex((agent) => agent.id === id);
+	if (index < 0) return null;
+	const updated = { ...agents[index], ...patch };
+	agents[index] = updated;
+	writeAgents(agents);
+	return updated;
+}
+
+function pidIsRunning(pid: number | undefined): boolean {
+	if (!pid) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function refreshedAgents(): AgentRecord[] {
+	const agents = readAgents();
+	let changed = false;
+	const next = agents.map((agent) => {
+		if (agent.status !== "running") return agent;
+		if (pidIsRunning(agent.pid)) return agent;
+		changed = true;
+		return {
+			...agent,
+			status: "failed" as AgentStatus,
+			endedAt: Date.now(),
+			signal: agent.signal ?? "missing-process",
+		};
+	});
+	if (changed) writeAgents(next);
+	return next;
+}
+
+async function emit(callback: HandlerCallback | undefined, text: string, actionName: string): Promise<void> {
+	if (!callback) return;
+	await callback({ text, source: "workspace-tools" } as never, actionName);
+}
+
+function fail(text: string): ActionResult {
+	return { success: false, text, error: text };
+}
+
+function ok(text: string, values: Record<string, unknown>): ActionResult {
+	return { success: true, text, values: values as never };
+}
+
+function runProcess(command: string, args: string[], cwd: string, timeoutMs: number): Promise<ProcessRun> {
+	const started = Date.now();
+	const child = spawn(command, args, {
+		cwd,
+		env: process.env,
+		stdio: ["ignore", "pipe", "pipe"],
+		shell: false,
+	});
+	const stdout: Buffer[] = [];
+	const stderr: Buffer[] = [];
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		child.kill("SIGTERM");
+	}, timeoutMs);
+	return new Promise<ProcessRun>((resolveRun, rejectRun) => {
+		child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+		child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			rejectRun(error);
+		});
+		child.on("close", (exitCode, signal) => {
+			clearTimeout(timer);
+			resolveRun({
+				command,
+				args,
+				cwd,
+				exitCode,
+				signal,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: Buffer.concat(stderr).toString("utf8"),
+				durationMs: Date.now() - started,
+				timedOut,
+			});
+		});
+	});
+}
+
+function runShell(commandText: string, cwd: string, timeoutMs: number): Promise<ShellRun> {
+	const shell = shellCommand();
+	const started = Date.now();
+	const child = spawn(shell.command, [...shell.args, commandText], {
+		cwd,
+		env: process.env,
+		stdio: ["ignore", "pipe", "pipe"],
+		shell: false,
+	});
+	const stdout: Buffer[] = [];
+	const stderr: Buffer[] = [];
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		child.kill("SIGTERM");
+	}, timeoutMs);
+	return new Promise<ShellRun>((resolveRun, rejectRun) => {
+		child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+		child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			rejectRun(error);
+		});
+		child.on("close", (exitCode, signal) => {
+			clearTimeout(timer);
+			resolveRun({
+				command: commandText,
+				cwd,
+				exitCode,
+				signal,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: Buffer.concat(stderr).toString("utf8"),
+				durationMs: Date.now() - started,
+				timedOut,
+			});
+		});
+	});
+}
+
+function processSummary(result: ProcessRun, maxOutput: number): string {
+	const stdout = truncateMiddle(result.stdout.trim(), maxOutput);
+	const stderr = truncateMiddle(result.stderr.trim(), maxOutput);
+	return [
+		`Command: ${result.command} ${result.args.join(" ")}`,
+		`CWD: ${result.cwd}`,
+		`Exit: ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}`,
+		`Duration: ${result.durationMs}ms`,
+		stdout ? `STDOUT:\n${stdout}` : "",
+		stderr ? `STDERR:\n${stderr}` : "",
+	].filter((line) => line.length > 0).join("\n");
+}
+
+function shellSummary(result: ShellRun, maxOutput: number): string {
+	const stdout = truncateMiddle(result.stdout.trim(), maxOutput);
+	const stderr = truncateMiddle(result.stderr.trim(), maxOutput);
+	return [
+		`Command: ${result.command}`,
+		`CWD: ${result.cwd}`,
+		`Exit: ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}`,
+		`Duration: ${result.durationMs}ms`,
+		stdout ? `STDOUT:\n${stdout}` : "",
+		stderr ? `STDERR:\n${stderr}` : "",
+	].filter((line) => line.length > 0).join("\n");
+}
+
+function messageText(message: { content?: { text?: unknown } } | undefined): string | undefined {
+	const text = message?.content?.text;
+	return typeof text === "string" && text.trim().length > 0 ? text.trim() : undefined;
+}
+
+function providerOption(opts: Record<string, unknown> | undefined): AgentProvider | undefined {
+	const value = stringOption(opts, ["provider", "agentProvider", "transport"]);
+	if (value === "acpx" || value === "codex" || value === "claude") return value;
+	return undefined;
+}
+
+function previewUrlOption(opts: Record<string, unknown> | undefined): string | undefined {
+	const value = stringOption(opts, ["previewUrl", "previewURL", "preview"]);
+	if (!value) return undefined;
+	try {
+		const url = new URL(value);
+		return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function resolveProvider(opts: Record<string, unknown> | undefined): AgentProvider {
+	const requested = providerOption(opts);
+	if (requested) return requested;
+	if (executablePath("acpx")) return "acpx";
+	if (executablePath("codex")) return "codex";
+	return "claude";
+}
+
+function providerCommand(provider: AgentProvider): string | null {
+	return executablePath(provider === "acpx" ? "acpx" : provider);
+}
+
+function agentTypeFor(provider: AgentProvider, opts: Record<string, unknown> | undefined): string {
+	const explicit = stringOption(opts, ["agentType", "agent", "type"]);
+	if (explicit) return explicit;
+	if (provider === "claude") return "claude";
+	return "codex";
+}
+
+function approvalMode(opts: Record<string, unknown> | undefined): string {
+	return stringOption(opts, ["approvalPreset", "approval", "permissionMode", "permissions"]) ?? "autonomous";
+}
+
+function buildAgentCommand(input: {
+	provider: AgentProvider;
+	agentType: string;
+	task: string;
+	cwd: string;
+	approval: string;
+	sessionId?: string;
+}): { command: string; args: string[] } {
+	const command = providerCommand(input.provider);
+	if (!command) throw new Error(`${input.provider} is not installed or not on PATH.`);
+	if (input.provider === "acpx") {
+		const permission = input.approval === "read-only" || input.approval === "readonly"
+			? "--deny-all"
+			: input.approval === "standard"
+				? "--approve-reads"
+				: "--approve-all";
+		const sessionArgs = input.sessionId
+			? [input.agentType, "-s", input.sessionId, input.task]
+			: [input.agentType, "exec", input.task];
+		return { command, args: ["--format", "json", "--cwd", input.cwd, permission, ...sessionArgs] };
+	}
+	if (input.provider === "claude") {
+		const args = ["--print", "--output-format", "stream-json"];
+		if (input.approval !== "read-only" && input.approval !== "readonly") {
+			args.push("--dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
+		}
+		args.push(input.task);
+		return { command, args };
+	}
+	const args = ["exec", "--json", "--cd", input.cwd];
+	if (input.approval === "read-only" || input.approval === "readonly") args.push("--sandbox", "read-only");
+	else args.push("--dangerously-bypass-approvals-and-sandbox");
+	args.push(input.task);
+	return { command, args };
+}
+
+function spawnAgentProcess(record: AgentRecord): AgentRecord {
+	mkdirSync(AGENT_STATE_DIR, { recursive: true });
+	upsertAgent(record);
+	const stream = createWriteStream(record.logPath, { flags: "a" });
+	const child = spawn(record.command, record.args, {
+		cwd: record.cwd,
+		env: process.env,
+		stdio: ["ignore", "pipe", "pipe"],
+		shell: false,
+	});
+	const next: AgentRecord = { ...record, pid: child.pid };
+	upsertAgent(next);
+	child.stdout.pipe(stream);
+	child.stderr.pipe(stream);
+	child.on("error", (error) => {
+		stream.write(`\n[spawn_error] ${error instanceof Error ? error.message : String(error)}\n`);
+		updateAgent(record.id, { status: "failed", endedAt: Date.now(), signal: "spawn-error" });
+		stream.end();
+	});
+	child.on("close", (exitCode, signal) => {
+		updateAgent(record.id, {
+			status: exitCode === 0 ? "completed" : "failed",
+			exitCode,
+			signal,
+			endedAt: Date.now(),
+		});
+		stream.end();
+	});
+	return next;
+}
+
+function writeProcessLog(record: AgentRecord, result: ProcessRun): void {
+	mkdirSync(AGENT_STATE_DIR, { recursive: true });
+	writeFileSync(
+		record.logPath,
+		[
+			`$ ${record.command} ${record.args.join(" ")}\n`,
+			result.stdout,
+			result.stderr ? `\n[stderr]\n${result.stderr}` : "",
+			`\n[exit] code=${result.exitCode ?? "null"} signal=${result.signal ?? "null"} timedOut=${result.timedOut} durationMs=${result.durationMs}\n`,
+		].join(""),
+	);
+}
+
+function writeErrorLog(record: AgentRecord, errorText: string): void {
+	mkdirSync(AGENT_STATE_DIR, { recursive: true });
+	writeFileSync(
+		record.logPath,
+		`$ ${record.command} ${record.args.join(" ")}\n[error]\n${errorText}\n`,
+	);
+}
+
+const shellHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const command = stringOption(opts, ["command", "cmd", "shell"]);
+	if (!command) return fail("WORKSPACE_SHELL requires `command`.");
+	const cwd = resolveCwd(stringOption(opts, ["cwd", "directory", "dir"]));
+	const timeoutMs = Math.max(1_000, Math.min(30 * 60_000, numberOption(opts, ["timeoutMs", "timeout_ms", "timeout"], DEFAULT_TIMEOUT_MS)));
+	const maxOutput = Math.max(1_000, Math.min(200_000, numberOption(opts, ["maxOutput", "max_output", "maxOutputChars"], DEFAULT_MAX_OUTPUT)));
+	try {
+		const result = await runShell(command, cwd, timeoutMs);
+		const success = result.exitCode === 0 && !result.timedOut;
+		writeAudit({
+			action: "workspace_shell",
+			command,
+			cwd,
+			exitCode: result.exitCode,
+			signal: result.signal,
+			timedOut: result.timedOut,
+			durationMs: result.durationMs,
+			success,
+			caller: caller(runtime),
+			ts: Date.now(),
+		});
+		const text = shellSummary(result, maxOutput);
+		await emit(callback, text, "WORKSPACE_SHELL");
+		return ok(text, { result });
+	} catch (error) {
+		const errorText = error instanceof Error ? error.message : String(error);
+		writeAudit({
+			action: "workspace_shell",
+			command,
+			cwd,
+			success: false,
+			error: errorText,
+			caller: caller(runtime),
+			ts: Date.now(),
+		});
+		await emit(callback, `WORKSPACE_SHELL failed: ${errorText}`, "WORKSPACE_SHELL");
+		return fail(`WORKSPACE_SHELL failed: ${errorText}`);
+	}
+};
+
+const spawnAgentHandler: Handler = async (runtime, message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const task = stringOption(opts, ["task", "prompt", "instructions", "text"]) ?? messageText(message);
+	if (!task) return fail("SPAWN_AGENT requires `task`.");
+	const provider = resolveProvider(opts);
+	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]));
+	const agentType = agentTypeFor(provider, opts);
+	const id = stringOption(opts, ["id", "sessionId", "session"]) ?? randomUUID();
+	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
+	const previewUrl = previewUrlOption(opts);
+	const record = spawnAgentProcess({
+		id,
+		provider,
+		agentType,
+		task,
+		cwd,
+		status: "running",
+		command: built.command,
+		args: built.args,
+		logPath: join(AGENT_STATE_DIR, `${id}.log`),
+		...(previewUrl ? { previewUrl } : {}),
+		startedAt: Date.now(),
+	});
+	upsertAgent(record);
+	writeAudit({
+		action: "spawn_agent",
+		agentId: id,
+		provider,
+		agentType,
+		command: record.command,
+		args: record.args,
+		cwd,
+		success: true,
+		caller: caller(runtime),
+		ts: Date.now(),
+	});
+	const text = `Spawned ${provider}/${agentType} session ${id}. Log: ${record.logPath}`;
+	await emit(callback, text, "SPAWN_AGENT");
+	return ok(text, { agent: record });
+};
+
+const createTaskHandler: Handler = async (runtime, message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const task = stringOption(opts, ["task", "prompt", "instructions", "text"]) ?? messageText(message);
+	if (!task) return fail("CREATE_TASK requires `task`.");
+	const provider = resolveProvider(opts);
+	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]));
+	const agentType = agentTypeFor(provider, opts);
+	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
+	const timeoutMs = Math.max(1_000, Math.min(30 * 60_000, numberOption(opts, ["timeoutMs", "timeout_ms", "timeout"], 30 * 60_000)));
+	const maxOutput = Math.max(1_000, Math.min(200_000, numberOption(opts, ["maxOutput", "max_output", "maxOutputChars"], DEFAULT_MAX_OUTPUT)));
+	const id = stringOption(opts, ["id", "taskId", "sessionId", "session"]) ?? randomUUID();
+	const previewUrl = previewUrlOption(opts);
+	const record: AgentRecord = {
+		id,
+		provider,
+		agentType,
+		task,
+		cwd,
+		status: "running",
+		command: built.command,
+		args: built.args,
+		logPath: join(AGENT_STATE_DIR, `${id}.log`),
+		...(previewUrl ? { previewUrl } : {}),
+		startedAt: Date.now(),
+	};
+	upsertAgent(record);
+	try {
+		const result = await runProcess(built.command, built.args, cwd, timeoutMs);
+		const success = result.exitCode === 0 && !result.timedOut;
+		writeProcessLog(record, result);
+		upsertAgent({
+			...record,
+			status: success ? "completed" : "failed",
+			exitCode: result.exitCode,
+			signal: result.signal,
+			endedAt: Date.now(),
+		});
+		writeAudit({
+			action: "create_task",
+			agentId: id,
+			provider,
+			agentType,
+			command: result.command,
+			args: result.args,
+			cwd,
+			exitCode: result.exitCode,
+			signal: result.signal,
+			timedOut: result.timedOut,
+			durationMs: result.durationMs,
+			success,
+			caller: caller(runtime),
+			ts: Date.now(),
+		});
+		const text = processSummary(result, maxOutput);
+		await emit(callback, text, "CREATE_TASK");
+		return ok(text, { result, provider, agentType, agent: { ...record, status: success ? "completed" : "failed" } });
+	} catch (error) {
+		const errorText = error instanceof Error ? error.message : String(error);
+		writeErrorLog(record, errorText);
+		upsertAgent({
+			...record,
+			status: "failed",
+			signal: "error",
+			endedAt: Date.now(),
+		});
+		writeAudit({
+			action: "create_task",
+			agentId: id,
+			provider,
+			agentType,
+			command: built.command,
+			args: built.args,
+			cwd,
+			success: false,
+			error: errorText,
+			caller: caller(runtime),
+			ts: Date.now(),
+		});
+		await emit(callback, `CREATE_TASK failed: ${errorText}`, "CREATE_TASK");
+		return fail(`CREATE_TASK failed: ${errorText}`);
+	}
+};
+
+const listAgentsHandler: Handler = async (_runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const includeLogs = boolOption(opts, ["includeLogs", "logs"], false);
+	const agents = refreshedAgents();
+	const rows = agents.map((agent) => {
+		const log = includeLogs && existsSync(agent.logPath)
+			? `\n${truncateMiddle(readFileSync(agent.logPath, "utf8").trim(), DEFAULT_MAX_OUTPUT)}`
+			: "";
+		return `${agent.id} ${agent.status} ${agent.provider}/${agent.agentType} cwd=${agent.cwd} log=${agent.logPath}${log}`;
+	});
+	const text = rows.length > 0 ? rows.join("\n") : "No workspace agents recorded.";
+	await emit(callback, text, "LIST_AGENTS");
+	return ok(text, { agents });
+};
+
+const sendToAgentHandler: Handler = async (runtime, message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const id = stringOption(opts, ["id", "sessionId", "agentId", "agent"]);
+	if (!id) return fail("SEND_TO_AGENT requires `id`.");
+	const task = stringOption(opts, ["task", "prompt", "instructions", "text"]) ?? messageText(message);
+	if (!task) return fail("SEND_TO_AGENT requires `task`.");
+	const agents = refreshedAgents();
+	const existing = agents.find((agent) => agent.id === id);
+	if (!existing) return fail(`No workspace agent found for ${id}.`);
+	const built = buildAgentCommand({
+		provider: existing.provider,
+		agentType: existing.agentType,
+		task,
+		cwd: existing.cwd,
+		approval: approvalMode(opts),
+		sessionId: existing.provider === "acpx" ? id : undefined,
+	});
+	const childId = randomUUID();
+	const previewUrl = previewUrlOption(opts) ?? existing.previewUrl;
+	const record = spawnAgentProcess({
+		id: childId,
+		provider: existing.provider,
+		agentType: existing.agentType,
+		task,
+		cwd: existing.cwd,
+		status: "running",
+		command: built.command,
+		args: built.args,
+		logPath: join(AGENT_STATE_DIR, `${childId}.log`),
+		...(previewUrl ? { previewUrl } : {}),
+		startedAt: Date.now(),
+	});
+	upsertAgent(record);
+	writeAudit({
+		action: "send_to_agent",
+		agentId: childId,
+		provider: record.provider,
+		agentType: record.agentType,
+		command: record.command,
+		args: record.args,
+		cwd: record.cwd,
+		success: true,
+		caller: caller(runtime),
+		ts: Date.now(),
+	});
+	const text = `Sent task to ${id}; spawned follow-up ${childId}. Log: ${record.logPath}`;
+	await emit(callback, text, "SEND_TO_AGENT");
+	return ok(text, { parent: existing, agent: record });
+};
+
+const stopAgentHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const id = stringOption(opts, ["id", "sessionId", "agentId", "agent"]);
+	if (!id) return fail("STOP_AGENT requires `id`.");
+	const agent = refreshedAgents().find((entry) => entry.id === id);
+	if (!agent) return fail(`No workspace agent found for ${id}.`);
+	if (agent.pid && pidIsRunning(agent.pid)) process.kill(agent.pid, "SIGTERM");
+	const updated = updateAgent(id, { status: "stopped", endedAt: Date.now(), signal: "SIGTERM" }) ?? agent;
+	writeAudit({
+		action: "stop_agent",
+		agentId: id,
+		provider: agent.provider,
+		agentType: agent.agentType,
+		cwd: agent.cwd,
+		success: true,
+		caller: caller(runtime),
+		ts: Date.now(),
+	});
+	const text = `Stopped workspace agent ${id}.`;
+	await emit(callback, text, "STOP_AGENT");
+	return ok(text, { agent: updated });
+};
+
+export const workspaceShellAction: Action = {
+	name: "WORKSPACE_SHELL",
+	similes: ["RUN_TERMINAL", "RUN_SHELL", "EXECUTE_COMMAND", "RUN_COMMAND", "TERMINAL"],
+	description:
+		"Run a real shell command in a workspace directory. Use this for repository work, code generation, tests, git status, commits, pushes, project scaffolding, trajectory export jobs, and website publishing tasks.",
+	validate: async () => true,
+	handler: shellHandler,
+	examples: [],
+	parameters: [
+		{ name: "command", description: "Shell command to run.", required: true, schema: { type: "string" as const } },
+		{ name: "cwd", description: "Working directory. Relative paths resolve from DETOUR_WORKSPACE_ROOT.", required: false, schema: { type: "string" as const } },
+		{ name: "timeoutMs", description: "Timeout in milliseconds. Defaults to 120000.", required: false, schema: { type: "number" as const } },
+		{ name: "maxOutput", description: "Maximum stdout/stderr characters returned to the model.", required: false, schema: { type: "number" as const } },
+	],
+};
+
+export const spawnAgentAction: Action = {
+	name: "SPAWN_AGENT",
+	similes: ["SPAWN_CODING_AGENT", "START_CODING_AGENT", "LAUNCH_CODING_AGENT", "SPAWN_SUB_AGENT", "START_TASK_AGENT"],
+	description:
+		"Spawn a real background coding subagent for repo work. Uses acpx when available, otherwise Codex or Claude. Use this for long-running implementation, test, export, git, website, or project-scaffolding tasks.",
+	validate: async () => true,
+	handler: spawnAgentHandler,
+	examples: [],
+	parameters: [
+		{ name: "task", description: "Task instructions for the subagent.", required: true, schema: { type: "string" as const } },
+		{ name: "workdir", description: "Working directory.", required: false, schema: { type: "string" as const } },
+		{ name: "provider", description: "acpx, codex, or claude.", required: false, schema: { type: "string" as const } },
+		{ name: "agentType", description: "ACPX agent type, commonly codex or claude.", required: false, schema: { type: "string" as const } },
+		{ name: "approvalPreset", description: "read-only, standard, permissive, or autonomous.", required: false, schema: { type: "string" as const } },
+	],
+};
+
+export const createTaskAction: Action = {
+	name: "CREATE_TASK",
+	similes: ["START_CODING_TASK", "RUN_CODING_TASK", "RUN_SUBAGENT_TASK", "EXECUTE_AGENT_TASK"],
+	description:
+		"Run a real coding subagent task and wait for completion. Uses acpx when available, otherwise Codex or Claude. Use for bounded repo work, tests, code generation, trajectory exports, and status checks.",
+	validate: async () => true,
+	handler: createTaskHandler,
+	examples: [],
+	parameters: [
+		{ name: "task", description: "Task instructions.", required: true, schema: { type: "string" as const } },
+		{ name: "workdir", description: "Working directory.", required: false, schema: { type: "string" as const } },
+		{ name: "provider", description: "acpx, codex, or claude.", required: false, schema: { type: "string" as const } },
+		{ name: "timeoutMs", description: "Timeout in milliseconds.", required: false, schema: { type: "number" as const } },
+	],
+};
+
+export const listAgentsAction: Action = {
+	name: "LIST_AGENTS",
+	similes: ["LIST_CODING_AGENTS", "LIST_TASK_AGENTS", "AGENT_STATUS", "WORKSPACE_AGENT_STATUS"],
+	description: "List workspace coding subagent sessions and log paths.",
+	validate: async () => true,
+	handler: listAgentsHandler,
+	examples: [],
+	parameters: [
+		{ name: "includeLogs", description: "Include log previews.", required: false, schema: { type: "boolean" as const } },
+	],
+};
+
+export const sendToAgentAction: Action = {
+	name: "SEND_TO_AGENT",
+	similes: ["SEND_TO_CODING_AGENT", "MESSAGE_TASK_AGENT", "CONTINUE_AGENT_TASK"],
+	description: "Send follow-up instructions to a workspace coding subagent session.",
+	validate: async () => true,
+	handler: sendToAgentHandler,
+	examples: [],
+	parameters: [
+		{ name: "id", description: "Session id from SPAWN_AGENT or LIST_AGENTS.", required: true, schema: { type: "string" as const } },
+		{ name: "task", description: "Follow-up instructions.", required: true, schema: { type: "string" as const } },
+	],
+};
+
+export const stopAgentAction: Action = {
+	name: "STOP_AGENT",
+	similes: ["CANCEL_AGENT", "STOP_TASK_AGENT"],
+	description: "Stop a running workspace coding subagent session.",
+	validate: async () => true,
+	handler: stopAgentHandler,
+	examples: [],
+	parameters: [
+		{ name: "id", description: "Session id from SPAWN_AGENT or LIST_AGENTS.", required: true, schema: { type: "string" as const } },
+	],
+};
+
+export const cancelTaskAction: Action = {
+	...stopAgentAction,
+	name: "CANCEL_TASK",
+	similes: ["CANCEL_AGENT_TASK", "CANCEL_CODING_TASK"],
+};
+
+export const workspaceToolsPlugin: Plugin = {
+	name: "workspace-tools",
+	description:
+		"Agent-side workspace execution tools for real terminal use, code generation, tests, git, project scaffolding, subagents, ACPX, and publishing workflows.",
+	actions: [
+		workspaceShellAction,
+		spawnAgentAction,
+		sendToAgentAction,
+		listAgentsAction,
+		stopAgentAction,
+		createTaskAction,
+		cancelTaskAction,
+	],
+};
+
+export default workspaceToolsPlugin;

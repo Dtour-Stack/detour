@@ -10,17 +10,21 @@ import type {
 	State,
 } from "@elizaos/core";
 import { createUniqueUuid, EventType } from "@elizaos/core";
+import { discordContextForMessage } from "./discord-context-provider";
 import {
 	generatePlainTextReply,
 	runWithPlannerFallbackContext,
 } from "./dpe-fallback-plugin";
-import { discordContextForMessage } from "./discord-context-provider";
 
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
 const WRAPPED = Symbol.for("detour.discordMentionAlias.wrapped");
 const MANAGER_WRAPPED = Symbol.for("detour.discordMessageManagerGuard.wrapped");
 const DEFAULT_REPLY_GUARD_MS = 45_000;
 const DEFAULT_FALLBACK_GENERATION_MS = 10_000;
+const DEFAULT_MANAGER_ACK_MS = 2_000;
+const DEFAULT_MENTION_SPAM_WINDOW_MS = 5 * 60_000;
+const DEFAULT_MENTION_SPAM_LIMIT = 6;
+const DEFAULT_MENTION_MUTE_MS = 10 * 60_000;
 const X_NOTIFICATIONS_ACTION = "X_NOTIFICATIONS";
 
 type TimeoutResult = "timeout";
@@ -81,6 +85,7 @@ type DiscordMessageLike = {
 	author?: DiscordUserLike;
 	mentions?: {
 		users?: DiscordCollectionLike<DiscordUserLike>;
+		roles?: DiscordCollectionLike<{ id?: string; name?: string | null }>;
 		repliedUser?: DiscordUserLike | null;
 	};
 	reference?: { messageId?: string };
@@ -88,7 +93,9 @@ type DiscordMessageLike = {
 		id?: string;
 		send?: (payload: unknown) => Promise<unknown>;
 		messages?: {
-			fetch?: (options: { limit: number }) => Promise<DiscordCollectionLike<DiscordMessageLike>>;
+			fetch?: (options: {
+				limit: number;
+			}) => Promise<DiscordCollectionLike<DiscordMessageLike>>;
 		};
 	};
 	reply?: (payload: unknown) => Promise<unknown>;
@@ -104,34 +111,70 @@ type DiscordServiceLike = {
 	messageManager?: DiscordMessageManagerLike;
 };
 
+type MentionThrottleRecord = {
+	timestamps: number[];
+	mutedUntil: number;
+};
+
+type MentionThrottleResult =
+	| { muted: false }
+	| { muted: true; justMuted: boolean; mutedUntil: number };
+
+const mentionThrottle = new Map<string, MentionThrottleRecord>();
+
 function escapeRegex(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function aliasPattern(alias: string): RegExp {
-	return new RegExp(`(^|[^\\p{L}\\p{N}_])@?${escapeRegex(alias)}(?=$|[^\\p{L}\\p{N}_])`, "iu");
+	return new RegExp(
+		`(^|[^\\p{L}\\p{N}_])@?${escapeRegex(alias)}(?=$|[^\\p{L}\\p{N}_])`,
+		"iu",
+	);
 }
 
 function configuredAliases(runtime: IAgentRuntime): string[] {
 	const raw = runtime.getSetting("DISCORD_MENTION_ALIASES");
-	const configured = typeof raw === "string"
-		? raw.split(/[\n,]+/).map((item) => item.trim()).filter((item) => item.length > 0)
-		: [];
+	const configured =
+		typeof raw === "string"
+			? raw
+					.split(/[\n,]+/)
+					.map((item) => item.trim())
+					.filter((item) => item.length > 0)
+			: [];
 	return [
 		...configured,
 		runtime.character.name,
 		runtime.character.username,
 		...DEFAULT_ALIASES,
-	].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+	].filter(
+		(item): item is string =>
+			typeof item === "string" && item.trim().length > 0,
+	);
 }
 
-function configuredDiscordAliases(runtime: IAgentRuntime, user: DiscordUserLike | null | undefined): string[] {
+function configuredDiscordAliases(
+	runtime: IAgentRuntime,
+	user: DiscordUserLike | null | undefined,
+): string[] {
 	return [
 		...configuredAliases(runtime),
 		user?.username,
 		user?.globalName,
 		user?.tag,
-	].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+	].filter(
+		(item): item is string =>
+			typeof item === "string" && item.trim().length > 0,
+	);
+}
+
+function configuredMentionRoleIds(runtime: IAgentRuntime): string[] {
+	const raw = runtime.getSetting("DISCORD_MENTION_ROLE_IDS");
+	if (typeof raw !== "string") return [];
+	return raw
+		.split(/[\s,]+/)
+		.map((item) => item.trim())
+		.filter((item) => /^\d+$/.test(item));
 }
 
 function mentionsAlias(text: string | undefined, aliases: string[]): boolean {
@@ -144,11 +187,13 @@ function isDiscordMessage(message: Memory): boolean {
 	const meta = message.metadata;
 	if (!meta || typeof meta !== "object" || Array.isArray(meta)) return false;
 	const bag = meta as Record<string, unknown>;
-	return bag.source === "discord"
-		|| bag.provider === "discord"
-		|| bag.discord !== undefined
-		|| bag.discordMessageId !== undefined
-		|| bag.discordChannelId !== undefined;
+	return (
+		bag.source === "discord" ||
+		bag.provider === "discord" ||
+		bag.discord !== undefined ||
+		bag.discordMessageId !== undefined ||
+		bag.discordChannelId !== undefined
+	);
 }
 
 function markMention(runtime: IAgentRuntime, message: Memory): boolean {
@@ -166,23 +211,29 @@ function markMention(runtime: IAgentRuntime, message: Memory): boolean {
 	return true;
 }
 
-function isAddressedDiscordMessage(runtime: IAgentRuntime, message: Memory): boolean {
+function isAddressedDiscordMessage(
+	runtime: IAgentRuntime,
+	message: Memory,
+): boolean {
 	const mentionContext = message.content.mentionContext;
-	return isDiscordMessage(message) && (
-		mentionContext?.isMention === true ||
-		mentionContext?.isReply === true ||
-		mentionsAlias(message.content.text, configuredAliases(runtime))
+	return (
+		isDiscordMessage(message) &&
+		(mentionContext?.isMention === true ||
+			mentionContext?.isReply === true ||
+			mentionsAlias(message.content.text, configuredAliases(runtime)))
 	);
 }
 
 function fallbackConversation(message: Memory): string {
-	const text = typeof message.content.text === "string" ? message.content.text.trim() : "";
+	const text =
+		typeof message.content.text === "string" ? message.content.text.trim() : "";
 	return text ? `Latest Discord message:\n${text}` : "";
 }
 
 function asksAboutXNotifications(text: string): boolean {
 	const lower = text.toLowerCase();
-	const mentionsX = /\b(?:x|twitter)\b/.test(lower) || lower.includes("@detour_squirrel");
+	const mentionsX =
+		/\b(?:x|twitter)\b/.test(lower) || lower.includes("@detour_squirrel");
 	const asksSignal = [
 		"notification",
 		"notifications",
@@ -200,9 +251,14 @@ function asksAboutXNotifications(text: string): boolean {
 	return lower.includes("your notifications") || (mentionsX && asksSignal);
 }
 
-async function xNotificationContext(runtime: IAgentRuntime, conversation: string): Promise<string> {
+async function xNotificationContext(
+	runtime: IAgentRuntime,
+	conversation: string,
+): Promise<string> {
 	if (!asksAboutXNotifications(conversation)) return "";
-	const action = runtime.actions.find((candidate) => candidate.name === X_NOTIFICATIONS_ACTION);
+	const action = runtime.actions.find(
+		(candidate) => candidate.name === X_NOTIFICATIONS_ACTION,
+	);
 	if (!action) {
 		return "X notification context: X_NOTIFICATIONS is not registered. Do not invent notifications.";
 	}
@@ -212,15 +268,25 @@ async function xNotificationContext(runtime: IAgentRuntime, conversation: string
 		entityId: runtime.agentId,
 		agentId: runtime.agentId,
 		roomId: createUniqueUuid(runtime, "discord:x-notifications"),
-		content: { text: "Check X notifications for this Discord reply.", source: "discord" },
+		content: {
+			text: "Check X notifications for this Discord reply.",
+			source: "discord",
+		},
 		createdAt: Date.now(),
 	};
 	try {
-		const result = await action.handler(runtime, message, undefined, {}, async (content) => {
-			const text = typeof content.text === "string" ? content.text.trim() : "";
-			if (text) lines.push(text);
-			return [];
-		});
+		const result = await action.handler(
+			runtime,
+			message,
+			undefined,
+			{},
+			async (content) => {
+				const text =
+					typeof content.text === "string" ? content.text.trim() : "";
+				if (text) lines.push(text);
+				return [];
+			},
+		);
 		const text = lines.join("\n").trim() || result?.text?.trim() || "";
 		return text
 			? `X notification context:\n${text}`
@@ -237,32 +303,78 @@ async function xNotificationContext(runtime: IAgentRuntime, conversation: string
 	}
 }
 
-async function enrichFallbackConversation(runtime: IAgentRuntime, conversation: string, message?: Memory): Promise<string> {
+async function enrichFallbackConversation(
+	runtime: IAgentRuntime,
+	conversation: string,
+	message?: Memory,
+): Promise<string> {
 	const context = await xNotificationContext(runtime, conversation);
-	const discordContext = message ? await discordContextForMessage(runtime, message) : "";
+	const discordContext = message
+		? await discordContextForMessage(runtime, message)
+		: "";
 	return [
 		conversation,
 		...(discordContext ? ["", discordContext] : []),
-		...(context ? ["", context, "", "If the latest Discord message asks about X notifications, answer from the X notification context above."] : []),
-	].filter((part) => part.length > 0).join("\n");
+		...(context
+			? [
+					"",
+					context,
+					"",
+					"If the latest Discord message asks about X notifications, answer from the X notification context above.",
+				]
+			: []),
+	]
+		.filter((part) => part.length > 0)
+		.join("\n");
 }
 
 function rawDiscordText(message: DiscordMessageLike): string {
-	const text = typeof message.content === "string" ? message.content.trim() : "";
+	const text =
+		typeof message.content === "string" ? message.content.trim() : "";
 	return text.length > 0 ? text : "";
 }
 
-function discordAuthorName(message: DiscordMessageLike, botUser: DiscordUserLike | null | undefined): string {
-	if (botUser?.id && message.author?.id === botUser.id) return "Detour Squirrel";
-	return message.author?.displayName
-		?? message.author?.globalName
-		?? message.author?.username
-		?? message.author?.tag
-		?? message.author?.id
-		?? "Unknown";
+function attachmentName(attachment: { title?: unknown; url: string }, index: number): string {
+	const fromTitle =
+		typeof attachment.title === "string" && attachment.title.trim().length > 0
+			? attachment.title.trim()
+			: attachment.url.split(/[\\/]/).pop();
+	const safe = (fromTitle ?? `generated-image-${index + 1}.png`).replace(/[^a-zA-Z0-9._-]/g, "-");
+	return safe.includes(".") ? safe : `${safe}.png`;
 }
 
-function rawDiscordLine(message: DiscordMessageLike, botUser: DiscordUserLike | null | undefined): string | null {
+function isRemoteAttachmentUrl(url: string): boolean {
+	return /^https?:\/\//i.test(url);
+}
+
+function rawDiscordLooksLikeImageRequest(message: DiscordMessageLike): boolean {
+	const text = rawDiscordText(message).toLowerCase();
+	if (!text) return false;
+	return /\b(generate|create|make|draw|render|illustrate|design)\b[\s\S]{0,80}\b(image|picture|pic|photo|poster|caricature|meme|banner|visual|art)\b/u.test(
+		text,
+	);
+}
+
+function discordAuthorName(
+	message: DiscordMessageLike,
+	botUser: DiscordUserLike | null | undefined,
+): string {
+	if (botUser?.id && message.author?.id === botUser.id)
+		return "Detour Squirrel";
+	return (
+		message.author?.displayName ??
+		message.author?.globalName ??
+		message.author?.username ??
+		message.author?.tag ??
+		message.author?.id ??
+		"Unknown"
+	);
+}
+
+function rawDiscordLine(
+	message: DiscordMessageLike,
+	botUser: DiscordUserLike | null | undefined,
+): string | null {
 	const text = rawDiscordText(message);
 	if (!text) return null;
 	return `${discordAuthorName(message, botUser)}: ${text}`;
@@ -301,22 +413,33 @@ async function rawFallbackConversation(
 			return line ? [line] : [];
 		})
 		.slice(-12);
-	const conversation = lines.length > 0
-		? [
-				"Recent Discord channel context:",
-				...lines,
-				"",
-				"Reply to the latest user message. Use prior turns when they clarify what the user means.",
-			].join("\n")
-		: "";
-	return enrichFallbackConversation(runtime, conversation, rawDiscordMemory(runtime, message));
+	const conversation =
+		lines.length > 0
+			? [
+					"Recent Discord channel context:",
+					...lines,
+					"",
+					"Reply to the latest user message. Use prior turns when they clarify what the user means.",
+				].join("\n")
+			: "";
+	return enrichFallbackConversation(
+		runtime,
+		conversation,
+		rawDiscordMemory(runtime, message),
+	);
 }
 
-function rawDiscordMemory(runtime: IAgentRuntime, message: DiscordMessageLike): Memory {
+function rawDiscordMemory(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+): Memory {
 	const roomSeed = stringId(message.channel?.id) ?? "discord:unknown-room";
 	const entitySeed = stringId(message.author?.id) ?? "discord:unknown-author";
 	return {
-		id: createUniqueUuid(runtime, stringId(message.id) ?? `discord:raw:${Date.now()}`),
+		id: createUniqueUuid(
+			runtime,
+			stringId(message.id) ?? `discord:raw:${Date.now()}`,
+		),
 		entityId: createUniqueUuid(runtime, `discord:user:${entitySeed}`),
 		agentId: runtime.agentId,
 		roomId: createUniqueUuid(runtime, roomSeed),
@@ -328,14 +451,79 @@ function rawDiscordMemory(runtime: IAgentRuntime, message: DiscordMessageLike): 
 	};
 }
 
-function readPositiveMs(runtime: IAgentRuntime, key: string, fallback: number): number {
+function readPositiveMs(
+	runtime: IAgentRuntime,
+	key: string,
+	fallback: number,
+): number {
 	const raw = runtime.getSetting(key);
 	if (typeof raw !== "string") return fallback;
 	const parsed = Number(raw);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | TimeoutResult> {
+function readPositiveInteger(
+	runtime: IAgentRuntime,
+	key: string,
+	fallback: number,
+): number {
+	const raw = runtime.getSetting(key);
+	if (typeof raw !== "string") return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function mentionThrottleKeyFromMemory(message: Memory): string | null {
+	if (!message.entityId || !message.roomId) return null;
+	return `${String(message.roomId)}:${String(message.entityId)}`;
+}
+
+function mentionThrottleKeyFromRaw(message: DiscordMessageLike): string | null {
+	const authorId = stringId(message.author?.id);
+	if (!authorId || message.author?.bot === true) return null;
+	return `${stringId(message.channel?.id) ?? "unknown-channel"}:${authorId}`;
+}
+
+function checkMentionThrottle(
+	runtime: IAgentRuntime,
+	key: string | null,
+	now: number,
+): MentionThrottleResult {
+	if (!key) return { muted: false };
+	const windowMs = readPositiveMs(
+		runtime,
+		"DISCORD_MENTION_SPAM_WINDOW_MS",
+		DEFAULT_MENTION_SPAM_WINDOW_MS,
+	);
+	const limit = readPositiveInteger(
+		runtime,
+		"DISCORD_MENTION_SPAM_LIMIT",
+		DEFAULT_MENTION_SPAM_LIMIT,
+	);
+	const muteMs = readPositiveMs(
+		runtime,
+		"DISCORD_MENTION_MUTE_MS",
+		DEFAULT_MENTION_MUTE_MS,
+	);
+	const existing = mentionThrottle.get(key) ?? { timestamps: [], mutedUntil: 0 };
+	if (existing.mutedUntil > now) {
+		return { muted: true, justMuted: false, mutedUntil: existing.mutedUntil };
+	}
+	const timestamps = existing.timestamps.filter((ts) => now - ts <= windowMs);
+	timestamps.push(now);
+	if (timestamps.length > limit) {
+		const mutedUntil = now + muteMs;
+		mentionThrottle.set(key, { timestamps: [], mutedUntil });
+		return { muted: true, justMuted: true, mutedUntil };
+	}
+	mentionThrottle.set(key, { timestamps, mutedUntil: 0 });
+	return { muted: false };
+}
+
+async function withTimeout<T>(
+	promise: Promise<T>,
+	ms: number,
+): Promise<T | TimeoutResult> {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	try {
 		return await Promise.race([
@@ -350,10 +538,14 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | Time
 }
 
 function stringId(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+	return typeof value === "string" && value.trim().length > 0
+		? value
+		: undefined;
 }
 
-function trajectoryIds(message: Memory): { trajectoryId: string; stepId: string } | null {
+function trajectoryIds(
+	message: Memory,
+): { trajectoryId: string; stepId: string } | null {
 	const meta = message.metadata;
 	if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
 	const bag = meta as Record<string, unknown>;
@@ -365,8 +557,10 @@ function trajectoryIds(message: Memory): { trajectoryId: string; stepId: string 
 function isTrajectoryLogger(value: unknown): value is TrajectoryLogger {
 	if (!value || typeof value !== "object") return false;
 	const candidate = value as TrajectoryLogger;
-	return typeof candidate.logLlmCall === "function"
-		|| typeof candidate.completeStep === "function";
+	return (
+		typeof candidate.logLlmCall === "function" ||
+		typeof candidate.completeStep === "function"
+	);
 }
 
 function trajectoryLogger(runtime: IAgentRuntime): TrajectoryLogger | null {
@@ -428,7 +622,8 @@ function recordFallbackTrajectory(
 		actionType: "REPLY",
 		actionName: "discord_fallback_reply",
 		parameters: { reason },
-		reasoning: typeof content.thought === "string" ? content.thought : undefined,
+		reasoning:
+			typeof content.thought === "string" ? content.thought : undefined,
 		success: true,
 		result: { text },
 	});
@@ -441,14 +636,22 @@ async function emitDiscordFallbackReply(
 	reason: string,
 ): Promise<{ content: Content; memories: Memory[] } | null> {
 	const startedAt = Date.now();
-	const conversation = await enrichFallbackConversation(runtime, fallbackConversation(message), message);
+	const conversation = await enrichFallbackConversation(
+		runtime,
+		fallbackConversation(message),
+		message,
+	);
 	const generated = await withTimeout(
 		generatePlainTextReply(
 			runtime,
 			conversation,
 			`discord-visible-reply:${reason}`,
 		),
-		readPositiveMs(runtime, "DISCORD_FALLBACK_GENERATION_MS", DEFAULT_FALLBACK_GENERATION_MS),
+		readPositiveMs(
+			runtime,
+			"DISCORD_FALLBACK_GENERATION_MS",
+			DEFAULT_FALLBACK_GENERATION_MS,
+		),
 	);
 	const generatedText = generated === "timeout" ? null : generated;
 	if (!generatedText) {
@@ -481,7 +684,8 @@ async function emitDiscordFallbackReply(
 		{
 			src: "detour:discord-reply-guard",
 			reason,
-			generatedByModel: typeof generatedText === "string" && generatedText.length > 0,
+			generatedByModel:
+				typeof generatedText === "string" && generatedText.length > 0,
 			messageId: message.id,
 			roomId: message.roomId,
 		},
@@ -496,30 +700,59 @@ function rawMessageAddressesBot(
 	botUser: DiscordUserLike | null | undefined,
 ): boolean {
 	const botId = stringId(botUser?.id);
-	if (message.author?.bot || (botId && message.author?.id === botId)) return false;
+	if (message.author?.bot || (botId && message.author?.id === botId))
+		return false;
+	const roleIds = configuredMentionRoleIds(runtime);
 	const mentionsBot = botId
 		? message.mentions?.users?.has?.(botId) === true ||
 			message.content?.includes(`<@${botId}>`) === true ||
 			message.content?.includes(`<@!${botId}>`) === true
 		: false;
-	const repliesToBot = botId && message.reference?.messageId && message.mentions?.repliedUser?.id === botId;
-	return mentionsBot || repliesToBot === true || mentionsAlias(message.content, configuredDiscordAliases(runtime, botUser));
+	const mentionsConfiguredRole = roleIds.some(
+		(roleId) =>
+			message.mentions?.roles?.has?.(roleId) === true ||
+			message.content?.includes(`<@&${roleId}>`) === true,
+	);
+	const repliesToBot =
+		botId &&
+		message.reference?.messageId &&
+		message.mentions?.repliedUser?.id === botId;
+	return (
+		mentionsBot ||
+		mentionsConfiguredRole ||
+		repliesToBot === true ||
+		mentionsAlias(message.content, configuredDiscordAliases(runtime, botUser))
+	);
 }
 
-function collectionValues<T>(collection: DiscordCollectionLike<T> | undefined): T[] {
+function collectionValues<T>(
+	collection: DiscordCollectionLike<T> | undefined,
+): T[] {
 	if (!collection?.values) return [];
 	return Array.from(collection.values());
 }
 
-async function hasRecentBotReply(message: DiscordMessageLike, botId: string | undefined): Promise<boolean> {
+async function hasRecentBotReply(
+	message: DiscordMessageLike,
+	botId: string | undefined,
+): Promise<boolean> {
 	if (!botId || !message.channel?.messages?.fetch) return false;
-	const fetched = await message.channel.messages.fetch({ limit: 25 }).catch(() => null);
+	const fetched = await message.channel.messages
+		.fetch({ limit: 25 })
+		.catch(() => null);
 	const createdAt = message.createdTimestamp ?? 0;
 	for (const candidate of collectionValues(fetched ?? undefined)) {
 		if (candidate.author?.id !== botId) continue;
+		if (rawDiscordText(candidate).toLowerCase() === "got it, working on it.")
+			continue;
 		if (candidate.reference?.messageId === message.id) return true;
 		const replyAt = candidate.createdTimestamp ?? 0;
-		if (createdAt > 0 && replyAt > createdAt && replyAt - createdAt <= 5 * 60_000) return true;
+		if (
+			createdAt > 0 &&
+			replyAt > createdAt &&
+			replyAt - createdAt <= 5 * 60_000
+		)
+			return true;
 	}
 	return false;
 }
@@ -530,14 +763,22 @@ async function directDiscordFallbackContent(
 	message: DiscordMessageLike,
 	reason: string,
 ): Promise<Content | null> {
-	const conversation = await rawFallbackConversation(runtime, message, service.client?.user);
+	const conversation = await rawFallbackConversation(
+		runtime,
+		message,
+		service.client?.user,
+	);
 	const generated = await withTimeout(
 		generatePlainTextReply(
 			runtime,
 			conversation,
 			`discord-manager-visible-reply:${reason}`,
 		),
-		readPositiveMs(runtime, "DISCORD_FALLBACK_GENERATION_MS", DEFAULT_FALLBACK_GENERATION_MS),
+		readPositiveMs(
+			runtime,
+			"DISCORD_FALLBACK_GENERATION_MS",
+			DEFAULT_FALLBACK_GENERATION_MS,
+		),
 	);
 	const text = generated === "timeout" ? null : generated;
 	if (!text) {
@@ -560,12 +801,44 @@ async function directDiscordFallbackContent(
 	};
 }
 
-async function sendDirectDiscordFallback(message: DiscordMessageLike, content: Content): Promise<void> {
+async function sendDirectDiscordContent(
+	message: DiscordMessageLike,
+	content: Content,
+): Promise<void> {
 	const text = typeof content.text === "string" ? content.text.trim() : "";
-	if (!text) return;
+	const attachments = Array.isArray(content.attachments)
+		? content.attachments.filter(
+				(attachment) =>
+					attachment &&
+					typeof attachment.url === "string" &&
+					attachment.url.trim().length > 0,
+			)
+		: [];
+	if (!text && attachments.length === 0) return;
+	const attachmentViews = attachments.map((attachment, index) => ({
+		attachment,
+		name: attachmentName(attachment, index),
+	}));
 	const payload = {
 		content: text,
 		allowedMentions: { repliedUser: false },
+		...(attachmentViews.length > 0
+			? {
+					files: attachmentViews
+						.filter((item) => !isRemoteAttachmentUrl(item.attachment.url))
+						.map((item) => ({
+							attachment: item.attachment.url,
+							name: item.name,
+						})),
+					embeds: attachmentViews.map((item) => ({
+						image: {
+							url: isRemoteAttachmentUrl(item.attachment.url)
+								? item.attachment.url
+								: `attachment://${item.name}`,
+						},
+					})),
+				}
+			: {}),
 	};
 	if (typeof message.reply === "function") {
 		await message.reply(payload);
@@ -573,9 +846,13 @@ async function sendDirectDiscordFallback(message: DiscordMessageLike, content: C
 	}
 	await message.channel?.send?.({
 		...payload,
-		...(message.id ? { reply: { messageReference: message.id, failIfNotExists: false } } : {}),
+		...(message.id
+			? { reply: { messageReference: message.id, failIfNotExists: false } }
+			: {}),
 	});
 }
+
+const sendDirectDiscordFallback = sendDirectDiscordContent;
 
 function emitDirectDiscordFallbackSent(
 	runtime: IAgentRuntime,
@@ -587,7 +864,10 @@ function emitDirectDiscordFallbackSent(
 	if (!channelId || !messageId) return;
 	const roomId = createUniqueUuid(runtime, channelId);
 	const reply: Memory = {
-		id: createUniqueUuid(runtime, `discord-manager-fallback:${messageId}:${Date.now()}`),
+		id: createUniqueUuid(
+			runtime,
+			`discord-manager-fallback:${messageId}:${Date.now()}`,
+		),
 		entityId: runtime.agentId,
 		agentId: runtime.agentId,
 		roomId,
@@ -605,6 +885,58 @@ function emitDirectDiscordFallbackSent(
 	});
 }
 
+async function handleManagerImageAction(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+	reason: string,
+): Promise<boolean> {
+	if (!rawDiscordLooksLikeImageRequest(message)) return false;
+	const action = (runtime.actions ?? []).find(
+		(candidate) => candidate.name === "GENERATE_IMAGE",
+	);
+	if (!action?.handler) return false;
+	const memory = rawDiscordMemory(runtime, message);
+	let sent = false;
+	const callback: HandlerCallback = async (content) => {
+		await sendDirectDiscordContent(message, content);
+		emitDirectDiscordFallbackSent(runtime, message, content);
+		sent = true;
+		return [];
+	};
+	try {
+		const result = await action.handler(
+			runtime,
+			memory,
+			undefined,
+			{ prompt: rawDiscordText(message) },
+			callback,
+		);
+		runtime.logger.warn(
+			{
+				src: "detour:discord-manager-guard",
+				reason,
+				messageId: message.id,
+				channelId: message.channel?.id,
+				success: result?.success === true || sent,
+			},
+			"Handled Discord image request through GENERATE_IMAGE",
+		);
+		return result?.success === true || sent;
+	} catch (error) {
+		runtime.logger.warn(
+			{
+				src: "detour:discord-manager-guard",
+				reason,
+				messageId: message.id,
+				channelId: message.channel?.id,
+				error: error instanceof Error ? error.message : String(error),
+			},
+			"Discord direct image generation failed",
+		);
+		return false;
+	}
+}
+
 async function handleManagerFallback(
 	runtime: IAgentRuntime,
 	service: DiscordServiceLike,
@@ -613,7 +945,13 @@ async function handleManagerFallback(
 ): Promise<void> {
 	const botId = stringId(service.client?.user?.id);
 	if (await hasRecentBotReply(message, botId)) return;
-	const content = await directDiscordFallbackContent(runtime, service, message, reason);
+	if (await handleManagerImageAction(runtime, message, reason)) return;
+	const content = await directDiscordFallbackContent(
+		runtime,
+		service,
+		message,
+		reason,
+	);
 	if (!content) return;
 	await sendDirectDiscordFallback(message, content);
 	emitDirectDiscordFallbackSent(runtime, message, content);
@@ -628,7 +966,33 @@ async function handleManagerFallback(
 	);
 }
 
-function logLateHandlerFailure(runtime: IAgentRuntime, message: Memory, error: unknown): void {
+function sendManagerAck(
+	runtime: IAgentRuntime,
+	message: DiscordMessageLike,
+): void {
+	void sendDirectDiscordFallback(message, {
+		thought: "Discord manager acknowledgement",
+		actions: ["REPLY"],
+		text: "got it, working on it.",
+		simple: true,
+	}).catch((error) =>
+		runtime.logger.warn(
+			{
+				src: "detour:discord-manager-guard",
+				error: error instanceof Error ? error.message : String(error),
+				messageId: message.id,
+				channelId: message.channel?.id,
+			},
+			"Failed to send Discord manager acknowledgement",
+		),
+	);
+}
+
+function logLateHandlerFailure(
+	runtime: IAgentRuntime,
+	message: Memory,
+	error: unknown,
+): void {
 	runtime.logger.warn(
 		{
 			src: "detour:discord-reply-guard",
@@ -656,6 +1020,29 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 	): Promise<MessageProcessingResult> => {
 		const marked = markMention(callRuntime, message);
 		const addressed = marked || isAddressedDiscordMessage(callRuntime, message);
+		if (addressed) {
+			const throttle = checkMentionThrottle(
+				callRuntime,
+				mentionThrottleKeyFromMemory(message),
+				Date.now(),
+			);
+			if (throttle.muted) {
+				const content = throttle.justMuted
+					? {
+							text: "I’m muting this ping loop for a few minutes. I’ll still answer other people.",
+							actions: ["REPLY"],
+						}
+					: null;
+				const memories = content && callback ? await callback(content) : [];
+				return {
+					didRespond: throttle.justMuted && memories.length > 0,
+					responseContent: content,
+					responseMessages: memories,
+					state: emptyState(),
+					mode: "simple",
+				};
+			}
+		}
 		let emittedVisibleContent = false;
 		let fallbackEmitted = false;
 		const trackingCallback: HandlerCallback | undefined = callback
@@ -672,17 +1059,29 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 		);
 
 		try {
-			const result = addressed && callback
-				? await withTimeout(
-						original,
-						readPositiveMs(callRuntime, "DISCORD_ADDRESSED_REPLY_GUARD_MS", DEFAULT_REPLY_GUARD_MS),
-					)
-				: await original;
+			const result =
+				addressed && callback
+					? await withTimeout(
+							original,
+							readPositiveMs(
+								callRuntime,
+								"DISCORD_ADDRESSED_REPLY_GUARD_MS",
+								DEFAULT_REPLY_GUARD_MS,
+							),
+						)
+					: await original;
 			if (result === "timeout") {
 				if (!callback) return await original;
 				fallbackEmitted = true;
-				void original.catch((error) => logLateHandlerFailure(callRuntime, message, error));
-				const fallback = await emitDiscordFallbackReply(callRuntime, message, callback, "timeout");
+				void original.catch((error) =>
+					logLateHandlerFailure(callRuntime, message, error),
+				);
+				const fallback = await emitDiscordFallbackReply(
+					callRuntime,
+					message,
+					callback,
+					"timeout",
+				);
 				if (!fallback) {
 					return {
 						didRespond: false,
@@ -702,7 +1101,12 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 			}
 			if (addressed && callback && !emittedVisibleContent) {
 				fallbackEmitted = true;
-				const fallback = await emitDiscordFallbackReply(callRuntime, message, callback, "empty-result");
+				const fallback = await emitDiscordFallbackReply(
+					callRuntime,
+					message,
+					callback,
+					"empty-result",
+				);
 				if (!fallback) return result;
 				return {
 					...result,
@@ -743,21 +1147,74 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 	service[WRAPPED] = true;
 }
 
-export function installDiscordMessageManagerGuard(runtime: IAgentRuntime): void {
+export function installDiscordMessageManagerGuard(
+	runtime: IAgentRuntime,
+): void {
 	const service = discordService(runtime);
 	const manager = service?.messageManager;
 	if (!service || !manager || manager[MANAGER_WRAPPED]) return;
 	const handleMessage = manager.handleMessage.bind(manager);
-	manager.handleMessage = async (message: DiscordMessageLike): Promise<unknown> => {
+	manager.handleMessage = async (
+		message: DiscordMessageLike,
+	): Promise<unknown> => {
 		if (!rawMessageAddressesBot(runtime, message, service.client?.user)) {
 			return await handleMessage(message);
 		}
+		const throttle = checkMentionThrottle(
+			runtime,
+			mentionThrottleKeyFromRaw(message),
+			Date.now(),
+		);
+		if (throttle.muted) {
+			if (throttle.justMuted) {
+				await sendDirectDiscordFallback(message, {
+					text: "I’m muting this ping loop for a few minutes. I’ll still answer other people.",
+					actions: ["REPLY"],
+				});
+			}
+			return undefined;
+		}
 		const original = handleMessage(message);
+		let completed = false;
+		let ackTimer: ReturnType<typeof setTimeout> | null = setTimeout(
+			() => {
+				if (completed) return;
+				const botId = stringId(service.client?.user?.id);
+				void hasRecentBotReply(message, botId)
+					.then((hasReply) => {
+						if (!completed && !hasReply) sendManagerAck(runtime, message);
+					})
+					.catch((error) =>
+						runtime.logger.warn(
+							{
+								src: "detour:discord-manager-guard",
+								error: error instanceof Error ? error.message : String(error),
+								messageId: message.id,
+								channelId: message.channel?.id,
+							},
+							"Failed to check recent Discord replies before acknowledgement",
+						),
+					);
+			},
+			readPositiveMs(runtime, "DISCORD_MANAGER_ACK_MS", DEFAULT_MANAGER_ACK_MS),
+		);
+		const clearAck = () => {
+			completed = true;
+			if (ackTimer) {
+				clearTimeout(ackTimer);
+				ackTimer = null;
+			}
+		};
 		try {
 			const result = await withTimeout(
 				original,
-				readPositiveMs(runtime, "DISCORD_ADDRESSED_REPLY_GUARD_MS", DEFAULT_REPLY_GUARD_MS),
+				readPositiveMs(
+					runtime,
+					"DISCORD_ADDRESSED_REPLY_GUARD_MS",
+					DEFAULT_REPLY_GUARD_MS,
+				),
 			);
+			clearAck();
 			if (result === "timeout") {
 				void original.catch((error) =>
 					runtime.logger.warn(
@@ -773,9 +1230,15 @@ export function installDiscordMessageManagerGuard(runtime: IAgentRuntime): void 
 				await handleManagerFallback(runtime, service, message, "timeout");
 				return undefined;
 			}
-			await handleManagerFallback(runtime, service, message, "empty-manager-result");
+			await handleManagerFallback(
+				runtime,
+				service,
+				message,
+				"empty-manager-result",
+			);
 			return result;
 		} catch (error) {
+			clearAck();
 			await handleManagerFallback(
 				runtime,
 				service,

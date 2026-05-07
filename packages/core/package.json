@@ -16,6 +16,7 @@
 		"@detour/plugin-openrouter": "workspace:*",
 		"@detour/plugin-pensieve-tools": "workspace:*",
 		"@detour/plugin-vault-tools": "workspace:*",
+		"@detour/plugin-workspace-tools": "workspace:*",
 		"@detour/plugin-x-tweets": "workspace:*",
 		"@detour/shared": "workspace:*",
 		"@elizaos/agent": "workspace:*",

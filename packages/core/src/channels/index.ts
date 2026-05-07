@@ -15,7 +15,7 @@
  * Discord's discord.js into memory if the user never set DISCORD_API_TOKEN.
  */
 
-import { logger, type IAgentRuntime, type Plugin } from "@elizaos/core";
+import { type IAgentRuntime, logger, type Plugin } from "@elizaos/core";
 import type { VaultService } from "../vault";
 
 // Discord bot tokens have a strict format: <id_base64>.<timestamp>.<hmac>,
@@ -31,14 +31,26 @@ function looksLikeTelegramBotToken(value: string): boolean {
 	return /^\d{6,12}$/.test(id ?? "") && (secret?.length ?? 0) >= 30;
 }
 
-function invalidChannelCredential(id: ChannelId, key: string, value: string): ChannelLiveSnapshot | null {
-	if (id === "discord" && key === "DISCORD_API_TOKEN" && !looksLikeDiscordBotToken(value)) {
+function invalidChannelCredential(
+	id: ChannelId,
+	key: string,
+	value: string,
+): ChannelLiveSnapshot | null {
+	if (
+		id === "discord" &&
+		key === "DISCORD_API_TOKEN" &&
+		!looksLikeDiscordBotToken(value)
+	) {
 		return {
 			liveStatus: "invalid-token",
 			liveDetail: `${key} doesn't look like a Discord bot token (expected ~70 chars with two dots; got ${value.length} chars, ${value.split(".").length - 1} dots).`,
 		};
 	}
-	if (id === "telegram" && key === "TELEGRAM_BOT_TOKEN" && !looksLikeTelegramBotToken(value)) {
+	if (
+		id === "telegram" &&
+		key === "TELEGRAM_BOT_TOKEN" &&
+		!looksLikeTelegramBotToken(value)
+	) {
 		return {
 			liveStatus: "invalid-token",
 			liveDetail: `${key} doesn't look like a Telegram bot token (expected <id>:<35-char secret>).`,
@@ -47,8 +59,13 @@ function invalidChannelCredential(id: ChannelId, key: string, value: string): Ch
 	return null;
 }
 
-function settingField<K extends "autoReply" | "respondOnlyToMentions">(key: K, value: boolean | undefined): Pick<ChannelStatus, K> | {} {
-	return value === undefined ? {} : { [key]: value } as Pick<ChannelStatus, K>;
+function settingField<K extends "autoReply" | "respondOnlyToMentions">(
+	key: K,
+	value: boolean | undefined,
+): Pick<ChannelStatus, K> | {} {
+	return value === undefined
+		? {}
+		: ({ [key]: value } as Pick<ChannelStatus, K>);
 }
 
 type ChannelServiceRecord = Record<string, unknown>;
@@ -59,25 +76,37 @@ type DiscordClientProbe = {
 	guilds?: { cache?: { size?: number } };
 };
 type TelegramBotProbe = { botInfo?: { username?: string; id?: number } };
-type GitHubServiceProbe = { getOctokit?: (as: "user" | "agent") => object | null };
+type GitHubServiceProbe = {
+	getOctokit?: (as: "user" | "agent") => object | null;
+};
 
 function serviceKeys(svc: ChannelServiceRecord): string[] {
-	return Object.keys(svc).filter((k) => !k.startsWith("_")).slice(0, 40);
+	return Object.keys(svc)
+		.filter((k) => !k.startsWith("_"))
+		.slice(0, 40);
 }
 
 function serviceClassName(svc: ChannelServiceRecord): string {
 	return (svc.constructor as { name?: string } | undefined)?.name ?? "?";
 }
 
-function resolveChannelService(runtime: IAgentRuntime, id: ChannelId): ChannelServiceRecord | undefined {
+function resolveChannelService(
+	runtime: IAgentRuntime,
+	id: ChannelId,
+): ChannelServiceRecord | undefined {
 	const r = runtime as unknown as {
 		getService?: (t: string) => unknown;
 		getServicesByType?: (t: string) => unknown[];
 	};
-	return (r.getService?.(id) ?? r.getServicesByType?.(id)?.[0]) as ChannelServiceRecord | undefined;
+	return (r.getService?.(id) ?? r.getServicesByType?.(id)?.[0]) as
+		| ChannelServiceRecord
+		| undefined;
 }
 
-function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: ChannelLiveStatus; detail?: string } {
+function probeChannelLive(
+	runtime: IAgentRuntime,
+	id: ChannelId,
+): { status: ChannelLiveStatus; detail?: string } {
 	const svc = resolveChannelService(runtime, id);
 	if (!svc) return { status: "loaded", detail: "service not registered yet" };
 	switch (id) {
@@ -93,21 +122,32 @@ function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: Chan
 	return { status: "loaded" };
 }
 
-function probeDiscordLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+function probeDiscordLive(svc: ChannelServiceRecord): {
+	status: ChannelLiveStatus;
+	detail?: string;
+} {
 	const client = svc.client as DiscordClientProbe | null;
 	if (!client) return probeMissingDiscordClient(svc);
 	if (client.readyAt) return probeReadyDiscordClient(client);
-	return { status: "connecting", detail: `Logging in (ws.status=${client.ws?.status ?? "?"})` };
+	return {
+		status: "connecting",
+		detail: `Logging in (ws.status=${client.ws?.status ?? "?"})`,
+	};
 }
 
-function probeMissingDiscordClient(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail: string } {
+function probeMissingDiscordClient(svc: ChannelServiceRecord): {
+	status: ChannelLiveStatus;
+	detail: string;
+} {
 	const loginFailed = (svc as { _loginFailed?: boolean })._loginFailed === true;
 	logger.info(
 		{
 			src: "channels:probe",
 			constructor: serviceClassName(svc),
 			loginFailed,
-			hasReadyPromise: (svc as { clientReadyPromise?: unknown }).clientReadyPromise !== undefined,
+			hasReadyPromise:
+				(svc as { clientReadyPromise?: unknown }).clientReadyPromise !==
+				undefined,
 			keys: serviceKeys(svc),
 		},
 		"discord svc.client is null — service did not finish login",
@@ -120,7 +160,10 @@ function probeMissingDiscordClient(svc: ChannelServiceRecord): { status: Channel
 	};
 }
 
-function probeReadyDiscordClient(client: DiscordClientProbe): { status: ChannelLiveStatus; detail: string } {
+function probeReadyDiscordClient(client: DiscordClientProbe): {
+	status: ChannelLiveStatus;
+	detail: string;
+} {
 	const tag = client.user?.tag ?? client.user?.username ?? "bot";
 	const guildCount = client.guilds?.cache?.size ?? 0;
 	if (guildCount === 0) {
@@ -135,27 +178,49 @@ function probeReadyDiscordClient(client: DiscordClientProbe): { status: ChannelL
 	};
 }
 
-function probeTelegramLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+function probeTelegramLive(svc: ChannelServiceRecord): {
+	status: ChannelLiveStatus;
+	detail?: string;
+} {
 	const bot = svc.bot as TelegramBotProbe | null;
 	if (!bot) return probeMissingTelegramBot(svc);
-	if (bot.botInfo?.id) return { status: "online", detail: `@${bot.botInfo.username} is online` };
+	if (bot.botInfo?.id)
+		return { status: "online", detail: `@${bot.botInfo.username} is online` };
 	return { status: "connecting", detail: "Telegraf handshake in progress" };
 }
 
-function probeMissingTelegramBot(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail: string } {
+function probeMissingTelegramBot(svc: ChannelServiceRecord): {
+	status: ChannelLiveStatus;
+	detail: string;
+} {
 	logger.info(
-		{ src: "channels:probe", constructor: serviceClassName(svc), keys: serviceKeys(svc) },
+		{
+			src: "channels:probe",
+			constructor: serviceClassName(svc),
+			keys: serviceKeys(svc),
+		},
 		"telegram svc.bot is null — Telegraf not yet constructed",
 	);
 	return { status: "connecting", detail: "Telegraf bot not yet created" };
 }
 
-function probeGithubLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+function probeGithubLive(svc: ChannelServiceRecord): {
+	status: ChannelLiveStatus;
+	detail?: string;
+} {
 	const getOctokit = (svc as GitHubServiceProbe).getOctokit;
-	if (typeof getOctokit !== "function") return { status: "loaded", detail: "GitHub service loaded; client probe unavailable" };
+	if (typeof getOctokit !== "function")
+		return {
+			status: "loaded",
+			detail: "GitHub service loaded; client probe unavailable",
+		};
 	const userClient = getOctokit.call(svc, "user");
 	const agentClient = getOctokit.call(svc, "agent");
-	if (!userClient && !agentClient) return { status: "error", detail: "GitHub plugin loaded but no PAT is available" };
+	if (!userClient && !agentClient)
+		return {
+			status: "error",
+			detail: "GitHub plugin loaded but no PAT is available",
+		};
 	const modes = [
 		...(userClient ? ["user"] : []),
 		...(agentClient ? ["agent"] : []),
@@ -163,20 +228,42 @@ function probeGithubLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus
 	return { status: "online", detail: `GitHub client ready (${modes})` };
 }
 
-function probeImessageLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+function probeImessageLive(svc: ChannelServiceRecord): {
+	status: ChannelLiveStatus;
+	detail?: string;
+} {
 	const getStatus = (svc as { getStatus?: () => unknown }).getStatus;
-	if (typeof getStatus !== "function") return { status: "loaded", detail: "iMessage service loaded; status unavailable" };
+	if (typeof getStatus !== "function")
+		return {
+			status: "loaded",
+			detail: "iMessage service loaded; status unavailable",
+		};
 	const status = getStatus.call(svc);
-	if (!status || typeof status !== "object") return { status: "loaded", detail: "iMessage service loaded; status unavailable" };
+	if (!status || typeof status !== "object")
+		return {
+			status: "loaded",
+			detail: "iMessage service loaded; status unavailable",
+		};
 	const record = status as Record<string, unknown>;
-	if (record.chatDbAvailable === true) return { status: "online", detail: "chat.db readable; inbound polling ready" };
+	if (record.chatDbAvailable === true)
+		return {
+			status: "online",
+			detail: "chat.db readable; inbound polling ready",
+		};
 	if (record.connected === true) return imessageSendOnlyStatus(record);
-	const reason = typeof record.reason === "string" ? record.reason : "service not connected";
+	const reason =
+		typeof record.reason === "string" ? record.reason : "service not connected";
 	return { status: "connecting", detail: reason };
 }
 
-function imessageSendOnlyStatus(record: Record<string, unknown>): { status: ChannelLiveStatus; detail: string } {
-	const reason = typeof record.reason === "string" ? record.reason : "Full Disk Access required for receive";
+function imessageSendOnlyStatus(record: Record<string, unknown>): {
+	status: ChannelLiveStatus;
+	detail: string;
+} {
+	const reason =
+		typeof record.reason === "string"
+			? record.reason
+			: "Full Disk Access required for receive";
 	return { status: "loaded", detail: `Send-only mode (${reason})` };
 }
 
@@ -229,7 +316,10 @@ async function loadDiscord(): Promise<Plugin | null> {
 		const mod = await import("@elizaos/plugin-discord");
 		return pickPlugin(mod, "discord");
 	} catch (err) {
-		console.warn("[channels] discord plugin load failed:", err instanceof Error ? err.message : err);
+		console.warn(
+			"[channels] discord plugin load failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return null;
 	}
 }
@@ -239,7 +329,10 @@ async function loadTelegram(): Promise<Plugin | null> {
 		const mod = await import("@elizaos/plugin-telegram");
 		return pickPlugin(mod, "telegram");
 	} catch (err) {
-		console.warn("[channels] telegram plugin load failed:", err instanceof Error ? err.message : err);
+		console.warn(
+			"[channels] telegram plugin load failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return null;
 	}
 }
@@ -250,7 +343,10 @@ async function loadGithub(): Promise<Plugin | null> {
 		return pickPlugin(mod, "github");
 	} catch (err) {
 		logger.warn(
-			{ src: "channels", error: err instanceof Error ? err.message : String(err) },
+			{
+				src: "channels",
+				error: err instanceof Error ? err.message : String(err),
+			},
 			"github plugin load failed",
 		);
 		return null;
@@ -263,7 +359,10 @@ async function loadImessage(): Promise<Plugin | null> {
 		const mod = await import("@elizaos/plugin-imessage");
 		return pickPlugin(mod, "imessage");
 	} catch (err) {
-		console.warn("[channels] imessage plugin load failed:", err instanceof Error ? err.message : err);
+		console.warn(
+			"[channels] imessage plugin load failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return null;
 	}
 }
@@ -272,9 +371,16 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 	{
 		id: "discord",
 		label: "Discord",
-		description: "Connect a Discord bot. Required: DISCORD_API_TOKEN. Optional: DISCORD_APPLICATION_ID.",
+		description:
+			"Connect a Discord bot. Required: DISCORD_API_TOKEN. Optional: DISCORD_APPLICATION_ID.",
 		requiredVaultKeys: ["DISCORD_API_TOKEN"],
-		optionalVaultKeys: ["DISCORD_APPLICATION_ID", "DISCORD_AUTO_REPLY", "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS", "DISCORD_CATCH_UP_ENABLED"],
+		optionalVaultKeys: [
+			"DISCORD_APPLICATION_ID",
+			"DISCORD_AUTO_REPLY",
+			"DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS",
+			"DISCORD_CATCH_UP_ENABLED",
+			"DISCORD_MENTION_ROLE_IDS",
+		],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-discord",
 		loadPlugin: loadDiscord,
@@ -292,7 +398,8 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 	{
 		id: "github",
 		label: "GitHub",
-		description: "Connect GitHub for PRs, issues, review actions, and notification triage. Required: GITHUB_USER_PAT and GITHUB_AGENT_PAT.",
+		description:
+			"Connect GitHub for PRs, issues, review actions, and notification triage. Required: GITHUB_USER_PAT and GITHUB_AGENT_PAT.",
 		requiredVaultKeys: ["GITHUB_USER_PAT", "GITHUB_AGENT_PAT"],
 		optionalVaultKeys: ["GITHUB_TOKEN"],
 		platform: "any",
@@ -302,7 +409,8 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 	{
 		id: "imessage",
 		label: "iMessage",
-		description: "Bridge macOS Messages. Requires Full Disk Access for ~/Library/Messages/chat.db.",
+		description:
+			"Bridge macOS Messages. Requires Full Disk Access for ~/Library/Messages/chat.db.",
 		// iMessage has no API token, but we use IMESSAGE_ENABLED as the
 		// explicit opt-in signal — listing it here means `configured`
 		// reflects "user has enabled it" not just "platform supports it".
@@ -315,12 +423,12 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 ];
 
 export type ChannelLiveStatus =
-	| "off"            // not configured / not loaded
-	| "loaded"         // module in memory but no live connection probed
-	| "connecting"     // service started, gateway handshake in progress
-	| "online"         // gateway fully connected, bot user online
-	| "invalid-token"  // credential present but format is clearly wrong
-	| "error";         // service started but reports a fatal error
+	| "off" // not configured / not loaded
+	| "loaded" // module in memory but no live connection probed
+	| "connecting" // service started, gateway handshake in progress
+	| "online" // gateway fully connected, bot user online
+	| "invalid-token" // credential present but format is clearly wrong
+	| "error"; // service started but reports a fatal error
 
 export interface ChannelStatus {
 	id: ChannelId;
@@ -344,7 +452,10 @@ export interface ChannelsSnapshot {
 	channels: ChannelStatus[];
 }
 
-type ChannelLiveSnapshot = { liveStatus: ChannelLiveStatus; liveDetail?: string };
+type ChannelLiveSnapshot = {
+	liveStatus: ChannelLiveStatus;
+	liveDetail?: string;
+};
 
 export class ChannelsService {
 	constructor(private readonly vault: VaultService) {}
@@ -353,7 +464,9 @@ export class ChannelsService {
 		return CHANNEL_DEFINITIONS;
 	}
 
-	private async hasAllKeys(keys: string[]): Promise<{ ok: boolean; missing: string[] }> {
+	private async hasAllKeys(
+		keys: string[],
+	): Promise<{ ok: boolean; missing: string[] }> {
 		if (keys.length === 0) return { ok: true, missing: [] };
 		const v = await this.vault.vault();
 		const missing: string[] = [];
@@ -363,14 +476,19 @@ export class ChannelsService {
 		return { ok: missing.length === 0, missing };
 	}
 
-	private async hasRequiredCredentials(def: ChannelDefinition): Promise<{ ok: boolean; missing: string[] }> {
+	private async hasRequiredCredentials(
+		def: ChannelDefinition,
+	): Promise<{ ok: boolean; missing: string[] }> {
 		if (def.id !== "github") return this.hasAllKeys(def.requiredVaultKeys);
 		const v = await this.vault.vault();
 		if (await v.has("GITHUB_TOKEN")) return { ok: true, missing: [] };
 		return this.hasAllKeys(def.requiredVaultKeys);
 	}
 
-	private boolSetting(runtime: IAgentRuntime | null, key: string): boolean | undefined {
+	private boolSetting(
+		runtime: IAgentRuntime | null,
+		key: string,
+	): boolean | undefined {
 		const value = runtime?.getSetting(key);
 		if (value === true || value === false) return value;
 		if (typeof value === "string") {
@@ -381,13 +499,24 @@ export class ChannelsService {
 		return undefined;
 	}
 
-	async snapshot(loadedPlugins: string[] = [], runtime: IAgentRuntime | null = null): Promise<ChannelsSnapshot> {
+	async snapshot(
+		loadedPlugins: string[] = [],
+		runtime: IAgentRuntime | null = null,
+	): Promise<ChannelsSnapshot> {
 		const loadedSet = new Set(loadedPlugins.map((s) => s.toLowerCase()));
-		const channels = await Promise.all(CHANNEL_DEFINITIONS.map((def) => this.channelStatus(def, loadedSet, runtime)));
+		const channels = await Promise.all(
+			CHANNEL_DEFINITIONS.map((def) =>
+				this.channelStatus(def, loadedSet, runtime),
+			),
+		);
 		return { channels };
 	}
 
-	private async channelStatus(def: ChannelDefinition, loadedSet: Set<string>, runtime: IAgentRuntime | null): Promise<ChannelStatus> {
+	private async channelStatus(
+		def: ChannelDefinition,
+		loadedSet: Set<string>,
+		runtime: IAgentRuntime | null,
+	): Promise<ChannelStatus> {
 		const platformAvailable = this.platformAvailable(def);
 		const { ok, missing } = await this.hasRequiredCredentials(def);
 		const pluginLoaded = this.pluginLoaded(def, loadedSet);
@@ -411,13 +540,21 @@ export class ChannelsService {
 	}
 
 	private platformAvailable(def: ChannelDefinition): boolean {
-		return def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
+		return (
+			def.platform === "any" ||
+			(def.platform === "macos" && process.platform === "darwin")
+		);
 	}
 
-	private pluginLoaded(def: ChannelDefinition, loadedSet: Set<string>): boolean {
-		return loadedSet.has(def.id)
-			|| loadedSet.has(def.pluginPackage.toLowerCase())
-			|| loadedSet.has(def.pluginPackage.replace(/^@elizaos\//, "").toLowerCase());
+	private pluginLoaded(
+		def: ChannelDefinition,
+		loadedSet: Set<string>,
+	): boolean {
+		return (
+			loadedSet.has(def.id) ||
+			loadedSet.has(def.pluginPackage.toLowerCase()) ||
+			loadedSet.has(def.pluginPackage.replace(/^@elizaos\//, "").toLowerCase())
+		);
 	}
 
 	private async channelLive(
@@ -430,14 +567,22 @@ export class ChannelsService {
 		if (invalid) return invalid;
 		if (pluginLoaded && runtime) {
 			const probed = probeChannelLive(runtime, def.id);
-			return { liveStatus: probed.status, ...(probed.detail ? { liveDetail: probed.detail } : {}) };
+			return {
+				liveStatus: probed.status,
+				...(probed.detail ? { liveDetail: probed.detail } : {}),
+			};
 		}
 		return pluginLoaded
-			? { liveStatus: "loaded", liveDetail: "plugin loaded but runtime unavailable" }
+			? {
+					liveStatus: "loaded",
+					liveDetail: "plugin loaded but runtime unavailable",
+				}
 			: { liveStatus: "off" };
 	}
 
-	private async invalidCredentialStatus(def: ChannelDefinition): Promise<ChannelLiveSnapshot | null> {
+	private async invalidCredentialStatus(
+		def: ChannelDefinition,
+	): Promise<ChannelLiveSnapshot | null> {
 		const v = await this.vault.vault();
 		for (const key of def.requiredVaultKeys) {
 			const value = await v.get(key).catch(() => "");
@@ -447,14 +592,27 @@ export class ChannelsService {
 		return null;
 	}
 
-	private channelRuntimeSettings(def: ChannelDefinition, runtime: IAgentRuntime | null): Partial<ChannelStatus> {
+	private channelRuntimeSettings(
+		def: ChannelDefinition,
+		runtime: IAgentRuntime | null,
+	): Partial<ChannelStatus> {
 		if (def.id === "discord") {
 			return {
-				...settingField("autoReply", this.boolSetting(runtime, "DISCORD_AUTO_REPLY")),
-				...settingField("respondOnlyToMentions", this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS")),
+				...settingField(
+					"autoReply",
+					this.boolSetting(runtime, "DISCORD_AUTO_REPLY"),
+				),
+				...settingField(
+					"respondOnlyToMentions",
+					this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS"),
+				),
 			};
 		}
-		if (def.id === "telegram") return settingField("autoReply", this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY"));
+		if (def.id === "telegram")
+			return settingField(
+				"autoReply",
+				this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY"),
+			);
 		return {};
 	}
 
@@ -464,7 +622,9 @@ export class ChannelsService {
 	 *  the AgentRuntime constructor's `settings` map (which is what
 	 *  `runtime.getSetting()` actually checks — env is not read by default
 	 *  in eliza). */
-	private async readCredentials(def: ChannelDefinition): Promise<Record<string, string>> {
+	private async readCredentials(
+		def: ChannelDefinition,
+	): Promise<Record<string, string>> {
 		const v = await this.vault.vault();
 		const out: Record<string, string> = {};
 		for (const key of [...def.requiredVaultKeys, ...def.optionalVaultKeys]) {
@@ -472,17 +632,24 @@ export class ChannelsService {
 				try {
 					out[key] = await v.get(key);
 				} catch (err) {
-					console.warn(`[channels] failed to read ${key} from vault:`, err instanceof Error ? err.message : err);
+					console.warn(
+						`[channels] failed to read ${key} from vault:`,
+						err instanceof Error ? err.message : err,
+					);
 				}
 			}
 		}
 		return this.normalizeCredentials(def, out);
 	}
 
-	private normalizeCredentials(def: ChannelDefinition, credentials: Record<string, string>): Record<string, string> {
+	private normalizeCredentials(
+		def: ChannelDefinition,
+		credentials: Record<string, string>,
+	): Record<string, string> {
 		if (def.id !== "github") return credentials;
 		const out = { ...credentials };
-		const token = out.GITHUB_TOKEN || out.GITHUB_USER_PAT || out.GITHUB_AGENT_PAT;
+		const token =
+			out.GITHUB_TOKEN || out.GITHUB_USER_PAT || out.GITHUB_AGENT_PAT;
 		if (!token) return out;
 		if (!out.GITHUB_USER_PAT) out.GITHUB_USER_PAT = token;
 		if (!out.GITHUB_AGENT_PAT) out.GITHUB_AGENT_PAT = token;
@@ -493,11 +660,16 @@ export class ChannelsService {
 	 *  should be exposed to the AgentRuntime via opts.settings. Caller wires
 	 *  `settings` into `new AgentRuntime({ ..., settings })` so plugins'
 	 *  `runtime.getSetting()` calls can find their tokens. */
-	async resolvePlugins(): Promise<{ plugins: Plugin[]; settings: Record<string, string> }> {
+	async resolvePlugins(): Promise<{
+		plugins: Plugin[];
+		settings: Record<string, string>;
+	}> {
 		const plugins: Plugin[] = [];
 		const settings: Record<string, string> = {};
 		for (const def of CHANNEL_DEFINITIONS) {
-			const platformAvailable = def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
+			const platformAvailable =
+				def.platform === "any" ||
+				(def.platform === "macos" && process.platform === "darwin");
 			if (!platformAvailable) continue;
 			const { ok } = await this.hasRequiredCredentials(def);
 			if (!ok && def.requiredVaultKeys.length > 0) continue;
@@ -511,7 +683,9 @@ export class ChannelsService {
 				settings[k] = val;
 			}
 			if (Object.keys(creds).length > 0) {
-				console.log(`[channels] ${def.id} creds wired: ${Object.keys(creds).join(", ")}`);
+				console.log(
+					`[channels] ${def.id} creds wired: ${Object.keys(creds).join(", ")}`,
+				);
 			}
 			const plugin = await def.loadPlugin();
 			if (plugin) plugins.push(plugin);

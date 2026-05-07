@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ActivityService } from "./activity";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
@@ -111,6 +111,9 @@ function ensureUsefulPath(): void {
 
 export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	ensureUsefulPath();
+	process.env.DETOUR_WORKSPACE_ROOT = process.env.DETOUR_WORKSPACE_ROOT ?? resolve(import.meta.dir, "../../..");
+	process.env.ELIZA_ACP_CLI = process.env.ELIZA_ACP_CLI ?? "acpx";
+	process.env.ELIZA_ACP_WORKSPACE_ROOT = process.env.ELIZA_ACP_WORKSPACE_ROOT ?? process.env.DETOUR_WORKSPACE_ROOT;
 	process.env.PGLITE_DATA_DIR = opts.pgliteDataDir;
 	// Anchor @elizaos/vault at our userData dir so vault.json lives next to
 	// PGlite (and per-channel: dev/stable separation comes for free). Must
