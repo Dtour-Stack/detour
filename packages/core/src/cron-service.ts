@@ -187,6 +187,9 @@ export class CronService {
 						await this.deleteJob(job.id);
 						return undefined;
 					}
+					if (parsed?.type === "cron" && job.nextRunAt) {
+						return { nextInterval: Math.max(60_000, job.nextRunAt - Date.now()) };
+					}
 					return parsed?.intervalMs ? { nextInterval: parsed.intervalMs } : undefined;
 				},
 			});
@@ -345,7 +348,9 @@ export class CronService {
 			description: `cron:${job.name}`,
 			tags: [...CRON_TASK_TAGS],
 			metadata: {
-				updateInterval: interval,
+				updateInterval: parsed?.type === "cron" && job.nextRunAt
+					? Math.max(60_000, job.nextRunAt - Date.now())
+					: interval,
 				updatedAt: Date.now(),
 				values: { cronJobId: job.id, schedule: job.schedule },
 			},
