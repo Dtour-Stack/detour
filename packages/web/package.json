@@ -10,8 +10,6 @@
 	},
 	"dependencies": {
 		"@detour/shared": "workspace:*",
-		"@wterm/dom": "^0.3.0",
-		"@wterm/react": "^0.3.0",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0"
 	},

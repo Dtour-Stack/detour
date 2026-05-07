@@ -746,6 +746,11 @@ export type WorkspaceAgentRecord = {
 	args: string[];
 	logPath: string;
 	previewUrl?: string;
+	publicUrl?: string;
+	publicUrlProvider?: "ngrok";
+	publicUrlPid?: number;
+	publicUrlStartedAt?: number;
+	publicUrlError?: string;
 	startedAt: number;
 	pid?: number;
 	exitCode?: number | null;
@@ -778,6 +783,7 @@ export type WorkspaceProjectRecord = {
 	failedCount: number;
 	latestStartedAt: number;
 	previewUrl?: string;
+	publicUrl?: string;
 };
 
 export type WorkspaceProjectsSnapshot = {

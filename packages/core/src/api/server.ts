@@ -352,6 +352,11 @@ function parseWorkspaceAgent(
 	const endedAt = numberValue(source.endedAt);
 	const credentialAttempt = numberValue(source.credentialAttempt);
 	const previewUrl = workspacePreviewUrl(source.previewUrl);
+	const publicUrl = workspacePreviewUrl(source.publicUrl);
+	const publicUrlProvider = source.publicUrlProvider === "ngrok" ? "ngrok" : null;
+	const publicUrlPid = numberValue(source.publicUrlPid);
+	const publicUrlStartedAt = numberValue(source.publicUrlStartedAt);
+	const publicUrlError = stringValue(source.publicUrlError);
 	const previewPath = previewPathFromLog(logPath);
 	const generatedPreviewUrl = origin && previewPath
 		? workspaceProjectFilePreviewUrl(origin, cwd, previewPath)
@@ -368,6 +373,11 @@ function parseWorkspaceAgent(
 		args,
 		logPath,
 		...(detectedPreviewUrl ? { previewUrl: detectedPreviewUrl } : {}),
+		...(publicUrl ? { publicUrl } : {}),
+		...(publicUrlProvider ? { publicUrlProvider } : {}),
+		...(publicUrlPid !== null ? { publicUrlPid } : {}),
+		...(publicUrlStartedAt !== null ? { publicUrlStartedAt } : {}),
+		...(publicUrlError !== null ? { publicUrlError } : {}),
 		startedAt,
 		...(pid !== null ? { pid } : {}),
 		...(exitCode !== null || source.exitCode === null ? { exitCode } : {}),
@@ -493,6 +503,7 @@ function readWorkspaceProjects(origin?: string): WorkspaceProjectRecord[] {
 				failedCount: agent.status === "failed" ? 1 : 0,
 				latestStartedAt: agent.startedAt,
 				...(agent.previewUrl ? { previewUrl: agent.previewUrl } : {}),
+				...(agent.publicUrl ? { publicUrl: agent.publicUrl } : {}),
 			});
 			continue;
 		}
@@ -503,6 +514,7 @@ function readWorkspaceProjects(origin?: string): WorkspaceProjectRecord[] {
 		if (agent.startedAt > existing.latestStartedAt) {
 			existing.latestStartedAt = agent.startedAt;
 			if (agent.previewUrl) existing.previewUrl = agent.previewUrl;
+			if (agent.publicUrl) existing.publicUrl = agent.publicUrl;
 		}
 	}
 	const projects = [...byCwd.values()];

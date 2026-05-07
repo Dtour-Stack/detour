@@ -8,7 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
 	Action,
@@ -45,6 +45,11 @@ type AgentRecord = {
 	args: string[];
 	logPath: string;
 	previewUrl?: string;
+	publicUrl?: string;
+	publicUrlProvider?: "ngrok";
+	publicUrlPid?: number;
+	publicUrlStartedAt?: number;
+	publicUrlError?: string;
 	startedAt: number;
 	pid?: number;
 	exitCode?: number | null;
@@ -88,6 +93,10 @@ const AGENT_STATE_FILE = join(AGENT_STATE_DIR, "sessions.json");
 const AGENT_TMP_DIR = join(AGENT_WORKSPACE_ROOT, ".tmp");
 const AGENT_CACHE_DIR = join(AGENT_WORKSPACE_ROOT, ".cache");
 const AGENT_BUN_CACHE_DIR = join(AGENT_CACHE_DIR, "bun");
+const PREVIEW_URL_PATTERN =
+	/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s\\"'<>),\]}]*)?/gi;
+const NGROK_URL_PATTERN =
+	/https:\/\/[a-z0-9.-]+\.ngrok(?:-free)?\.app(?:\/[^\s\\"'<>),\]}]*)?/i;
 const CLAUDE_KEY_LIST_NAMES = ["ANTHROPIC_API_KEYS", "CLAUDE_API_KEYS"] as const;
 const CLAUDE_SINGLE_KEY_NAMES = ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"] as const;
 const CLAUDE_NUMBERED_KEY_PREFIXES = ["ANTHROPIC_API_KEY_", "CLAUDE_API_KEY_"] as const;
@@ -146,7 +155,7 @@ function numberOption(options: Record<string, unknown> | undefined, keys: readon
 }
 
 function workspaceRoot(): string {
-	const root = process.env.DETOUR_WORKSPACE_ROOT;
+	const root = process.env.DETOUR_AGENT_WORKSPACE_ROOT;
 	const resolved = typeof root === "string" && root.length > 0 && !isAppBundlePath(root)
 		? resolve(root)
 		: AGENT_PROJECTS_DIR;
@@ -165,6 +174,10 @@ function projectSlug(value: string): string {
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 56);
 	return slug || "project";
+}
+
+function defaultProjectName(task: string, id: string): string {
+	return `${projectSlug(task).slice(0, 48)}-${id.slice(0, 8)}`;
 }
 
 function resolveCwd(cwd: string | undefined, projectSeed: string): string {
@@ -201,6 +214,7 @@ function workspaceAgentEnv(): NodeJS.ProcessEnv {
 	mkdirSync(AGENT_CACHE_DIR, { recursive: true });
 	mkdirSync(AGENT_BUN_CACHE_DIR, { recursive: true });
 	const githubToken = process.env.GITHUB_AGENT_PAT ?? process.env.GITHUB_TOKEN ?? process.env.GITHUB_USER_PAT;
+	const ngrokPath = executablePath("ngrok");
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		DETOUR_WORKSPACE_ROOT: workspaceRoot(),
@@ -210,6 +224,10 @@ function workspaceAgentEnv(): NodeJS.ProcessEnv {
 		XDG_CACHE_HOME: AGENT_CACHE_DIR,
 		BUN_INSTALL_CACHE_DIR: AGENT_BUN_CACHE_DIR,
 	};
+	if (ngrokPath) {
+		env.NGROK_BIN = ngrokPath;
+		env.PATH = `${dirname(ngrokPath)}:${env.PATH ?? ""}`;
+	}
 	if (githubToken) {
 		env.GITHUB_TOKEN = githubToken;
 		env.GH_TOKEN = process.env.GH_TOKEN ?? githubToken;
@@ -434,12 +452,40 @@ function providerOption(opts: Record<string, unknown> | undefined): AgentProvide
 function previewUrlOption(opts: Record<string, unknown> | undefined): string | undefined {
 	const value = stringOption(opts, ["previewUrl", "previewURL", "preview"]);
 	if (!value) return undefined;
+	return normalizeHttpUrl(value);
+}
+
+function normalizeHttpUrl(value: string): string | undefined {
 	try {
 		const url = new URL(value);
+		if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1";
 		return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function previewUrlFromLog(logPath: string): string | undefined {
+	if (!existsSync(logPath)) return undefined;
+	const text = readFileSync(logPath, "utf8");
+	for (const match of text.matchAll(PREVIEW_URL_PATTERN)) {
+		const url = normalizeHttpUrl(match[0]);
+		if (url) return url;
+	}
+	return undefined;
+}
+
+function ngrokUrlFromText(text: string): string | undefined {
+	const match = text.match(NGROK_URL_PATTERN);
+	return match ? match[0] : undefined;
+}
+
+function ngrokTarget(previewUrl: string): string {
+	const url = new URL(previewUrl);
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error(`Cannot share non-HTTP preview URL: ${previewUrl}`);
+	}
+	return `${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
 }
 
 function resolveProvider(opts: Record<string, unknown> | undefined): AgentProvider {
@@ -552,6 +598,80 @@ function spawnAgentProcess(record: AgentRecord, attempts: CredentialAttempts): A
 	return spawnAgentAttempt(record, attempts, 0);
 }
 
+function startNgrokShare(agent: AgentRecord, previewUrl: string, timeoutMs: number): Promise<AgentRecord> {
+	const command = executablePath("ngrok");
+	if (!command) throw new Error("ngrok is not installed or not on PATH.");
+	const target = ngrokTarget(previewUrl);
+	const logPath = join(AGENT_STATE_DIR, `${agent.id}.ngrok.log`);
+	const stream = createWriteStream(logPath, { flags: "a" });
+	const child = spawn(command, ["http", target, "--log=stdout", "--log-format=json"], {
+		cwd: agent.cwd,
+		env: workspaceAgentEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
+		shell: false,
+	});
+	child.unref();
+	const startedAt = Date.now();
+	updateAgent(agent.id, {
+		publicUrlProvider: "ngrok",
+		publicUrlPid: child.pid,
+		publicUrlStartedAt: startedAt,
+		publicUrlError: undefined,
+	});
+	return new Promise<AgentRecord>((resolveShare, rejectShare) => {
+		let settled = false;
+		const finish = (fn: () => void): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			fn();
+		};
+		const handleData = (chunk: Buffer): void => {
+			const text = chunk.toString("utf8");
+			stream.write(text);
+			const publicUrl = ngrokUrlFromText(text);
+			if (!publicUrl) return;
+			finish(() => {
+				const updated = updateAgent(agent.id, {
+					previewUrl,
+					publicUrl,
+					publicUrlProvider: "ngrok",
+					publicUrlPid: child.pid,
+					publicUrlStartedAt: startedAt,
+					publicUrlError: undefined,
+				}) ?? { ...agent, previewUrl, publicUrl, publicUrlProvider: "ngrok", publicUrlPid: child.pid, publicUrlStartedAt: startedAt };
+				resolveShare(updated);
+			});
+		};
+		const timer = setTimeout(() => {
+			finish(() => {
+				const message = `Timed out waiting for ngrok URL for ${previewUrl}.`;
+				updateAgent(agent.id, { publicUrlError: message });
+				rejectShare(new Error(message));
+			});
+		}, timeoutMs);
+		child.stdout.on("data", handleData);
+		child.stderr.on("data", handleData);
+		child.on("error", (error) => {
+			finish(() => {
+				const message = error instanceof Error ? error.message : String(error);
+				updateAgent(agent.id, { publicUrlError: message });
+				rejectShare(error);
+			});
+		});
+		child.on("close", (exitCode, signal) => {
+			stream.end();
+			const message = `ngrok exited: code=${exitCode ?? "null"} signal=${signal ?? "null"}`;
+			if (settled) {
+				updateAgent(agent.id, { publicUrlError: message });
+				return;
+			}
+			updateAgent(agent.id, { publicUrlError: message });
+			finish(() => rejectShare(new Error(message)));
+		});
+	});
+}
+
 function formatProcessLog(record: AgentRecord, result: ProcessRun): string {
 	return [
 		record.credentialAttempt && record.credentialAttempt > 1
@@ -585,7 +705,7 @@ const spawnAgentHandler: Handler = async (runtime, message, _state, options, cal
 	const agentType = agentTypeFor(provider, opts);
 	const id = stringOption(opts, ["id", "sessionId", "session"]) ?? randomUUID();
 	const projectName = stringOption(opts, ["project", "projectName", "workspace", "repoName"]);
-	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]), projectName ?? `${task}-${id.slice(0, 8)}`);
+	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]), projectName ?? defaultProjectName(task, id));
 	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
 	const previewUrl = previewUrlOption(opts);
 	const attempts = credentialAttempts({ provider, agentType });
@@ -630,7 +750,7 @@ const createTaskHandler: Handler = async (runtime, message, _state, options, cal
 	const maxOutput = Math.max(1_000, Math.min(200_000, numberOption(opts, ["maxOutput", "max_output", "maxOutputChars"], DEFAULT_MAX_OUTPUT)));
 	const id = stringOption(opts, ["id", "taskId", "sessionId", "session"]) ?? randomUUID();
 	const projectName = stringOption(opts, ["project", "projectName", "workspace", "repoName"]);
-	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]), projectName ?? `${task}-${id.slice(0, 8)}`);
+	const cwd = resolveCwd(stringOption(opts, ["workdir", "cwd", "directory", "dir"]), projectName ?? defaultProjectName(task, id));
 	const built = buildAgentCommand({ provider, agentType, task, cwd, approval: approvalMode(opts) });
 	const previewUrl = previewUrlOption(opts);
 	const record: AgentRecord = {
@@ -725,7 +845,8 @@ const listAgentsHandler: Handler = async (_runtime, _message, _state, options, c
 		const log = includeLogs && existsSync(agent.logPath)
 			? `\n${truncateMiddle(readFileSync(agent.logPath, "utf8").trim(), DEFAULT_MAX_OUTPUT)}`
 			: "";
-		return `${agent.id} ${agent.status} ${agent.provider}/${agent.agentType} cwd=${agent.cwd} log=${agent.logPath}${log}`;
+		const publicUrl = agent.publicUrl ? ` publicUrl=${agent.publicUrl}` : "";
+		return `${agent.id} ${agent.status} ${agent.provider}/${agent.agentType} cwd=${agent.cwd} log=${agent.logPath}${publicUrl}${log}`;
 	});
 	const text = rows.length > 0 ? rows.join("\n") : "No workspace agents recorded.";
 	await emit(callback, text, "LIST_AGENTS");
@@ -763,6 +884,10 @@ const sendToAgentHandler: Handler = async (runtime, message, _state, options, ca
 		args: built.args,
 		logPath: join(AGENT_STATE_DIR, `${childId}.log`),
 		...(previewUrl ? { previewUrl } : {}),
+		...(existing.publicUrl ? { publicUrl: existing.publicUrl } : {}),
+		...(existing.publicUrlProvider ? { publicUrlProvider: existing.publicUrlProvider } : {}),
+		...(existing.publicUrlPid ? { publicUrlPid: existing.publicUrlPid } : {}),
+		...(existing.publicUrlStartedAt ? { publicUrlStartedAt: existing.publicUrlStartedAt } : {}),
 		startedAt: Date.now(),
 	}, attempts);
 	upsertAgent(record);
@@ -783,6 +908,51 @@ const sendToAgentHandler: Handler = async (runtime, message, _state, options, ca
 	return ok(text, { parent: existing, agent: record });
 };
 
+const sharePreviewHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const id = stringOption(opts, ["id", "sessionId", "agentId", "agent"]);
+	const explicitPreviewUrl = previewUrlOption(opts);
+	const timeoutMs = Math.max(5_000, Math.min(60_000, numberOption(opts, ["timeoutMs", "timeout", "waitMs"], 20_000)));
+	const agents = refreshedAgents();
+	const agent = id
+		? agents.find((entry) => entry.id === id)
+		: agents.find((entry) => entry.previewUrl || previewUrlFromLog(entry.logPath));
+	if (!agent) return fail(id ? `No workspace agent found for ${id}.` : "No workspace agent with a preview URL found.");
+	const previewUrl = explicitPreviewUrl ?? agent.previewUrl ?? previewUrlFromLog(agent.logPath);
+	if (!previewUrl) return fail(`No preview URL found for workspace agent ${agent.id}.`);
+	try {
+		const updated = await startNgrokShare(agent, previewUrl, timeoutMs);
+		writeAudit({
+			action: "share_preview",
+			agentId: agent.id,
+			provider: agent.provider,
+			agentType: agent.agentType,
+			cwd: agent.cwd,
+			success: true,
+			caller: caller(runtime),
+			ts: Date.now(),
+		});
+		const text = `Shared ${previewUrl} through ngrok: ${updated.publicUrl}`;
+		await emit(callback, text, "SHARE_PREVIEW");
+		return ok(text, { agent: updated, previewUrl, publicUrl: updated.publicUrl });
+	} catch (error) {
+		const errorText = error instanceof Error ? error.message : String(error);
+		writeAudit({
+			action: "share_preview",
+			agentId: agent.id,
+			provider: agent.provider,
+			agentType: agent.agentType,
+			cwd: agent.cwd,
+			success: false,
+			error: errorText,
+			caller: caller(runtime),
+			ts: Date.now(),
+		});
+		await emit(callback, `SHARE_PREVIEW failed: ${errorText}`, "SHARE_PREVIEW");
+		return fail(`SHARE_PREVIEW failed: ${errorText}`);
+	}
+};
+
 const stopAgentHandler: Handler = async (runtime, _message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const id = stringOption(opts, ["id", "sessionId", "agentId", "agent"]);
@@ -790,6 +960,7 @@ const stopAgentHandler: Handler = async (runtime, _message, _state, options, cal
 	const agent = refreshedAgents().find((entry) => entry.id === id);
 	if (!agent) return fail(`No workspace agent found for ${id}.`);
 	if (agent.pid && pidIsRunning(agent.pid)) process.kill(agent.pid, "SIGTERM");
+	if (agent.publicUrlPid && pidIsRunning(agent.publicUrlPid)) process.kill(agent.publicUrlPid, "SIGTERM");
 	const updated = updateAgent(id, { status: "stopped", endedAt: Date.now(), signal: "SIGTERM" }) ?? agent;
 	writeAudit({
 		action: "stop_agent",
@@ -810,7 +981,7 @@ export const spawnAgentAction: Action = {
 	name: "SPAWN_AGENT",
 	similes: ["SPAWN_CODING_AGENT", "START_CODING_AGENT", "LAUNCH_CODING_AGENT", "SPAWN_SUB_AGENT", "START_TASK_AGENT"],
 	description:
-		"Spawn a real background coding subagent for repo work. Uses acpx when available, otherwise Codex or Claude. Use this for long-running implementation, test, export, git, website, or project-scaffolding tasks.",
+		"Spawn a real background coding subagent for repo work. Uses acpx when available, otherwise Codex or Claude. New projects run in Detour's managed local workspace. Use SHARE_PREVIEW after the agent starts a local web server when a public Discord-visible URL is needed.",
 	validate: async () => true,
 	handler: spawnAgentHandler,
 	examples: [],
@@ -827,7 +998,7 @@ export const createTaskAction: Action = {
 	name: "CREATE_TASK",
 	similes: ["START_CODING_TASK", "RUN_CODING_TASK", "RUN_SUBAGENT_TASK", "EXECUTE_AGENT_TASK"],
 	description:
-		"Run a real coding subagent task and wait for completion. Uses acpx when available, otherwise Codex or Claude. Use for bounded repo work, tests, code generation, trajectory exports, and status checks.",
+		"Run a real coding subagent task and wait for completion. Uses acpx when available, otherwise Codex or Claude. New projects run in Detour's managed local workspace. Use for bounded repo work, tests, code generation, trajectory exports, and status checks.",
 	validate: async () => true,
 	handler: createTaskHandler,
 	examples: [],
@@ -864,6 +1035,21 @@ export const sendToAgentAction: Action = {
 	],
 };
 
+export const sharePreviewAction: Action = {
+	name: "SHARE_PREVIEW",
+	similes: ["SHARE_AGENT_PREVIEW", "PUBLISH_PREVIEW", "NGROK_PREVIEW", "CREATE_PREVIEW_URL"],
+	description:
+		"Open an ngrok tunnel for a workspace agent's local web preview and return a public URL that can be sent in Discord or X. Call this after a coding agent starts a local dev server and prints a localhost preview URL.",
+	validate: async () => true,
+	handler: sharePreviewHandler,
+	examples: [],
+	parameters: [
+		{ name: "id", description: "Workspace agent session id from SPAWN_AGENT or LIST_AGENTS.", required: false, schema: { type: "string" as const } },
+		{ name: "previewUrl", description: "Explicit local preview URL, such as http://127.0.0.1:5173/.", required: false, schema: { type: "string" as const } },
+		{ name: "timeoutMs", description: "How long to wait for ngrok to publish a URL.", required: false, schema: { type: "number" as const } },
+	],
+};
+
 export const stopAgentAction: Action = {
 	name: "STOP_AGENT",
 	similes: ["CANCEL_AGENT", "STOP_TASK_AGENT"],
@@ -890,6 +1076,7 @@ export const workspaceToolsPlugin: Plugin = {
 		spawnAgentAction,
 		sendToAgentAction,
 		listAgentsAction,
+		sharePreviewAction,
 		stopAgentAction,
 		createTaskAction,
 		cancelTaskAction,

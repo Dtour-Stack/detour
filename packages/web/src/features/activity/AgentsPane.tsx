@@ -1,5 +1,3 @@
-import { Terminal, WebSocketTransport, useTerminal } from "@wterm/react";
-import "@wterm/react/css";
 import type {
 	WorkspaceAgentRecord,
 	WorkspaceAgentsSnapshot,
@@ -13,7 +11,7 @@ import { WebClient } from "../../api/client";
 import { useDetourTheme } from "../../useDetourTheme";
 import { usePoller } from "./usePoller";
 
-type AgentPanel = "terminal" | "preview" | "code";
+type AgentPanel = "logs" | "preview" | "code";
 type AgentEndpointConfig = {
 	apiBase: string;
 	streamBase: string;
@@ -29,9 +27,9 @@ const BOOT_STATS = [
 ] as const;
 const BOOT_ACTIVITY = [
 	"Core API handshake pending",
-	"Workspace stream ready for logs",
+	"Workspace log stream ready",
 	"Preview tab waiting for a project",
-	"Terminal attached when agent starts",
+	"Files appear after the first workspace run",
 ];
 
 function fmtTime(ts?: number): string {
@@ -59,10 +57,6 @@ function statusTone(status: WorkspaceAgentRecord["status"]): string {
 	if (status === "failed") return "err";
 	if (status === "running") return "info";
 	return "muted";
-}
-
-function terminalText(text: string): string {
-	return text.replace(/\r?\n/g, "\r\n");
 }
 
 function urlParam(name: string): string | null {
@@ -111,7 +105,7 @@ function parentPath(path: string): string {
 }
 
 function projectPreview(project: WorkspaceProjectRecord | null, agent: WorkspaceAgentRecord | null): string | undefined {
-	return agent?.previewUrl ?? project?.previewUrl;
+	return agent?.publicUrl ?? project?.publicUrl ?? agent?.previewUrl ?? project?.previewUrl;
 }
 
 export function AgentsView() {
@@ -147,7 +141,7 @@ export function AgentsPane({
 	} = usePoller<WorkspaceProjectsSnapshot>(projectFetcher, 2000);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const [panel, setPanel] = useState<AgentPanel>("terminal");
+	const [panel, setPanel] = useState<AgentPanel>("logs");
 	const [deletingProject, setDeletingProject] = useState(false);
 	const agents = agentData?.agents ?? [];
 	const projects = projectData?.projects ?? [];
@@ -166,6 +160,7 @@ export function AgentsPane({
 		[visibleAgents, selectedId],
 	);
 	const previewUrl = projectPreview(selectedProject, selected);
+	const publicUrl = selected?.publicUrl ?? selectedProject?.publicUrl;
 	const error = agentError ?? projectError;
 	const refresh = useCallback(() => {
 		refreshAgents();
@@ -206,7 +201,7 @@ export function AgentsPane({
 			setPanel("code");
 			return;
 		}
-		setPanel(selected.status === "completed" && previewUrl ? "preview" : "terminal");
+		setPanel(selected.status === "completed" && previewUrl ? "preview" : "logs");
 	}, [previewUrl, selected?.id]);
 
 	if (standalone && error) return <PublicAgentsWorkbench status={error} />;
@@ -307,17 +302,22 @@ export function AgentsPane({
 							<span>{selectedProject?.name ?? "Workspace"}</span>
 							{selected && <span className="agents-muted">{selected.provider}/{selected.agentType}</span>}
 							{selected && <span className="agents-muted">exit {selected.exitCode ?? "-"}</span>}
+							{publicUrl && (
+								<a className="agents-public-link" href={publicUrl} target="_blank" rel="noreferrer">
+									ngrok
+								</a>
+							)}
 						</div>
 						<div className="agents-path">{selectedProject?.cwd ?? "No project selected"}</div>
 					</div>
 					<div className="agents-tabs" role="tablist">
 						<button
 							type="button"
-							className={panel === "terminal" ? "active" : ""}
-							onClick={() => setPanel("terminal")}
+							className={panel === "logs" ? "active" : ""}
+							onClick={() => setPanel("logs")}
 							disabled={!selected}
 						>
-							Terminal
+							Logs
 						</button>
 						<button
 							type="button"
@@ -341,15 +341,15 @@ export function AgentsPane({
 					{selected ? `${selected.command} ${selected.args.join(" ")}` : "No active command"}
 				</div>
 				<div className="agents-panel">
-					<div className={panel === "terminal" ? "agents-panel-active" : "agents-panel-hidden"}>
+					<div className={panel === "logs" ? "agents-panel-active" : "agents-panel-hidden"}>
 						{selected ? (
-							<AgentLogTerminal
+							<AgentLogPanel
 								client={client}
 								agent={selected}
 								streamUrl={streamBase ? streamUrlFor(streamBase, selected.id) : undefined}
 							/>
 						) : (
-							<div className="agents-empty center">No terminal session selected.</div>
+							<div className="agents-empty center">No agent log selected.</div>
 						)}
 					</div>
 					<div className={panel === "preview" ? "agents-panel-active" : "agents-panel-hidden"}>
@@ -375,21 +375,21 @@ function PublicAgentsWorkbench({ status }: { status?: string }) {
 				<aside className="public-workbench-rail">
 					<div className="public-landing-kicker">Detour</div>
 					<h1>Agent workbench</h1>
-					<p>Live terminal, project preview, files, and activity once the local agent is online.</p>
+					<p>Live build logs, project preview, files, and activity once the local agent is online.</p>
 				</aside>
 
 				<div className="public-workbench-core">
 					<div className="public-workbench-tabs">
-						<span className="active">Terminal</span>
+						<span className="active">Logs</span>
 						<span>Preview</span>
 						<span>Code</span>
 					</div>
 					<div className="public-workbench-stage">
-						<div className="public-terminal">
-							<div>$ detour workspace status</div>
+						<div className="public-run-log">
+							<div>detour workspace status</div>
 							<div>connecting to local agent api on 127.0.0.1:2138</div>
 							<div>waiting for runtime, providers, channels, and workspace agents</div>
-							<div className="public-terminal-cursor">ready when Detour is</div>
+							<div className="public-run-log-cursor">ready when Detour is</div>
 						</div>
 						<div className="public-preview">
 							<div className="public-preview-window">
@@ -566,7 +566,12 @@ function ProjectCodePanel({
 	);
 }
 
-function AgentLogTerminal({
+function appendLogText(current: string, next: string): string {
+	const value = `${current}${next}`;
+	return value.length > 200_000 ? value.slice(value.length - 200_000) : value;
+}
+
+function AgentLogPanel({
 	client,
 	agent,
 	streamUrl,
@@ -575,43 +580,44 @@ function AgentLogTerminal({
 	agent: WorkspaceAgentRecord;
 	streamUrl?: string;
 }) {
-	const { ref, write } = useTerminal();
+	const [log, setLog] = useState("");
+	const [error, setError] = useState<string | null>(null);
 	const offsetRef = useRef(0);
 	const activeAgentRef = useRef(agent.id);
-	const transportRef = useRef<WebSocketTransport | null>(null);
+	const logRef = useRef<HTMLPreElement | null>(null);
 
 	useEffect(() => {
 		activeAgentRef.current = agent.id;
 		offsetRef.current = 0;
-		write("\x1b[2J\x1b[H");
-		write(terminalText(`Detour workspace agent ${agent.id}\n`));
-	}, [agent.id, write]);
+		setError(null);
+		setLog(`Detour workspace agent ${agent.id}\n`);
+	}, [agent.id]);
+
+	useEffect(() => {
+		const node = logRef.current;
+		if (node) node.scrollTop = node.scrollHeight;
+	}, [log]);
 
 	useEffect(() => {
 		let cancelled = false;
 		if (streamUrl) {
-			const transport = new WebSocketTransport({
-				url: streamUrl,
-				reconnect: true,
-				maxReconnectDelay: 5000,
-				onData: (data) => {
-					if (cancelled || activeAgentRef.current !== agent.id) return;
-					if (typeof data === "string") write(terminalText(data));
-					else write(data);
-				},
-				onOpen: () => {
-					if (!cancelled) write(terminalText("[wterm stream connected]\n"));
-				},
-				onClose: () => {
-					if (!cancelled) write(terminalText("\n[wterm stream disconnected]\n"));
-				},
-			});
-			transportRef.current = transport;
-			transport.connect();
+			const socket = new WebSocket(streamUrl);
+			socket.onopen = () => {
+				if (!cancelled) setLog((value) => appendLogText(value, "[log stream connected]\n"));
+			};
+			socket.onmessage = (event) => {
+				if (cancelled || activeAgentRef.current !== agent.id) return;
+				setLog((value) => appendLogText(value, String(event.data)));
+			};
+			socket.onerror = () => {
+				if (!cancelled) setError("Log stream failed; polling will resume on refresh.");
+			};
+			socket.onclose = () => {
+				if (!cancelled) setLog((value) => appendLogText(value, "\n[log stream disconnected]\n"));
+			};
 			return () => {
 				cancelled = true;
-				transport.close();
-				if (transportRef.current === transport) transportRef.current = null;
+				socket.close();
 			};
 		}
 		const poll = async () => {
@@ -622,15 +628,13 @@ function AgentLogTerminal({
 				);
 				if (cancelled || activeAgentRef.current !== agent.id) return;
 				offsetRef.current = log.nextOffset;
-				if (log.text) write(terminalText(log.text));
+				if (log.text) setLog((value) => appendLogText(value, log.text));
 				if (log.truncated) {
-					write(terminalText("\n[log window truncated]\n"));
+					setLog((value) => appendLogText(value, "\n[log window truncated]\n"));
 				}
 			} catch (err) {
 				if (!cancelled) {
-					write(
-						terminalText(`\n[log read failed] ${err instanceof Error ? err.message : String(err)}\n`),
-					);
+					setError(err instanceof Error ? err.message : String(err));
 				}
 			}
 		};
@@ -640,21 +644,14 @@ function AgentLogTerminal({
 			cancelled = true;
 			clearInterval(timer);
 		};
-	}, [agent.id, client, streamUrl, write]);
+	}, [agent.id, client, streamUrl]);
 
 	return (
-		<div className="agents-terminal-frame">
-			<Terminal
-				ref={ref}
-				className="agents-terminal"
-				cols={100}
-				rows={28}
-				autoResize
-				cursorBlink={false}
-				onData={() => {}}
-				aria-readonly="true"
-				theme="default"
-			/>
+		<div className="agents-log-frame">
+			{error && <div className="banner error">{error}</div>}
+			<pre ref={logRef} className="agents-log" aria-label="Workspace agent log">
+				{log}
+			</pre>
 		</div>
 	);
 }
