@@ -1009,6 +1009,9 @@ export class RuntimeService {
 			if (slash.kind === "reply") {
 				onDelta(slash.text);
 				emitted = slash.text;
+			} else if (slash.kind === "prompt") {
+				await this.deliverMessage(state, slash.text, onDelta, false);
+				return;
 			} else {
 				const result = await slash.action.handler(state.runtime, message, undefined, slash.options, async (content: Content) => {
 					const next = typeof content.text === "string" ? content.text : "";

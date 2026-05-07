@@ -43,6 +43,8 @@ export function createKernel(opts: {
 			events.emit("ui:open-channels", {});
 		} else if (msg.kind === "ui:open-agents") {
 			events.emit("ui:open-agents", {});
+		} else if (msg.kind === "ui:open-pet") {
+			events.emit("ui:open-pet", {});
 		} else if (msg.kind === "ui:open-browser" || msg.kind === "browser:command") {
 			events.emit("ui:open-browser", {});
 		}

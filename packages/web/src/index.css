@@ -3148,3 +3148,62 @@ label { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 
 		flex-wrap: wrap;
 	}
 }
+
+html[data-surface="pet"],
+html[data-surface="pet"] body,
+html[data-surface="pet"] #root {
+	background: transparent;
+	overflow: hidden;
+}
+
+.pet-window {
+	width: 100vw;
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	background: transparent;
+	color: var(--fg);
+	user-select: none;
+	-webkit-app-region: drag;
+}
+
+.pet-window-message {
+	padding: 16px;
+	color: var(--fg-muted);
+	font-size: 12px;
+	text-align: center;
+}
+
+.pet-sprite {
+	width: 192px;
+	height: 208px;
+	background-repeat: no-repeat;
+	background-position: 0 0;
+	image-rendering: pixelated;
+	filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.22));
+	animation: pet-idle 1.2s steps(6) infinite;
+}
+
+.pet-name {
+	max-width: 180px;
+	padding: 3px 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+	color: var(--fg-muted);
+	font-size: 11px;
+	line-height: 1.2;
+	text-align: center;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	backdrop-filter: blur(14px);
+}
+
+@keyframes pet-idle {
+	from { background-position: 0 0; }
+	to { background-position: -1152px 0; }
+}

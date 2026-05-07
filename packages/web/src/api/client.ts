@@ -22,6 +22,8 @@ import type {
 	ChroniclerConfig,
 	ChroniclerObservation,
 	ChroniclerStatus,
+	CodexPetSpawnResponse,
+	CodexPetsResponse,
 	ModelConfig,
 	OpDiagnostic,
 	OpenRouterModelsResponse,
@@ -186,6 +188,18 @@ export class WebClient {
 
 	listChatCommands(): Promise<{ commands: ChatCommandInfo[] }> {
 		return this.json("GET", "/api/chat/commands");
+	}
+
+	listPets(): Promise<CodexPetsResponse> {
+		return this.json("GET", "/api/pets");
+	}
+
+	activePet(): Promise<CodexPetSpawnResponse> {
+		return this.json("GET", "/api/pets/active");
+	}
+
+	spawnPet(pet?: string): Promise<CodexPetSpawnResponse> {
+		return this.json("POST", "/api/pets/spawn", pet ? { pet } : {});
 	}
 
 	detectBackends(): Promise<BackendStatus[]> {

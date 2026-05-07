@@ -24,7 +24,37 @@ export type WindowOpenTarget =
 	| "activity"
 	| "channels"
 	| "browser"
-	| "agents";
+	| "agents"
+	| "pet";
+
+export type CodexPetAtlas = {
+	columns: number;
+	rows: number;
+	cellWidth: number;
+	cellHeight: number;
+	width: number;
+	height: number;
+};
+
+export type CodexPetSummary = {
+	id: string;
+	displayName: string;
+	description: string;
+	directory: string;
+	petJsonPath: string;
+	spritesheetPath: string;
+	spritesheetUrl: string;
+	atlas: CodexPetAtlas;
+};
+
+export type CodexPetsResponse = {
+	pets: CodexPetSummary[];
+	errors: string[];
+};
+
+export type CodexPetSpawnResponse = {
+	pet: CodexPetSummary;
+};
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
@@ -207,6 +237,7 @@ export type WsServerMessage =
 	| { kind: "ui:open-activity" }
 	| { kind: "ui:open-channels" }
 	| { kind: "ui:open-agents" }
+	| { kind: "ui:open-pet"; pet?: CodexPetSummary }
 	| { kind: "ui:open-browser" }
 	| { kind: "browser:command"; command: BrowserCommand }
 	| { kind: "ui:preferences-changed"; preferences: UiPreferences }

@@ -18,8 +18,8 @@ const FALLBACK_SLASH_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/logins", usage: "/logins [domain]", description: "List saved logins from vault backends.", insert: "/logins ", aliases: ["/passwords"] },
 	{ name: "/login", usage: "/login <source> <identifier> [url]", description: "Fill a saved login in the browser.", insert: "/login 1password " },
 	{ name: "/1password", usage: "/1password <identifier> [url]", description: "Fill a 1Password login in the browser.", insert: "/1password ", aliases: ["/op"] },
-	{ name: "/pet", usage: "/pet [name]", description: "List or inspect Codex pets.", insert: "/pet " },
-	{ name: "/hatch", usage: "/hatch <concept>", description: "Prepare a Codex pet hatch run.", insert: "/hatch " },
+	{ name: "/pet", usage: "/pet [name]", description: "Spawn or inspect Codex pets.", insert: "/pet " },
+	{ name: "/hatch", usage: "/hatch <concept>", description: "Start the full Codex pet hatch pipeline.", insert: "/hatch " },
 	{ name: "/codex", usage: "/codex [cwd=/path] <task>", description: "Run a Codex coding subagent and wait for the result.", insert: "/codex " },
 	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude " },
 	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex " },
@@ -30,6 +30,12 @@ const FALLBACK_SLASH_COMMANDS: ChatCommandInfo[] = [
 
 function uid() {
 	return Math.random().toString(36).slice(2, 10);
+}
+
+function petCommandTarget(text: string): string | null {
+	const match = text.trim().match(/^\/pet(?:\s+(.+))?$/i);
+	if (!match) return null;
+	return (match[1] ?? "").trim();
 }
 
 export function ChatView({
@@ -121,9 +127,14 @@ export function ChatView({
 	}, [commandRequest]);
 
 	function send(text: string) {
-		if (!text.trim()) return;
+		const trimmed = text.trim();
+		if (!trimmed) return;
+		const petTarget = petCommandTarget(trimmed);
+		if (petTarget !== null) {
+			void client.spawnPet(petTarget || undefined).catch(() => {});
+		}
 		if (!activeProvider) return;
-		const userBubble: Bubble = { id: uid(), role: "user", text: text.trim() };
+		const userBubble: Bubble = { id: uid(), role: "user", text: trimmed };
 		const aId = uid();
 		assistantId.current = aId;
 		setBubbles((bs) => [
@@ -132,7 +143,7 @@ export function ChatView({
 			{ id: aId, role: "assistant", text: "", thinking: true },
 		]);
 		setPending(true);
-		client.send({ kind: "chat:send", convId: CONV_ID, text: text.trim() });
+		client.send({ kind: "chat:send", convId: CONV_ID, text: trimmed });
 	}
 
 	function stopMessage() {

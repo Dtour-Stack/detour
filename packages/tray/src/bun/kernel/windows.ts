@@ -66,6 +66,8 @@ export type PopupOptions = {
 	rpc: RpcConfig;
 	hideOnBlur?: boolean;
 	alwaysOnTop?: boolean;
+	transparent?: boolean;
+	passthrough?: boolean;
 	/** Override the default `views://<viewKey>/index.html` URL. Useful for pointing at a Vite dev server. */
 	url?: string;
 };
@@ -93,8 +95,8 @@ export class WindowFactory {
 			renderer: "native",
 			rpc,
 			titleBarStyle: "hidden",
-			transparent: false,
-			passthrough: false,
+			transparent: opts.transparent ?? false,
+			passthrough: opts.passthrough ?? false,
 			hidden: true,
 			navigationRules: null,
 			sandbox: false,

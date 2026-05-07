@@ -19,6 +19,9 @@ import type {
 	BrowserCommandResult,
 	ChatCommandInfo,
 	ChroniclerConfig,
+	CodexPetSpawnResponse,
+	CodexPetSummary,
+	CodexPetsResponse,
 	ProviderId,
 	SetActiveProviderBody,
 	SetEnabledBackendsBody,
@@ -35,6 +38,7 @@ import type {
 	WsServerMessage,
 } from "@detour/shared";
 import { ModelType, type Memory, type Service, type UUID } from "@elizaos/core";
+import { listCodexPets, type PetSummary } from "@detour/plugin-codex-pets";
 import type { Server, ServerWebSocket } from "bun";
 import type { ActivityService } from "../activity";
 import { xAutonomyRuntimeSettings } from "../activity/autonomy-service";
@@ -159,6 +163,14 @@ const WORKSPACE_PREVIEW_ENTRYPOINTS = [
 	"src/index.html",
 	"exports/index.html",
 ];
+const PET_ATLAS = {
+	columns: 8,
+	rows: 9,
+	cellWidth: 192,
+	cellHeight: 208,
+	width: 1536,
+	height: 1872,
+};
 const INBOX_STATUSES = new Set([
 	"pending",
 	"acting",
@@ -176,6 +188,7 @@ const WINDOW_OPEN_TARGETS = new Set<WindowOpenTarget>([
 	"channels",
 	"browser",
 	"agents",
+	"pet",
 ]);
 
 function corsHeaders(contentType?: string): HeadersInit {
@@ -197,8 +210,8 @@ const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/logins", usage: "/logins [domain]", description: "List saved logins from vault backends.", insert: "/logins ", aliases: ["/passwords"], source: "native" },
 	{ name: "/login", usage: "/login <source> <identifier> [url]", description: "Fill a saved login in the browser.", insert: "/login 1password ", source: "native" },
 	{ name: "/1password", usage: "/1password <identifier> [url]", description: "Fill a 1Password login in the browser.", insert: "/1password ", aliases: ["/op"], source: "native" },
-	{ name: "/pet", usage: "/pet [name]", description: "List or inspect Codex pets.", insert: "/pet ", source: "native" },
-	{ name: "/hatch", usage: "/hatch <concept>", description: "Prepare a Codex pet hatch run.", insert: "/hatch ", source: "native" },
+	{ name: "/pet", usage: "/pet [name]", description: "Spawn or inspect a Codex pet.", insert: "/pet ", source: "native" },
+	{ name: "/hatch", usage: "/hatch <concept>", description: "Start the full Codex pet hatch pipeline.", insert: "/hatch ", source: "native" },
 	{ name: "/codex", usage: "/codex [cwd=/path] <task>", description: "Run a Codex coding subagent and wait for the result.", insert: "/codex ", aliases: ["/task"], source: "native" },
 	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude ", source: "native" },
 	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex ", source: "native" },
@@ -230,6 +243,8 @@ function windowMessageForTarget(target: WindowOpenTarget): WsServerMessage {
 			return { kind: "ui:open-browser" };
 		case "agents":
 			return { kind: "ui:open-agents" };
+		case "pet":
+			return { kind: "ui:open-pet" };
 		case "chat":
 			return { kind: "ui:open-chat" };
 	}
@@ -1261,6 +1276,7 @@ export class ApiServer {
 	private lockFile = join(homedir(), ".detour", "runtime.json");
 	private windowController: WindowController | null = null;
 	private channelReloadTimer: ReturnType<typeof setTimeout> | null = null;
+	private activePetId: string | null = null;
 	private browserCommands: BrowserCommand[] = [];
 	private browserResults = new Map<string, BrowserCommandResult>();
 	private agentStreamTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -1278,6 +1294,44 @@ export class ApiServer {
 			timer: ReturnType<typeof setTimeout>;
 		}
 	>();
+
+	private petSummary(pet: PetSummary): CodexPetSummary {
+		return {
+			...pet,
+			spritesheetUrl: `/api/pets/${encodeURIComponent(pet.id)}/spritesheet`,
+			atlas: PET_ATLAS,
+		};
+	}
+
+	private petsResponse(): CodexPetsResponse {
+		const result = listCodexPets();
+		return {
+			pets: result.pets.map((pet) => this.petSummary(pet)),
+			errors: result.errors,
+		};
+	}
+
+	private findPet(query?: string | null): CodexPetSummary | null {
+		const response = this.petsResponse();
+		if (response.pets.length === 0) return null;
+		const normalized = query?.trim().toLowerCase();
+		if (!normalized) {
+			const active = this.activePetId
+				? response.pets.find((pet) => pet.id === this.activePetId)
+				: null;
+			return active ?? response.pets[0] ?? null;
+		}
+		return response.pets.find((pet) =>
+			pet.id.toLowerCase() === normalized ||
+			pet.displayName.toLowerCase() === normalized
+		) ?? null;
+	}
+
+	private spawnPet(pet: CodexPetSummary): CodexPetSpawnResponse {
+		this.activePetId = pet.id;
+		this.broadcast({ kind: "ui:open-pet", pet });
+		return { pet };
+	}
 
 	/**
 	 * Debounce runtime reloads triggered by channel credential changes.
@@ -1840,6 +1894,31 @@ export class ApiServer {
 			}
 			if (req.method === "GET" && path === "/api/chat/commands") {
 				return json({ commands: chatCommands() });
+			}
+			if (req.method === "GET" && path === "/api/pets") {
+				return json(this.petsResponse());
+			}
+			if (req.method === "GET" && path === "/api/pets/active") {
+				const pet = this.findPet();
+				return pet ? json({ pet }) : error("no Codex pets installed", 404);
+			}
+			if (req.method === "POST" && path === "/api/pets/spawn") {
+				const body = (await req.json().catch(() => ({}))) as { pet?: unknown };
+				const pet = this.findPet(typeof body.pet === "string" ? body.pet : null);
+				if (!pet) return error("Codex pet not found", 404);
+				return json(this.spawnPet(pet));
+			}
+			const petSprite = path.match(/^\/api\/pets\/([^/]+)\/spritesheet$/);
+			if ((req.method === "GET" || req.method === "HEAD") && petSprite) {
+				const pet = this.findPet(decodeURIComponent(petSprite[1] ?? ""));
+				if (!pet) return error("Codex pet not found", 404);
+				if (!existsSync(pet.spritesheetPath)) return error("pet spritesheet missing", 404);
+				return new Response(req.method === "HEAD" ? null : Bun.file(pet.spritesheetPath), {
+					headers: {
+						"content-type": "image/webp",
+						"cache-control": "no-store",
+					},
+				});
 			}
 			return null;
 		},

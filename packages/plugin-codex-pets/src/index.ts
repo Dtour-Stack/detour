@@ -1,5 +1,6 @@
 import { deflateSync } from "node:zlib";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type {
@@ -15,7 +16,7 @@ type JsonObject = { [key: string]: Json };
 type HandlerOptionsLike = Parameters<Handler>[3];
 type HandlerMessage = Parameters<Handler>[1];
 
-type PetSummary = {
+export type PetSummary = {
 	id: string;
 	displayName: string;
 	description: string;
@@ -24,7 +25,7 @@ type PetSummary = {
 	spritesheetPath: string;
 };
 
-type PetListResult = {
+export type PetListResult = {
 	pets: PetSummary[];
 	errors: string[];
 };
@@ -40,6 +41,14 @@ type CopiedReference = {
 	path: string;
 	role: string;
 	sourcePath: string;
+};
+
+type HatchWorker = {
+	provider: "codex" | "claude";
+	pid?: number;
+	logPath: string;
+	command: string;
+	args: string[];
 };
 
 const CODEX_HOME_DEFAULT = join(homedir(), ".codex");
@@ -151,7 +160,7 @@ function readPet(dir: string): PetSummary {
 	};
 }
 
-function listPets(): PetListResult {
+export function listCodexPets(): PetListResult {
 	const petsRoot = join(codexHome(), "pets");
 	if (!existsSync(petsRoot)) return { pets: [], errors: [] };
 	const pets: PetSummary[] = [];
@@ -184,6 +193,26 @@ function optionString(options: HandlerOptionsLike, keys: readonly string[]): str
 		if (typeof directValue === "string" && directValue.trim()) return directValue.trim();
 	}
 	return "";
+}
+
+function optionBool(options: HandlerOptionsLike, keys: readonly string[], fallback: boolean): boolean {
+	if (!options) return fallback;
+	const parameters = options.parameters;
+	if (parameters && typeof parameters === "object" && !Array.isArray(parameters)) {
+		for (const key of keys) {
+			const parameterValue = parameters[key];
+			if (typeof parameterValue === "boolean") return parameterValue;
+			if (parameterValue === "true") return true;
+			if (parameterValue === "false") return false;
+		}
+	}
+	for (const key of keys) {
+		const directValue = options[key];
+		if (typeof directValue === "boolean") return directValue;
+		if (directValue === "true") return true;
+		if (directValue === "false") return false;
+	}
+	return fallback;
 }
 
 function messageText(message: HandlerMessage): string {
@@ -231,7 +260,7 @@ const petHandler: Handler = async (_runtime, message, _state, options, callback)
 	const query =
 		optionString(options, ["pet", "petId", "name", "id"]) ||
 		commandTail(messageText(message), "/pet");
-	const result = listPets();
+	const result = listCodexPets();
 	const selected = query ? result.pets.find((pet) => matchesPet(pet, query)) : undefined;
 	if (query && !selected) {
 		const text =
@@ -614,6 +643,100 @@ function prepareHatchRun(input: {
 	return { runDir, jobCount: jobs.length };
 }
 
+function workspaceRoot(): string {
+	const configured = process.env.DETOUR_WORKSPACE_ROOT || process.env.INIT_CWD;
+	return configured && configured.trim().length > 0 ? resolve(configured) : process.cwd();
+}
+
+function executablePath(command: string): string | null {
+	const checker = process.platform === "win32" ? "where" : "which";
+	const result = spawnSync(checker, [command], { encoding: "utf8" });
+	if (result.status !== 0) return null;
+	const first = result.stdout.trim().split(/\r?\n/)[0];
+	return first && first.length > 0 ? first : command;
+}
+
+function hatchWorkerTask(input: {
+	runDir: string;
+	petName: string;
+	concept: string;
+}): string {
+	const skillPath = join(codexHome(), "skills", "hatch-pet", "SKILL.md");
+	const packageDir = join(codexHome(), "pets", slugify(input.petName));
+	return [
+		`Use the hatch-pet skill at ${skillPath}.`,
+		`Continue the existing Codex pet run at ${input.runDir}.`,
+		`Complete the full spritesheet/package pipeline for "${input.petName}".`,
+		`Concept: ${input.concept}`,
+		"Use the run's imagegen-jobs.json and prompt files as the source of truth.",
+		"Generate real visual assets through the available image generation path. Do not fabricate sprite rows with local scripts, SVG, canvas, or placeholder art.",
+		"Record selected generated images with record_imagegen_result.py, finalize with finalize_pet_run.py, and package the pet.",
+		"Use subagents for row-strip generation where the hatch-pet skill requires them.",
+		`Before exiting, verify ${join(packageDir, "pet.json")} and ${join(packageDir, "spritesheet.webp")} exist. If image generation is unavailable, stop with a clear failure and leave the run ready to resume.`,
+	].join("\n");
+}
+
+function hatchWorkerCommand(input: {
+	task: string;
+	cwd: string;
+}): Omit<HatchWorker, "logPath" | "pid"> {
+	const codex = executablePath("codex");
+	if (codex) {
+		return {
+			provider: "codex",
+			command: codex,
+			args: ["exec", "--json", "--cd", input.cwd, "--dangerously-bypass-approvals-and-sandbox", input.task],
+		};
+	}
+	const claude = executablePath("claude");
+	if (!claude) throw new Error("neither codex nor claude is installed on PATH");
+	return {
+		provider: "claude",
+		command: claude,
+		args: ["--print", "--output-format", "stream-json", "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions", input.task],
+	};
+}
+
+function startHatchWorker(input: {
+	runDir: string;
+	petName: string;
+	concept: string;
+}): HatchWorker {
+	const cwd = workspaceRoot();
+	const task = hatchWorkerTask(input);
+	const command = hatchWorkerCommand({ task, cwd });
+	const logPath = join(input.runDir, "hatch-worker.log");
+	const stream = createWriteStream(logPath, { flags: "a" });
+	let streamClosed = false;
+	const writeLog = (text: string) => {
+		if (!streamClosed) stream.write(text);
+	};
+	const closeLog = () => {
+		if (streamClosed) return;
+		streamClosed = true;
+		stream.end();
+	};
+	writeLog(`[hatch-worker] ${new Date().toISOString()} provider=${command.provider}\n`);
+	writeLog(`[hatch-worker] command=${command.command} ${command.args.slice(0, -1).join(" ")} <task>\n\n`);
+	const child = spawn(command.command, command.args, {
+		cwd,
+		env: process.env,
+		stdio: ["ignore", "pipe", "pipe"],
+		shell: false,
+	});
+	child.stdout.pipe(stream, { end: false });
+	child.stderr.pipe(stream, { end: false });
+	child.on("error", (error) => {
+		writeLog(`\n[hatch-worker] spawn error: ${error instanceof Error ? error.message : String(error)}\n`);
+		closeLog();
+	});
+	child.on("close", (exitCode, signal) => {
+		writeLog(`\n[hatch-worker] closed exit=${exitCode}${signal ? ` signal=${signal}` : ""}\n`);
+		closeLog();
+	});
+	return { ...command, logPath, pid: child.pid };
+}
+
 const hatchHandler: Handler = async (_runtime, message, _state, options, callback) => {
 	const tail = commandTail(messageText(message), "/hatch");
 	const parsed = parseNamedConcept(tail);
@@ -643,14 +766,31 @@ const hatchHandler: Handler = async (_runtime, message, _state, options, callbac
 			referencePath,
 			outputDir,
 		});
+		const prepareOnly = optionBool(options, ["prepareOnly", "manifestOnly"], false);
+		const runPipeline = !prepareOnly && optionBool(options, ["runPipeline", "pipeline", "full"], true);
+		const worker = runPipeline ? startHatchWorker({ runDir, petName, concept }) : null;
 		const text = [
-			`Prepared Codex hatch run for ${petName}.`,
+			`${worker ? "Started full Codex hatch pipeline" : "Prepared Codex hatch run"} for ${petName}.`,
 			`run: ${runDir}`,
 			`manifest: ${join(runDir, "imagegen-jobs.json")}`,
 			`jobs: ${jobCount}`,
+			...(worker ? [
+				`worker: ${worker.provider}${worker.pid ? ` pid=${worker.pid}` : ""}`,
+				`log: ${worker.logPath}`,
+				`package target: ${join(codexHome(), "pets", slugify(petName))}`,
+			] : []),
 		].join("\n");
 		await emit(callback, text, ACTION_HATCH);
-		return ok(text, { actionName: ACTION_HATCH, jobCount }, { actionName: ACTION_HATCH, runDir, jobCount });
+		return ok(
+			text,
+			{ actionName: ACTION_HATCH, jobCount, pipelineStarted: Boolean(worker) },
+			{
+				actionName: ACTION_HATCH,
+				runDir,
+				jobCount,
+				...(worker ? { worker: { provider: worker.provider, pid: worker.pid ?? null, logPath: worker.logPath } } : {}),
+			},
+		);
 	} catch (error) {
 		const text = `CODEX_HATCH failed: ${error instanceof Error ? error.message : String(error)}`;
 		await emit(callback, text, ACTION_HATCH);
@@ -681,7 +821,7 @@ export const codexHatchAction: Action = {
 	name: ACTION_HATCH,
 	similes: ["HATCH", "/hatch", "HATCH_PET", "CODEX_HATCH_PET", "CREATE_CODEX_PET"],
 	description:
-		"Prepare a Codex hatch-pet run from a pet concept, creating the run folder, prompt files, and imagegen job manifest for the Codex pet workflow.",
+		"Start the full Codex hatch-pet spritesheet pipeline from a pet concept, including run preparation, image jobs, final atlas, and package output.",
 	validate: async () => true,
 	handler: hatchHandler,
 	suppressPostActionContinuation: true,
@@ -723,7 +863,7 @@ export const codexHatchAction: Action = {
 
 export const codexPetsPlugin: Plugin = {
 	name: "codex-pets",
-	description: "Codex /pet and /hatch abilities for local pet inspection and hatch run preparation.",
+	description: "Codex /pet and /hatch abilities for local pet inspection and full hatch pipeline runs.",
 	actions: [codexPetAction, codexHatchAction],
 };
 
