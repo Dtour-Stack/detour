@@ -6,9 +6,10 @@ import { ActivityView } from "./features/activity/ActivityView";
 import { AgentsView } from "./features/activity/AgentsPane";
 import { ChannelsView } from "./features/channels/ChannelsView";
 import { BrowserView } from "./features/browser/BrowserView";
+import { CommandPaletteWindow } from "./features/command-palette/CommandPaletteWindow";
 import "./index.css";
 
-type ViewRoute = "chat" | "pensieve" | "activity" | "agents" | "channels" | "browser";
+type ViewRoute = "chat" | "pensieve" | "activity" | "agents" | "channels" | "browser" | "command-palette";
 
 const VIEW_ROUTES = new Set<ViewRoute>([
 	"chat",
@@ -17,6 +18,7 @@ const VIEW_ROUTES = new Set<ViewRoute>([
 	"agents",
 	"channels",
 	"browser",
+	"command-palette",
 ]);
 
 function routeFromLocation(): ViewRoute {
@@ -37,6 +39,7 @@ const root =
 	route === "agents" ? <AgentsView /> :
 	route === "channels" ? <ChannelsView /> :
 	route === "browser" ? <BrowserView /> :
+	route === "command-palette" ? <CommandPaletteWindow /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);

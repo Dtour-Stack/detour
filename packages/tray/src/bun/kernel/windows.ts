@@ -152,4 +152,11 @@ export class WindowFactory {
 		const clampedY = Math.max(0, Math.min(y, display.bounds.height - windowHeight));
 		handle.window.setPosition(clampedX, clampedY);
 	}
+
+	positionCentered(handle: WindowHandle, windowWidth: number, windowHeight: number) {
+		const display = Screen.getPrimaryDisplay();
+		const x = Math.round((display.bounds.width - windowWidth) / 2);
+		const y = Math.round((display.bounds.height - windowHeight) / 2);
+		handle.window.setPosition(Math.max(0, x), Math.max(0, y));
+	}
 }

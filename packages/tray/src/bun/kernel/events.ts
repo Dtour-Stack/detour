@@ -23,6 +23,8 @@ export type KernelEvents = {
 	"runtime:error": { message: string };
 	"ui:open-settings": Record<string, never>;
 	"ui:open-command-palette": Record<string, never>;
+	"ui:toggle-command-palette": Record<string, never>;
+	"ui:close-command-palette": Record<string, never>;
 	"ui:open-chat": Record<string, never>;
 	"ui:toggle-chat": Record<string, never>;
 	"ui:open-pensieve": Record<string, never>;

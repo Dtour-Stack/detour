@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThemeChoice } from "@detour/shared";
 import { WebClient } from "./api/client";
 import { ChatView } from "./features/chat/ChatView";
-import { CommandPalette } from "./features/command-palette/CommandPalette";
 import { SettingsView } from "./features/settings/SettingsView";
 
 const ACCENT_SWATCHES = [
@@ -37,7 +36,6 @@ export function App() {
 	const client = useMemo(() => new WebClient(), []);
 	const [connected, setConnected] = useState(false);
 	const [drawerOpen, setDrawerOpen] = useState(false);
-	const [paletteOpen, setPaletteOpen] = useState(false);
 	const [paletteCommand, setPaletteCommand] = useState<{ id: number; text: string; submit: boolean } | null>(null);
 	const [theme, setTheme] = useState<ThemeChoice>("system");
 	const [accent, setAccent] = useState("#0a84ff");
@@ -71,7 +69,7 @@ export function App() {
 		// Listen for tray menu / global-shortcut requests to open settings.
 		const off = client.on((m) => {
 			if (m.kind === "ui:open-settings") setDrawerOpen(true);
-			else if (m.kind === "ui:open-command-palette") setPaletteOpen(true);
+			else if (m.kind === "ui:run-chat-command") runPaletteCommand(m.command);
 			else if (m.kind === "provider:changed") setActiveProvider(m.activeProvider);
 		});
 		// Active provider for the header chip.
@@ -115,7 +113,7 @@ export function App() {
 		const onKey = (e: KeyboardEvent) => {
 			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
 				e.preventDefault();
-				setPaletteOpen((open) => !open);
+				void client.openWindow("command-palette");
 				return;
 			}
 			if (e.key === "Escape" && drawerOpen) {
@@ -125,7 +123,7 @@ export function App() {
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [drawerOpen]);
+	}, [client, drawerOpen]);
 
 	// Click-outside for the appearance popover.
 	useEffect(() => {
@@ -221,9 +219,9 @@ export function App() {
 				<div className="popup-actions" style={{ WebkitAppRegion: "no-drag" } as any}>
 					<button
 						type="button"
-						className={paletteOpen ? "command-trigger active" : "command-trigger"}
+						className="command-trigger"
 						title="Command palette"
-						onClick={() => setPaletteOpen(true)}
+						onClick={() => void client.openWindow("command-palette")}
 					>
 						<span>Cmd K</span>
 					</button>
@@ -333,13 +331,6 @@ export function App() {
 						</div>
 					</div>
 				)}
-				<CommandPalette
-					client={client}
-					open={paletteOpen}
-					onClose={() => setPaletteOpen(false)}
-					onOpenSettings={() => setDrawerOpen(true)}
-					onChatCommand={runPaletteCommand}
-				/>
 			</main>
 		</div>
 	);

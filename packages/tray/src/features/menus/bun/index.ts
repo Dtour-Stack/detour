@@ -93,7 +93,7 @@ export const menusFeature: Feature = {
 					deps.events.emit("ui:open-chat", {});
 					break;
 				case "command-palette:open":
-					deps.events.emit("ui:open-command-palette", {});
+					deps.events.emit("ui:toggle-command-palette", {});
 					break;
 				case "pensieve:open":
 					deps.events.emit("ui:open-pensieve", {});

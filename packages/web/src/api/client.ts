@@ -852,6 +852,14 @@ export class WebClient {
 		await this.json("POST", "/api/window/open", { target });
 	}
 
+	closeCommandPalette(): void {
+		this.send({ kind: "ui:close-command-palette" });
+	}
+
+	runChatCommand(command: { text: string; submit: boolean }): void {
+		this.send({ kind: "ui:run-chat-command", command });
+	}
+
 	// --- routing ---
 	getRouting(): Promise<{ rules: any[] }> {
 		return this.json("GET", "/api/routing");

@@ -261,6 +261,18 @@ function mergeTags(a: string[] | undefined, b: string[]): string[] {
 	return Array.from(new Set([...(a ?? []), ...b]));
 }
 
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string" && item.length > 0)
+		: [];
+}
+
+function importanceScore(messageCount: number, channelCount: number, lastSeenAt: number): number {
+	const ageHours = Math.max(0, (Date.now() - lastSeenAt) / 3_600_000);
+	const recency = ageHours < 24 ? 14 : ageHours < 168 ? 8 : 2;
+	return Math.min(100, Math.round(8 + Math.log1p(messageCount) * 16 + channelCount * 6 + recency));
+}
+
 function isGatewayMessage(value: unknown): value is GatewayMessage {
 	const item = asRecord(value);
 	return Boolean(
@@ -510,6 +522,8 @@ export class ChannelGatewayService {
 					typeof currentMetadata.messageCount === "number"
 						? currentMetadata.messageCount
 						: 0;
+				const messageCount = currentCount + 1;
+				const channels = mergeTags(stringArray(currentMetadata.channels), [entry.channel]);
 				await runtime.updateRelationships([{
 					...existing,
 					tags: mergeTags(existing.tags, tags),
@@ -517,7 +531,9 @@ export class ChannelGatewayService {
 						...currentMetadata,
 						...metadata,
 						firstSeenAt: currentMetadata.firstSeenAt ?? entry.time,
-						messageCount: currentCount + 1,
+						messageCount,
+						channels,
+						importanceScore: importanceScore(messageCount, channels.length, entry.time),
 					},
 				}]);
 				return;
@@ -530,6 +546,8 @@ export class ChannelGatewayService {
 						...metadata,
 						firstSeenAt: entry.time,
 						messageCount: 1,
+						channels: [entry.channel],
+						importanceScore: importanceScore(1, 1, entry.time),
 					},
 				}]);
 			}

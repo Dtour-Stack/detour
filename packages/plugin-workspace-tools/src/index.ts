@@ -72,8 +72,11 @@ type AuditEvent = {
 	args?: string[];
 	cwd?: string;
 	agentId?: string;
+	tunnelId?: string;
 	provider?: string;
 	agentType?: string;
+	publicUrl?: string;
+	localUrl?: string;
 	exitCode?: number | null;
 	signal?: string | null;
 	timedOut?: boolean;

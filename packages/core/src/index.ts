@@ -204,6 +204,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// which can take several seconds), so we schedule the import on a delay
 	// and retry once if the service isn't ready yet. Idempotent: stable
 	// entity IDs derived from contact UUIDs.
+	let contactsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 	runtime.onAfterBuild(async (state) => {
 		const tryImport = async (attempt: number): Promise<void> => {
 			try {
@@ -221,6 +222,9 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			}
 		};
 		setTimeout(() => void tryImport(1), 5000);
+		if (contactsRefreshTimer) clearInterval(contactsRefreshTimer);
+		contactsRefreshTimer = setInterval(() => void tryImport(1), 30 * 60_000);
+		(contactsRefreshTimer as unknown as { unref?: () => void }).unref?.();
 	});
 
 	// Inject Pensieve templates into runtime.character.templates on every build.

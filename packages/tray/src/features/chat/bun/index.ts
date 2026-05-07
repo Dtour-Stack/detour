@@ -96,10 +96,6 @@ export const chatFeature: Feature = {
 
 		deps.events.on("ui:open-chat", () => show());
 		deps.events.on("ui:toggle-chat", () => toggle());
-		deps.events.on("ui:open-command-palette", () => {
-			show();
-			deps.core.api.publish({ kind: "ui:open-command-palette" });
-		});
 		// Settings menu now opens the drawer inside the chat window.
 		deps.events.on("ui:open-settings", () => {
 			show();

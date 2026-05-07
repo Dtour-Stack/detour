@@ -29,6 +29,10 @@ export function createKernel(opts: {
 			events.emit("ui:open-chat", {});
 		} else if (msg.kind === "ui:open-command-palette") {
 			events.emit("ui:open-command-palette", {});
+		} else if (msg.kind === "ui:toggle-command-palette") {
+			events.emit("ui:toggle-command-palette", {});
+		} else if (msg.kind === "ui:close-command-palette") {
+			events.emit("ui:close-command-palette", {});
 		} else if (msg.kind === "ui:open-settings") {
 			events.emit("ui:open-settings", {});
 		} else if (msg.kind === "ui:open-pensieve") {

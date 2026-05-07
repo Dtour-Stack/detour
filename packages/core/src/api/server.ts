@@ -1747,10 +1747,18 @@ export class ApiServer {
 						});
 						return;
 					}
-					if (msg.kind === "chat:cancel") {
-						this.activeChatTurns.get(msg.convId)?.cancel();
-						return;
-					}
+						if (msg.kind === "chat:cancel") {
+							this.activeChatTurns.get(msg.convId)?.cancel();
+							return;
+						}
+						if (msg.kind === "ui:close-command-palette") {
+							this.broadcast({ kind: "ui:close-command-palette" });
+							return;
+						}
+						if (msg.kind === "ui:run-chat-command") {
+							this.broadcast({ kind: "ui:run-chat-command", command: msg.command });
+							return;
+						}
 					if (msg.kind === "chat:send") {
 						const { convId, text } = msg;
 						// One trace id per chat send. Stamps every log line emitted

@@ -23,6 +23,7 @@ type Props = {
 	onClose: () => void;
 	onOpenSettings: () => void;
 	onChatCommand: (request: ChatCommandRequest) => void;
+	windowed?: boolean;
 };
 
 const WINDOW_COMMANDS: Array<{
@@ -72,6 +73,7 @@ export function CommandPalette({
 	onClose,
 	onOpenSettings,
 	onChatCommand,
+	windowed = false,
 }: Props) {
 	const [query, setQuery] = useState("");
 	const [activeIndex, setActiveIndex] = useState(0);
@@ -151,7 +153,7 @@ export function CommandPalette({
 
 	return (
 		<div
-			className="command-palette-backdrop"
+			className={windowed ? "command-palette-backdrop windowed" : "command-palette-backdrop"}
 			role="presentation"
 			onMouseDown={(event) => {
 				if (event.target === event.currentTarget) onClose();
@@ -163,6 +165,11 @@ export function CommandPalette({
 				aria-modal="true"
 				aria-label="Command palette"
 				onKeyDown={(event) => {
+					if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+						event.preventDefault();
+						onClose();
+						return;
+					}
 					if (event.key === "Escape") {
 						event.preventDefault();
 						onClose();
@@ -199,6 +206,17 @@ export function CommandPalette({
 						aria-label="Search commands"
 					/>
 					<span className="command-palette-shortcut">Cmd K</span>
+					<button
+						type="button"
+						className="command-palette-close"
+						aria-label="Close command palette"
+						onClick={onClose}
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+							<line x1="18" y1="6" x2="6" y2="18" />
+							<line x1="6" y1="6" x2="18" y2="18" />
+						</svg>
+					</button>
 				</div>
 				<div className="command-palette-body" role="listbox" aria-label="Commands">
 					{error && (

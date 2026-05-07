@@ -172,6 +172,11 @@ export type BrowserCommandResult = {
 export type WsClientMessage =
 	| { kind: "chat:send"; convId: string; text: string }
 	| { kind: "chat:cancel"; convId: string }
+	| { kind: "ui:close-command-palette" }
+	| {
+			kind: "ui:run-chat-command";
+			command: { text: string; submit: boolean };
+	  }
 	| {
 			kind: "log:webview";
 			level: "trace" | "debug" | "info" | "warn" | "error";
@@ -192,6 +197,12 @@ export type WsServerMessage =
 	| { kind: "ui:open-chat" }
 	| { kind: "ui:open-settings" }
 	| { kind: "ui:open-command-palette" }
+	| { kind: "ui:toggle-command-palette" }
+	| { kind: "ui:close-command-palette" }
+	| {
+			kind: "ui:run-chat-command";
+			command: { text: string; submit: boolean };
+	  }
 	| { kind: "ui:open-pensieve" }
 	| { kind: "ui:open-activity" }
 	| { kind: "ui:open-channels" }
@@ -883,6 +894,8 @@ export type PensieveEntitySummary = {
 	relationshipCount: number;
 	memoryCount: number;
 	lastSeen?: number;
+	importanceScore?: number;
+	messageCount?: number;
 	tags: string[];
 };
 

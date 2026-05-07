@@ -2,7 +2,7 @@ import { GlobalShortcut } from "electrobun/bun";
 import type { Feature } from "../../../bun/kernel/registry";
 
 const TOGGLE_CHAT = "CommandOrControl+Shift+Space";
-const OPEN_COMMAND_PALETTE = "CommandOrControl+K";
+const TOGGLE_COMMAND_PALETTE = "CommandOrControl+K";
 const OPEN_SETTINGS = "CommandOrControl+Shift+S";
 const OPEN_PENSIEVE = "CommandOrControl+Shift+P";
 const OPEN_ACTIVITY = "CommandOrControl+Shift+A";
@@ -20,13 +20,13 @@ export const shortcutsFeature: Feature = {
 			console.log(`[shortcuts] ${TOGGLE_CHAT} → toggle chat`);
 		}
 
-		const okPalette = GlobalShortcut.register(OPEN_COMMAND_PALETTE, () => {
-			deps.events.emit("ui:open-command-palette", {});
+		const okPalette = GlobalShortcut.register(TOGGLE_COMMAND_PALETTE, () => {
+			deps.events.emit("ui:toggle-command-palette", {});
 		});
 		if (!okPalette) {
-			console.warn(`[shortcuts] failed to register ${OPEN_COMMAND_PALETTE}`);
+			console.warn(`[shortcuts] failed to register ${TOGGLE_COMMAND_PALETTE}`);
 		} else {
-			console.log(`[shortcuts] ${OPEN_COMMAND_PALETTE} → open command palette`);
+			console.log(`[shortcuts] ${TOGGLE_COMMAND_PALETTE} → toggle command palette`);
 		}
 
 		const okSettings = GlobalShortcut.register(OPEN_SETTINGS, () => {

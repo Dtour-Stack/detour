@@ -36,8 +36,9 @@ interface RuntimeShape {
 	getService?: (t: string) => unknown;
 	upsertEntities?: (entities: Array<{ id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }>) => Promise<void>;
 	createEntity?: (entity: { id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }) => Promise<boolean>;
-	getRelationshipsByPairs?: (pairs: Array<{ sourceEntityId: string; targetEntityId: string }>) => Promise<Array<unknown | null>>;
+	getRelationshipsByPairs?: (pairs: Array<{ sourceEntityId: string; targetEntityId: string }>) => Promise<Array<ContactRelationship | null>>;
 	createRelationships?: (rels: Array<{ sourceEntityId: string; targetEntityId: string; tags?: string[]; metadata?: Record<string, unknown> }>) => Promise<string[]>;
+	updateRelationships?: (rels: ContactRelationship[]) => Promise<void>;
 }
 
 type CachedContacts = Map<string, { name?: string }> | Record<string, { name?: string } | string>;
@@ -49,6 +50,27 @@ function isEmail(value: string): boolean {
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
 	return Array.from(new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v)));
+}
+
+function normalizePhone(value: string): string {
+	const digits = value.replace(/\D/g, "");
+	return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+}
+
+function normalizedEmail(value: string): string {
+	return value.trim().toLowerCase();
+}
+
+function contactIdentitySeed(contact: FullContact, handles: { phones: string[]; emails: string[] }): string {
+	const email = handles.emails.map(normalizedEmail).filter(Boolean).sort()[0];
+	if (email) return `email:${email}`;
+	const phone = handles.phones.map(normalizePhone).filter(Boolean).sort()[0];
+	if (phone) return `phone:${phone}`;
+	return `id:${contact.id}`;
+}
+
+function mergeTags(a: string[] | undefined, b: string[]): string[] {
+	return Array.from(new Set([...(a ?? []), ...b]));
 }
 
 function contactsFromServiceCache(service: unknown): FullContact[] {
@@ -157,13 +179,17 @@ function contactEntity(contact: FullContact, agentId: string, entityId: string, 
 }
 
 function contactRelationship(contact: FullContact, agentId: string, entityId: string, handles: { phones: string[]; emails: string[] }): ContactRelationship {
+	const primaryHandle = handles.phones[0] ?? handles.emails[0] ?? null;
 	return {
 		sourceEntityId: agentId,
 		targetEntityId: entityId,
 		tags: ["imessage", "contact", "user-acquaintance"],
 		metadata: {
 			source: contact.id.startsWith("cached:") ? "imessage:contacts.cache" : "imessage:contacts.app",
-			primaryHandle: handles.phones[0] ?? handles.emails[0] ?? null,
+			primaryHandle,
+			handles: [...handles.phones, ...handles.emails],
+			lastImportedAt: Date.now(),
+			importanceScore: primaryHandle ? 8 : 3,
 		},
 	};
 }
@@ -181,26 +207,49 @@ async function importContact(
 	agentId: string,
 	contact: FullContact,
 ): Promise<{ created: boolean; relationship?: ContactRelationship }> {
-	const entityId = await stableId(`imessage:contact:${contact.id}`);
 	const handles = contactHandles(contact);
+	const entityId = await stableId(`imessage:contact:${contactIdentitySeed(contact, handles)}`);
 	const created = await upsertContactEntity(runtime, contactEntity(contact, agentId, entityId, handles));
 	return { created, relationship: contactRelationship(contact, agentId, entityId, handles) };
 }
 
-async function createMissingRelationships(runtime: RuntimeShape, relationships: ContactRelationship[]): Promise<number> {
+async function upsertContactRelationships(runtime: RuntimeShape, relationships: ContactRelationship[]): Promise<number> {
 	if (relationships.length === 0 || !runtime.createRelationships) return 0;
-	let pending = relationships;
-	if (typeof runtime.getRelationshipsByPairs === "function") {
-		const existing = await runtime.getRelationshipsByPairs(
-			relationships.map((rel) => ({
-				sourceEntityId: rel.sourceEntityId,
-				targetEntityId: rel.targetEntityId,
-			})),
-		);
-		pending = relationships.filter((_, index) => !existing[index]);
+	if (typeof runtime.getRelationshipsByPairs !== "function") {
+		const ids = await runtime.createRelationships(relationships);
+		return Array.isArray(ids) ? ids.length : relationships.length;
+	}
+	const existing = await runtime.getRelationshipsByPairs(
+		relationships.map((rel) => ({
+			sourceEntityId: rel.sourceEntityId,
+			targetEntityId: rel.targetEntityId,
+		})),
+	);
+	const pending: ContactRelationship[] = [];
+	const updates: ContactRelationship[] = [];
+	for (let index = 0; index < relationships.length; index += 1) {
+		const rel = relationships[index];
+		const match = existing[index];
+		if (!rel) continue;
+		if (!match) {
+			pending.push(rel);
+			continue;
+		}
+		updates.push({
+			...match,
+			tags: mergeTags(match.tags, rel.tags),
+			metadata: {
+				...match.metadata,
+				...rel.metadata,
+				firstImportedAt: match.metadata?.firstImportedAt ?? rel.metadata.lastImportedAt,
+			},
+		});
+	}
+	if (updates.length > 0 && typeof runtime.updateRelationships === "function") {
+		await runtime.updateRelationships(updates);
 	}
 	const ids = pending.length > 0 ? await runtime.createRelationships(pending) : [];
-	return Array.isArray(ids) ? ids.length : pending.length;
+	return (Array.isArray(ids) ? ids.length : pending.length) + updates.length;
 }
 
 export async function importImessageContacts(runtime: IAgentRuntime): Promise<ContactImportResult> {
@@ -242,9 +291,9 @@ export async function importImessageContacts(runtime: IAgentRuntime): Promise<Co
 	}
 
 	try {
-		relationshipsCreated = await createMissingRelationships(r, relsToCreate);
+		relationshipsCreated = await upsertContactRelationships(r, relsToCreate);
 	} catch (err) {
-		logger.warn({ src: "contacts", err: err instanceof Error ? err.message : err }, "createRelationships failed");
+		logger.warn({ src: "contacts", err: err instanceof Error ? err.message : err }, "relationship upsert failed");
 	}
 
 	return {

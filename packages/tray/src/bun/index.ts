@@ -28,6 +28,7 @@ const { activityFeature } = await import("../features/activity/bun");
 const { browserFeature } = await import("../features/browser/bun");
 const { channelsFeature } = await import("../features/channels/bun");
 const { agentsFeature } = await import("../features/agents/bun");
+const { commandPaletteFeature } = await import("../features/command-palette/bun");
 const { shortcutsFeature } = await import("../features/shortcuts/bun");
 const { notificationsFeature } = await import("../features/notifications/bun");
 const { menusFeature } = await import("../features/menus/bun");
@@ -44,6 +45,7 @@ await loadFeatures(kernel, [
 	browserFeature,
 	channelsFeature,
 	agentsFeature,
+	commandPaletteFeature,
 	shortcutsFeature,
 	notificationsFeature,
 	menusFeature,
