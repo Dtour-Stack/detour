@@ -12,6 +12,7 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { PensieveMemoryService } from "./pensieve/memory-service";
 
 type GatewayDirection = "in" | "out" | "deleted" | "interaction";
 type GatewayChannel = "discord" | "telegram" | "imessage" | "chat" | "unknown";
@@ -110,6 +111,18 @@ function stripDiscordPrefix(text: string): string {
 		.trim();
 }
 
+function internalFailureText(text: string): boolean {
+	return /dynamicPromptExecFromState|discord_generation_failed|reply generation failed|provider path|server_is_overloaded|apiKey=|x-api-key|authorization/i.test(text);
+}
+
+function publicTurnText(message: GatewayMessage, max = MAX_SAMPLE_LEN): string {
+	const stripped = stripDiscordPrefix(message.text);
+	if (internalFailureText(stripped)) {
+		return "[internal generation failure was posted; do not repeat provider or debug details publicly]";
+	}
+	return compactText(stripped, max);
+}
+
 function nameFromGatewayText(text: string): string | null {
 	const match = text.match(/^\[Discord [^\]]+\]\s+@(.+?)\s+\(/s);
 	return match?.[1]?.trim() || null;
@@ -173,7 +186,7 @@ function summarizeSpeakers(
 		if (message.externalHandle) summary.externalHandle = message.externalHandle;
 		summary.messageCount += 1;
 		summary.lastSeen = Math.max(summary.lastSeen, message.time);
-		const sample = compactText(stripDiscordPrefix(message.text));
+		const sample = publicTurnText(message);
 		if (sample && !summary.samples.includes(sample)) summary.samples = [sample, ...summary.samples].slice(0, 2);
 		summaries.set(message.entityId, summary);
 	}
@@ -197,7 +210,7 @@ function recentTurnLines(messages: GatewayMessage[], names: Map<string, string>,
 		.slice(-MAX_RECENT_TURNS)
 		.map((message) => {
 			const name = speakerName(message, names, agentId);
-			return `- ${name}: ${compactText(stripDiscordPrefix(message.text), 220)}`;
+			return `- ${name}: ${publicTurnText(message, 220)}`;
 		});
 }
 
@@ -209,6 +222,31 @@ function speakerLines(speakers: SpeakerSummary[]): string[] {
 	});
 }
 
+async function savedDiscordContextLines(runtime: IAgentRuntime, roomId: string): Promise<string[]> {
+	const memories = new PensieveMemoryService(() => runtime);
+	const [notes, facts] = await Promise.all([
+		memories.list({
+			tableName: "memories",
+			pathPrefix: `/discord/rooms/${roomId}/observations`,
+			limit: 4,
+		}),
+		memories.list({
+			tableName: "facts",
+			pathPrefix: "/facts/discord/people",
+			roomId,
+			limit: 8,
+		}),
+	]);
+	const lines: string[] = [];
+	for (const note of notes) {
+		lines.push(`- note: ${compactText(note.preview, 280)}`);
+	}
+	for (const fact of facts) {
+		lines.push(`- fact: ${compactText(fact.preview, 220)}`);
+	}
+	return lines;
+}
+
 async function buildDiscordContextForMessage(runtime: IAgentRuntime, message: Memory): Promise<string> {
 	if (!isDiscordMessage(message)) return "";
 	const names = await discordEntityNames(runtime);
@@ -218,9 +256,11 @@ async function buildDiscordContextForMessage(runtime: IAgentRuntime, message: Me
 		.sort((a, b) => a.time - b.time);
 	const speakers = summarizeSpeakers(history, names, runtime.agentId);
 	const current = currentSpeakerLine(message, speakers, names);
+	const savedContext = roomId ? await savedDiscordContextLines(runtime, roomId) : [];
 	const sections: string[] = ["# Discord Context"];
 	if (current) sections.push(current);
 	if (speakers.length > 0) sections.push("Known Discord people:\n" + speakerLines(speakers).join("\n"));
+	if (savedContext.length > 0) sections.push("Saved Discord notes/facts:\n" + savedContext.join("\n"));
 	if (history.length > 0) sections.push("Recent captured room turns:\n" + recentTurnLines(history, names, runtime.agentId).join("\n"));
 	if (sections.length === 1 && names.size === 0) return "";
 	sections.push("Use this as factual room context. Do not invent identities, roles, or Discord history beyond it.");

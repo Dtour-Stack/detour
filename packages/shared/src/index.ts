@@ -546,7 +546,7 @@ export type PensieveTemplateRenderResult = {
 	missing: string[];
 };
 
-export type ChannelId = "discord" | "telegram" | "imessage";
+export type ChannelId = "discord" | "telegram" | "github" | "imessage";
 
 export type ChannelLiveStatus =
 	| "off"

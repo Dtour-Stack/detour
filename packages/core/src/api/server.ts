@@ -20,6 +20,7 @@ import { newTraceId, traceScope } from "../trace";
 import type { InboxService, InboxKind, InboxStatus } from "../inbox";
 import type { LlamaServerService } from "../llama/server-service";
 import type { GraphFilter, PensieveService } from "../pensieve";
+import { KNOWN_MEMORY_TABLES } from "../pensieve/memory-service";
 import { pensieveAudit } from "../pensieve";
 import { listPermissions, openPermissionPane, type PermissionId } from "../os-permissions";
 import { fetchOpenRouterModels } from "../openrouter-models";
@@ -81,9 +82,16 @@ type ApiRouteHandler = (ctx: ApiRequestContext) => Promise<Response | null>;
 const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
 const MAX_BROWSER_COMMANDS = 100;
 const INBOX_STATUSES = new Set(["pending", "acting", "acknowledged", "acted", "dismissed"]);
+const MEMORY_TABLES = new Set<string>(KNOWN_MEMORY_TABLES);
 
 function parseInboxStatus(value: unknown): InboxStatus | null {
 	return typeof value === "string" && INBOX_STATUSES.has(value) ? value as InboxStatus : null;
+}
+
+function parseMemoryTable(value: string | null): { ok: true; tableName?: string } | { ok: false; error: string } {
+	if (!value) return { ok: true };
+	if (!MEMORY_TABLES.has(value)) return { ok: false, error: `unknown memory table: ${value}` };
+	return { ok: true, tableName: value };
 }
 
 function parseBackendIds(values: string[]): BackendId[] | null {
@@ -1487,15 +1495,22 @@ export class ApiServer {
 			const { req, url, path, json, ok, error } = ctx;
 			// --- Pensieve (knowledge: memories + relationships + graph + templates) ---
 			if (req.method === "GET" && path === "/api/pensieve/memories/tree") {
-				return json(await this.pensieve.memories.tree());
+				const table = parseMemoryTable(url.searchParams.get("tableName"));
+				if (!table.ok) return error(table.error, 400);
+				return json(await this.pensieve.memories.tree({
+					...(table.tableName ? { tableName: table.tableName } : {}),
+				}));
 			}
 			return null;
 		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/pensieve/memories") {
+				const table = parseMemoryTable(url.searchParams.get("tableName"));
+				if (!table.ok) return error(table.error, 400);
 				const opts: Record<string, unknown> = {
 					limit: Number(url.searchParams.get("limit") ?? 100),
+					...(table.tableName ? { tableName: table.tableName } : {}),
 				};
 				for (const key of ["roomId", "entityId", "type", "tag", "q", "pathPrefix"]) {
 					const v = url.searchParams.get(key);
@@ -2608,6 +2623,9 @@ const CREDENTIAL_VALIDATORS: Record<string, CredentialValidator> = {
 	DISCORD_API_TOKEN: (_key, trimmed) => validateDiscordCredential(trimmed),
 	DISCORD_BOT_TOKEN: (_key, trimmed) => validateDiscordCredential(trimmed),
 	TELEGRAM_BOT_TOKEN: (_key, trimmed) => validateTelegramCredential(trimmed),
+	GITHUB_TOKEN: (_key, trimmed) => validateGitHubCredential(trimmed),
+	GITHUB_USER_PAT: (_key, trimmed) => validateGitHubCredential(trimmed),
+	GITHUB_AGENT_PAT: (_key, trimmed) => validateGitHubCredential(trimmed),
 	OPENAI_EMBEDDING_API_KEY: (_key, trimmed) => validateOpenAICredential(trimmed),
 	OPENAI_API_KEY: (_key, trimmed) => validateOpenAICredential(trimmed),
 	X_AUTH_TOKEN: validateXCredential,
@@ -2658,6 +2676,26 @@ async function validateTelegramCredential(trimmed: string): Promise<CredentialVa
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return { ok: false, error: `Could not reach Telegram to validate token: ${msg}` };
+	}
+}
+
+async function validateGitHubCredential(trimmed: string): Promise<CredentialValidationResult> {
+	try {
+		const res = await fetchCredentialValidation("https://api.github.com/user", {
+			headers: {
+				Authorization: `Bearer ${trimmed}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+		});
+		if (res.status === 401) return { ok: false, error: "GitHub rejected the token (401 Unauthorized)." };
+		if (res.status === 403) return { ok: false, error: "GitHub rejected the token (403 Forbidden or rate limited)." };
+		if (!res.ok) return { ok: false, error: `GitHub token check failed: HTTP ${res.status}` };
+		const body = await res.json() as { login?: string };
+		return { ok: true, ...(body.login ? { info: `signed in as @${body.login}` } : {}) };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: `Could not reach GitHub to validate token: ${msg}` };
 	}
 }
 

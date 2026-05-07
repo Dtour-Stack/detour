@@ -59,6 +59,7 @@ type DiscordClientProbe = {
 	guilds?: { cache?: { size?: number } };
 };
 type TelegramBotProbe = { botInfo?: { username?: string; id?: number } };
+type GitHubServiceProbe = { getOctokit?: (as: "user" | "agent") => object | null };
 
 function serviceKeys(svc: ChannelServiceRecord): string[] {
 	return Object.keys(svc).filter((k) => !k.startsWith("_")).slice(0, 40);
@@ -84,6 +85,8 @@ function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: Chan
 			return probeDiscordLive(svc);
 		case "telegram":
 			return probeTelegramLive(svc);
+		case "github":
+			return probeGithubLive(svc);
 		case "imessage":
 			return probeImessageLive(svc);
 	}
@@ -147,6 +150,19 @@ function probeMissingTelegramBot(svc: ChannelServiceRecord): { status: ChannelLi
 	return { status: "connecting", detail: "Telegraf bot not yet created" };
 }
 
+function probeGithubLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+	const getOctokit = (svc as GitHubServiceProbe).getOctokit;
+	if (typeof getOctokit !== "function") return { status: "loaded", detail: "GitHub service loaded; client probe unavailable" };
+	const userClient = getOctokit.call(svc, "user");
+	const agentClient = getOctokit.call(svc, "agent");
+	if (!userClient && !agentClient) return { status: "error", detail: "GitHub plugin loaded but no PAT is available" };
+	const modes = [
+		...(userClient ? ["user"] : []),
+		...(agentClient ? ["agent"] : []),
+	].join("+");
+	return { status: "online", detail: `GitHub client ready (${modes})` };
+}
+
 function probeImessageLive(svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
 	const getStatus = (svc as { getStatus?: () => unknown }).getStatus;
 	if (typeof getStatus !== "function") return { status: "loaded", detail: "iMessage service loaded; status unavailable" };
@@ -183,7 +199,7 @@ function pickPlugin(mod: unknown, name: string): Plugin | null {
 	return candidate ?? null;
 }
 
-export type ChannelId = "discord" | "telegram" | "imessage";
+export type ChannelId = "discord" | "telegram" | "github" | "imessage";
 
 export interface ChannelDefinition {
 	id: ChannelId;
@@ -227,6 +243,19 @@ async function loadTelegram(): Promise<Plugin | null> {
 		return null;
 	}
 }
+async function loadGithub(): Promise<Plugin | null> {
+	try {
+		// @ts-ignore eliza dynamic plugin — types unavailable when dist isn't built
+		const mod = await import("@elizaos/plugin-github");
+		return pickPlugin(mod, "github");
+	} catch (err) {
+		logger.warn(
+			{ src: "channels", error: err instanceof Error ? err.message : String(err) },
+			"github plugin load failed",
+		);
+		return null;
+	}
+}
 async function loadImessage(): Promise<Plugin | null> {
 	if (process.platform !== "darwin") return null;
 	try {
@@ -259,6 +288,16 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-telegram",
 		loadPlugin: loadTelegram,
+	},
+	{
+		id: "github",
+		label: "GitHub",
+		description: "Connect GitHub for PRs, issues, review actions, and notification triage. Required: GITHUB_USER_PAT and GITHUB_AGENT_PAT.",
+		requiredVaultKeys: ["GITHUB_USER_PAT", "GITHUB_AGENT_PAT"],
+		optionalVaultKeys: ["GITHUB_TOKEN"],
+		platform: "any",
+		pluginPackage: "@elizaos/plugin-github",
+		loadPlugin: loadGithub,
 	},
 	{
 		id: "imessage",
@@ -324,6 +363,13 @@ export class ChannelsService {
 		return { ok: missing.length === 0, missing };
 	}
 
+	private async hasRequiredCredentials(def: ChannelDefinition): Promise<{ ok: boolean; missing: string[] }> {
+		if (def.id !== "github") return this.hasAllKeys(def.requiredVaultKeys);
+		const v = await this.vault.vault();
+		if (await v.has("GITHUB_TOKEN")) return { ok: true, missing: [] };
+		return this.hasAllKeys(def.requiredVaultKeys);
+	}
+
 	private boolSetting(runtime: IAgentRuntime | null, key: string): boolean | undefined {
 		const value = runtime?.getSetting(key);
 		if (value === true || value === false) return value;
@@ -343,7 +389,7 @@ export class ChannelsService {
 
 	private async channelStatus(def: ChannelDefinition, loadedSet: Set<string>, runtime: IAgentRuntime | null): Promise<ChannelStatus> {
 		const platformAvailable = this.platformAvailable(def);
-		const { ok, missing } = await this.hasAllKeys(def.requiredVaultKeys);
+		const { ok, missing } = await this.hasRequiredCredentials(def);
 		const pluginLoaded = this.pluginLoaded(def, loadedSet);
 		const live = await this.channelLive(def, ok, pluginLoaded, runtime);
 		return {
@@ -430,6 +476,16 @@ export class ChannelsService {
 				}
 			}
 		}
+		return this.normalizeCredentials(def, out);
+	}
+
+	private normalizeCredentials(def: ChannelDefinition, credentials: Record<string, string>): Record<string, string> {
+		if (def.id !== "github") return credentials;
+		const out = { ...credentials };
+		const token = out.GITHUB_TOKEN || out.GITHUB_USER_PAT || out.GITHUB_AGENT_PAT;
+		if (!token) return out;
+		if (!out.GITHUB_USER_PAT) out.GITHUB_USER_PAT = token;
+		if (!out.GITHUB_AGENT_PAT) out.GITHUB_AGENT_PAT = token;
 		return out;
 	}
 
@@ -443,7 +499,7 @@ export class ChannelsService {
 		for (const def of CHANNEL_DEFINITIONS) {
 			const platformAvailable = def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
 			if (!platformAvailable) continue;
-			const { ok } = await this.hasAllKeys(def.requiredVaultKeys);
+			const { ok } = await this.hasRequiredCredentials(def);
 			if (!ok && def.requiredVaultKeys.length > 0) continue;
 			// IMESSAGE_ENABLED is now in requiredVaultKeys, so the hasAllKeys
 			// check above already gates iMessage on the user enabling it.

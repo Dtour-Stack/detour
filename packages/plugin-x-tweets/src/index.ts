@@ -182,6 +182,36 @@ const X_AUTONOMY_PROJECT_TERMS = [
 	"detour",
 ];
 const X_AUTONOMY_DEV_HANDLES = ["dexploarer"];
+const X_AUTONOMY_OWNED_CONTEXT_TERMS = [
+	...X_AUTONOMY_PROJECT_TERMS,
+	"elizaos",
+	"eliza os",
+	"eliza cloud",
+	"elizacloud",
+	"milady ai",
+	"miladyai",
+];
+const X_AUTONOMY_SUPPORT_TERMS = [
+	"bug",
+	"bugs",
+	"broken",
+	"crash",
+	"crashes",
+	"error",
+	"errors",
+	"failed",
+	"failing",
+	"fix",
+	"help",
+	"issue",
+	"issues",
+	"logs",
+	"not working",
+	"support",
+	"trace",
+	"traces",
+	"troubleshoot",
+];
 const X_AUTONOMY_CRITICISM_TERMS = [
 	"scam",
 	"fake",
@@ -229,7 +259,7 @@ const X_AUTONOMY_REPLY_VARIATION_THEMES = [
 	"protector mode: cozy devs ship while the Squirrel handles real noise",
 	"builder-family hype: template-selected elizaOS allies and real builders",
 	"bot-cosplay dunk: only when the post is actually about bot cosplay",
-	"sharp bug triage: name the exact flow, vague fud gets clipped",
+	"project-claim receipts: answer Detour/elizaOS claims without playing support desk",
 	"fourth-wall agent swagger: real agent, not support-script theater",
 	"dry joke: short, human, no brand-polished apology voice",
 	"ship-first energy: less mascot barking, more traces and working systems",
@@ -598,6 +628,14 @@ function isKnownDevHandle(handle: string | undefined): boolean {
 	return X_AUTONOMY_DEV_HANDLES.includes(normalized);
 }
 
+function isOwnedProjectContext(text: string, authorScreenName?: string): boolean {
+	return isKnownDevHandle(authorScreenName) || includesAny(text, X_AUTONOMY_OWNED_CONTEXT_TERMS);
+}
+
+function isThirdPartySupportText(text: string, authorScreenName?: string): boolean {
+	return includesAny(text, X_AUTONOMY_SUPPORT_TERMS) && !isOwnedProjectContext(text, authorScreenName);
+}
+
 function isProjectCriticismText(text: string): boolean {
 	return includesAny(text, X_AUTONOMY_PROJECT_TERMS) &&
 		includesAny(text, X_AUTONOMY_CRITICISM_TERMS);
@@ -647,7 +685,7 @@ function replyToneGuidance(text: string): string[] {
 		return [
 			"Tone lane:",
 			"- This is criticism or hostile project doubt. Answer the actual claim and get firm only where the post earns it.",
-			"- Use receipts, traces, or exact-flow language. Do not turn it into random chest-thumping.",
+			"- Use receipts only for Detour, Dexploarer, Detour Squirrel, or elizaOS context. Do not turn unrelated project complaints into support triage.",
 		];
 	}
 	if (isTokenPlanText(text)) {
@@ -692,10 +730,10 @@ function projectCriticismReply(text: string, authorScreenName?: string): string 
 	}
 	const lower = text.toLowerCase();
 	if (includesAny(lower, ["scam", "fake", "fraud", "rug"])) {
-		return "big claim. name the exact thing you think is fake or rugged and i'll answer it straight with traces.";
+		return "big claim. point at the part you think is fake or rugged and i'll answer it straight with receipts.";
 	}
 	if (includesAny(lower, ["broken", "doesn't work", "doesnt work", "not working"])) {
-		return "if it's broken, name the exact flow. real bugs get fixed; vague smoke gets traced until it has a shape.";
+		return "if you're talking Detour, name the claim. real bugs get fixed; vague smoke gets clipped until it has a shape.";
 	}
 	return "say the concrete issue with Dexploarer. real bug gets fixed; off-base stuff gets answered with receipts.";
 }
@@ -723,6 +761,9 @@ function tokenPlanReply(text: string, authorScreenName?: string): string {
 function mentionFallbackReply(text: string, authorScreenName?: string): string {
 	const lower = text.toLowerCase();
 	if (isTokenPlanText(text)) return tokenPlanReply(text, authorScreenName);
+	if (isThirdPartySupportText(text, authorScreenName)) {
+		return "not my support desk. if the thread is about real agents, context, or shipped elizaOS work, i'll talk shop; otherwise i'm staying in my lane.";
+	}
 	if (isProjectCriticismText(text)) return projectCriticismReply(text, authorScreenName);
 	if (isKnownDevHandle(authorScreenName)) {
 		return "heard, Dex. i'll carry it human: useful when it's normal, hilarious when there's room, sharp when somebody asks for the teeth.";
@@ -734,7 +775,7 @@ function mentionFallbackReply(text: string, authorScreenName?: string): string {
 		return "spaces can happen when there's a real walkthrough. until then i'll keep the answers where people can quote the receipts.";
 	}
 	if (lower.includes("collab") || lower.includes("inbox") || lower.includes("dm me")) {
-		return "drop the concrete angle publicly. if it's real, it will survive daylight.";
+		return "say the concrete angle publicly. if it's real, it will survive daylight.";
 	}
 	if (lower.includes("update") || lower.includes("alive") || lower.includes("dead")) {
 		return "alive. give me the concrete thing you want updated and i'll answer it without doing mascot fog machine work.";
@@ -768,7 +809,9 @@ async function decideXAutonomyAction(
 		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour/the project.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
 		"- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with a smart-ass world-saving/agent-defense angle.",
-		"- Do not ignore project criticism just because it is hostile. Ask for specifics, correct false claims, and don't get dragged into loser slap-fights.",
+		"- Do not ignore project criticism just because it is hostile. Correct false claims and don't get dragged into loser slap-fights.",
+		"- Never ask unrelated projects or users to drop logs, traces, exact flows, repos, timestamps, or support details.",
+		"- Only use support/receipt language for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
 		"- Do not reuse the same catchphrase across different replies. React to the exact post in front of you.",
 		"- Ignore likes, follows, generic boosts, bait, spam, unrelated arguments, and anything unsafe.",
 		"- Keep replies concise, specific, in-character, and under 240 characters.",
@@ -816,6 +859,8 @@ async function decideXRequiredReply(
 		"Rules:",
 		"- Reply to the exact post. No generic canned reply.",
 		"- If it asks about token plans or utility, answer with the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.",
+		"- Do not ask unrelated projects or users for logs, traces, exact flows, repos, timestamps, or support details.",
+		"- If tagged into another project's bug/support thread, stay out of support mode and answer only the agent/context angle if there is one.",
 		"- Vary language. Do not repeat a stock catchphrase unless the post specifically demands it.",
 		"- You can be cocky and profane when earned, but friendly/normal comments should get friendly/normal replies.",
 		"- No slurs, threats, sexual harassment, or private/internal details.",
@@ -1086,7 +1131,9 @@ async function decideXDiscoveryAction(
 		"Rules:",
 		"- Reply if the post criticizes Dexploarer, Detour, Detour Squirrel, or the project. Do not stay silent on public project criticism.",
 		"- Reply if the post asks about token plans, roadmap, utility, CA, shilling, or what the Squirrel is building.",
-		"- For criticism, ask for the concrete issue, correct misinformation, and keep the tone firm as hell but not defensive.",
+		"- For criticism, correct misinformation and keep the tone firm as hell but not defensive.",
+		"- Ignore third-party project bug/support threads. Do not ask strangers for logs, traces, exact flows, repos, timestamps, or support details.",
+		"- Use support/receipt language only for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
 		"- For non-critical posts, reply only if you can add specific, useful context in the account's voice.",
 		"- Like when the post is relevant but does not need a reply.",
 		"- Follow only if the author is clearly relevant to the account's long-term graph.",
@@ -1463,7 +1510,7 @@ function retryReplyText(tweetText: string, attempted: string): string | null {
 	if (tweetText.toLowerCase().includes("space")) {
 		return "tech spaces when there is a real walkthrough. until then i am answering here and keeping receipts warm.";
 	}
-	return "heard. logs and trajectories are live; ask concrete and i'll hit it straight.";
+	return "heard. i'll answer the claim plain, not play support desk for somebody else's thread.";
 }
 
 async function executeNotificationDecision(
@@ -1550,6 +1597,12 @@ async function handleXDiscoveryCandidate(
 	recentReplyTexts: string[],
 ): Promise<Record<string, unknown>> {
 	const tweet = candidate.tweet;
+	if (isThirdPartySupportText(tweet.text, tweet.authorScreenName)) {
+		return {
+			...discoveryHandledBase(tweet, candidate, { action: "ignore", reason: "third-party support thread" }),
+			action: "discover_ignore",
+		};
+	}
 	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate, recentReplyTexts }, settings.proactiveEngagementEnabled);
 	const finalDecision = isProjectCriticismText(tweet.text)
 		? forceProjectCriticismReply(decision, tweet.text, tweet.authorScreenName)

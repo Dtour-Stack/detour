@@ -10,6 +10,7 @@ import { ChannelGatewayService } from "./channels/gateway";
 import { ConfigService } from "./config-service";
 import { ContinuousImprovementService } from "./continuous-improvement-service";
 import { CronService } from "./cron-service";
+import { DiscordObservationService } from "./discord-observation-service";
 import { InboxService } from "./inbox";
 import { OwnerBindService } from "./owner-bind";
 import { newTraceId, traceScope } from "./trace";
@@ -130,9 +131,11 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	pensieve.start();
 	const activity = new ActivityService(runtime);
 	activity.start();
+	const gateway = new ChannelGatewayService();
 	const improvement = new ContinuousImprovementService(runtime, pensieve.memories, activity.logs);
 	improvement.start();
-	const gateway = new ChannelGatewayService();
+	const discordObservations = new DiscordObservationService(runtime, pensieve.memories, gateway);
+	discordObservations.start();
 	runtime.setGateway(gateway);
 	runtime.onAfterBuild((state) => {
 		gateway.attach(state.runtime);
@@ -252,6 +255,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		auth,
 		api,
 		stop: () => {
+			discordObservations.stop();
 			improvement.stop();
 			activity.stop();
 			pensieve.stop();
@@ -268,6 +272,7 @@ export { RuntimeService } from "./runtime";
 export { AuthService } from "./auth";
 export { ApiServer } from "./api/server";
 export { ContinuousImprovementService, CONTINUOUS_IMPROVEMENT_TASK_NAME } from "./continuous-improvement-service";
+export { DiscordObservationService, DISCORD_OBSERVATION_TASK_NAME } from "./discord-observation-service";
 export { PensieveService } from "./pensieve";
 export { ActivityService } from "./activity";
 export { PensieveMemoryService } from "./pensieve/memory-service";

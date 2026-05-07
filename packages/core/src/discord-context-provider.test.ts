@@ -22,7 +22,7 @@ function writeGatewayLog(dir: string, rows: Array<Record<string, unknown>>): voi
 	writeFileSync(join(gatewayDir, "messages.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n"));
 }
 
-function runtime(): IAgentRuntime {
+function runtime(memories: Partial<Record<string, Memory[]>> = {}): IAgentRuntime {
 	const agentId = "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID;
 	const entities = new Map<string, Entity>([
 		["c2269992-d475-04ad-ab68-7dff9209c695", { id: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID, names: ["dEXploarer"] } as Entity],
@@ -38,6 +38,7 @@ function runtime(): IAgentRuntime {
 			const entity = entities.get(String(id));
 			return entity ? [entity] : [];
 		}),
+		getMemories: async (params: Record<string, unknown>) => memories[String(params.tableName)] ?? [],
 	} as never;
 }
 
@@ -92,6 +93,54 @@ describe("discord context provider", () => {
 			expect(text).toContain("fishai");
 			expect(text).toContain("botdick is your dev");
 			expect(text).toContain("Detour Squirrel: Always. X runs on caffeine.");
+		});
+	});
+
+	test("includes saved Discord notes and hides internal generation failures", async () => {
+		await withStateDir(async (dir) => {
+			const roomId = "cdfea3ca-9b95-0125-8155-dc4308f7f806";
+			writeGatewayLog(dir, [
+				{
+					id: "1",
+					time: 1,
+					direction: "out",
+					channel: "discord",
+					source: "discord",
+					roomId,
+					entityId: "0b0d99a5-666d-0f9f-9c12-3c0022b95db3",
+					text: "Reply generation failed inside my provider path: server_is_overloaded apiKey=set",
+				},
+			]);
+			const message: Memory = {
+				roomId: roomId as UUID,
+				entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
+				content: { source: "discord", text: "Detour what happened?" },
+			};
+			const text = await discordContextForMessage(runtime({
+				memories: [{
+					id: "note-1" as UUID,
+					roomId: roomId as UUID,
+					entityId: "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID,
+					content: { text: "Dexploarer expects Detour to inspect X notifications directly." },
+					metadata: { type: "description", ...{ path: `/discord/rooms/${roomId}/observations` } },
+					createdAt: 1,
+				}],
+				facts: [{
+					id: "fact-1" as UUID,
+					roomId: roomId as UUID,
+					entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
+					content: { text: "Dexploarer is Detour's dev/operator." },
+					metadata: { type: "custom", ...{ path: "/facts/discord/people" } },
+					createdAt: 2,
+				}],
+			}), message);
+
+			expect(text).toContain("Saved Discord notes/facts");
+			expect(text).toContain("inspect X notifications directly");
+			expect(text).toContain("Dexploarer is Detour's dev/operator.");
+			expect(text).toContain("internal generation failure");
+			expect(text).not.toContain("server_is_overloaded");
+			expect(text).not.toContain("apiKey=set");
 		});
 	});
 });

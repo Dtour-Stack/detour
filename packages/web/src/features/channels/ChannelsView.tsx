@@ -25,6 +25,7 @@ import { useDetourTheme } from "../../useDetourTheme";
 const CHANNEL_ICONS: Record<string, string> = {
 	discord: "💬",
 	telegram: "✈️",
+	github: "GH",
 	imessage: "💙",
 };
 
@@ -357,7 +358,7 @@ async function toggleChannelEnabled({
 			if (!expanded) onToggleExpand();
 		} else if (channel.configured) {
 			if (!confirm(`Disable ${channel.label}? This will clear stored credentials.`)) return;
-			await Promise.all(channel.requiredVaultKeys.map((key) => client.channelClearCredential(key)));
+			await Promise.all([...channel.requiredVaultKeys, ...channel.optionalVaultKeys].map((key) => client.channelClearCredential(key)));
 			await onChanged();
 		} else if (!expanded) {
 			onToggleExpand();
