@@ -37,7 +37,6 @@ import {
 	loginListAction,
 	vaultToolsPlugin,
 } from "../plugins/vault-tools/index";
-import { cronToolsPlugin } from "../plugins/cron-tools/index";
 import { xTweetsPlugin } from "../plugins/x-tweets/index";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
@@ -273,6 +272,15 @@ export class RuntimeService {
 	}
 
 	private ownerBind?: import("./owner-bind").OwnerBindService;
+	private extraPlugins: Plugin[] = [];
+
+	/**
+	 * Plugins contributed by the carrot bridge. Appended to basePlugins on
+	 * the next runtime build. Called from startCore after carrots load.
+	 */
+	setExtraPlugins(plugins: Plugin[]): void {
+		this.extraPlugins = plugins;
+	}
 
 	constructor(
 		private readonly vault: VaultService,
@@ -838,7 +846,11 @@ export class RuntimeService {
 			discordContextPlugin,
 			dpeFallbackPlugin,
 			xTweetsPlugin,
-			cronToolsPlugin,
+			// cronToolsPlugin: replaced by `cron-tools` carrot loaded via the
+			// carrot bridge — see core/index.ts and src/bun/core/carrots/. The
+			// carrot worker.ts mirrors the static plugin's actions, but runs
+			// isolated and reaches CronService over RPC.
+			...this.extraPlugins,
 			...(this.ownerBind ? [makeOwnerBindPlugin(this.ownerBind)] : []),
 		];
 	}

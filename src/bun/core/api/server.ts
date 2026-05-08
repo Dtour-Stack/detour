@@ -889,6 +889,40 @@ export class ApiServer {
 			}
 			return null;
 		},
+		// Debug: invoke an eliza action by name directly through the built
+		// runtime, bypassing the LLM action selector. Used to validate the
+		// carrot bridge end-to-end (and any other plugin's actions) without
+		// depending on chat path / model availability.
+		async (ctx) => {
+			const { req, path, json, error } = ctx;
+			if (req.method !== "POST" || path !== "/api/debug/action") return null;
+			let body: { name?: string; options?: Record<string, unknown> } = {};
+			try { body = (await req.json()) as typeof body; } catch { return error("invalid JSON body", 400); }
+			if (!body.name) return error("missing 'name'", 400);
+			const state = await this.runtime.getOrBuild();
+			if (!state) return error("runtime not built — no LLM provider configured", 503);
+			const live = this.runtime.peek();
+			if (!live) return error("runtime not live", 503);
+			const liveActions = (live as unknown as { actions?: Array<{ name: string; handler: (...a: unknown[]) => unknown }> }).actions ?? [];
+			const action = liveActions.find((a) => a.name === body.name);
+			if (!action) return error(`action '${body.name}' not registered on runtime`, 404);
+			const emits: { text: string; action: string }[] = [];
+			const callback = async (p: { text: string; action: string }) => { emits.push({ text: p.text, action: p.action }); return []; };
+			const fakeMemory = {
+				id: "00000000-0000-0000-0000-000000000000",
+				entityId: "00000000-0000-0000-0000-000000000001",
+				roomId: "00000000-0000-0000-0000-000000000002",
+				content: { text: "" },
+			};
+			const fakeState = { values: {}, data: {}, text: "" };
+			const t0 = Date.now();
+			try {
+				const result = await action.handler(live, fakeMemory, fakeState, body.options ?? {}, callback);
+				return json({ ok: true, action: body.name, durationMs: Date.now() - t0, emits, result });
+			} catch (err) {
+				return error(`action handler threw: ${err instanceof Error ? err.message : String(err)}`, 500);
+			}
+		},
 		async (ctx) => {
 			const { req, url, path, json, ok, error } = ctx;
 			if (req.method === "GET" && path === "/api/providers") {

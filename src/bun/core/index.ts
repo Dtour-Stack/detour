@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { ActivityService } from "./activity";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
@@ -130,6 +132,33 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		try { await cron.attachRuntime(state.runtime); }
 		catch (err) { console.warn("[cron] attachRuntime failed:", err instanceof Error ? err.message : err); }
 	});
+
+	// Carrot bridge — load runtime-installable plugins ("carrots"), each in
+	// its own isolated Bun Worker. The CarrotManager exposes a curated set
+	// of core service methods; carrots invoke them over RPC. See
+	// src/bun/core/carrots/README and src/bun/carrot-sdk/.
+	const carrotManager = new (await import("./carrots")).CarrotManager();
+	carrotManager.registerService("cron", {
+		listJobs: () => cron.listJobs(),
+		getJob: (id: unknown) => cron.getJob(String(id)),
+		createJob: (input: unknown) => cron.createJob(input as Parameters<typeof cron.createJob>[0]),
+		updateJob: (id: unknown, patch: unknown) => cron.updateJob(String(id), patch as Parameters<typeof cron.updateJob>[1]),
+		deleteJob: (id: unknown) => cron.deleteJob(String(id)),
+	});
+	const extraPlugins: Awaited<ReturnType<typeof carrotManager.loadFromDir>>[] = [];
+	const carrotsDir = resolveCarrotsDir();
+	if (carrotsDir) {
+		try {
+			const cronCarrotPlugin = await carrotManager.loadFromDir(join(carrotsDir, "cron-tools"));
+			extraPlugins.push(cronCarrotPlugin);
+			console.log(`[carrots] loaded cron-tools (${extraPlugins.length} carrot(s) loaded from ${carrotsDir})`);
+		} catch (err) {
+			console.warn("[carrots] failed to load cron-tools:", err instanceof Error ? err.message : err);
+		}
+	} else {
+		console.warn("[carrots] carrots dir not found — skipping carrot load");
+	}
+	runtime.setExtraPlugins(extraPlugins);
 	// Local llama-server for embeddings (and later, optional chat fallback).
 	// Lazy-spawned on first ensureRunning() call, with model auto-download.
 	// We DO eagerly start it in the background so the first embedding call
@@ -227,9 +256,48 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			cron.stop();
 			api.stop();
 			llama.stop();
+			carrotManager.stopAll();
 		},
 	};
 	return handle;
+}
+
+/**
+ * Resolve the directory holding carrots.
+ *
+ * Carrot worker files are NOT bundled into the .app — they're spawned as
+ * their own Bun Worker processes that read TS source from disk. So the
+ * host needs to find them at the repo source location, even when itself
+ * is running from a bundled `.app`. Resolution order:
+ *
+ *   1. DETOUR_CARROTS_DIR env override.
+ *   2. Walk up from `process.execPath` looking for `electrobun.config.ts`
+ *      (marker for the dev repo root). Bundled .app lives several levels
+ *      under <repo>/build/, so this walks back to the source.
+ *   3. <cwd>/carrots — works when running `bun src/bun/index.ts` directly.
+ */
+function resolveCarrotsDir(): string | null {
+	const fromEnv = process.env.DETOUR_CARROTS_DIR?.trim();
+	if (fromEnv && existsSync(fromEnv)) return fromEnv;
+
+	if (process.execPath) {
+		let dir = dirname(process.execPath);
+		for (let i = 0; i < 12; i++) {
+			if (existsSync(join(dir, "electrobun.config.ts"))) {
+				const carrots = join(dir, "carrots");
+				if (existsSync(carrots)) return carrots;
+				return null;
+			}
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	}
+
+	const fromCwd = join(process.cwd(), "carrots");
+	if (existsSync(fromCwd)) return fromCwd;
+
+	return null;
 }
 
 export { VaultService } from "./vault";
