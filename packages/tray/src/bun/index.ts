@@ -1,10 +1,19 @@
-import { Utils } from "electrobun/bun";
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 console.log("[main] starting");
 
-const dataDir = Utils.paths.userData;
+// Detour's canonical home dir. Everything in core/cli/plugins hardcodes
+// `homedir() + ".detour"` for cron, logs, skills, workspace, runtime lock,
+// audit, etc. — so dataDir matches. Vault, eliza-db, gateway, inbox, llama,
+// audit, action-results live here too.
+//
+// Auth (Anthropic OAuth, Codex OAuth) is shared with the user's other eliza
+// apps via a symlink: ~/.detour/auth → ~/.eliza/auth. The eliza submodule's
+// listAccounts() reads <ELIZA_STATE_DIR>/auth/<provider>/*.json which
+// resolves through the symlink to the shared store.
+const dataDir = join(homedir(), ".detour");
 mkdirSync(dataDir, { recursive: true });
 const pgliteDataDir = join(dataDir, "eliza-db");
 console.log(`[main] dataDir=${dataDir}`);

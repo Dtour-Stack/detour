@@ -802,6 +802,11 @@ export class ApiServer {
 		this.server = Bun.serve<WsData, never>({
 			port,
 			hostname: "127.0.0.1",
+			// Bun.serve defaults to a 10-second idleTimeout which kills the
+			// chat WebSocket the moment there's a pause in traffic and emits
+			// "request timed out after 10 seconds" to stderr. 255 is the
+			// max Bun allows.
+			idleTimeout: 255,
 			fetch: async (req, server) => {
 				return this.handleHttpRequest(req, server, { json, ok, error });
 			},

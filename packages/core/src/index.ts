@@ -1,6 +1,3 @@
-import { cpSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { ActivityService } from "./activity";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
@@ -24,44 +21,6 @@ export type CoreOptions = {
 	dataDir: string;
 	pgliteDataDir: string;
 };
-
-/**
- * One-time migration: copy vault.json (+ audit) from a legacy location into
- * the current userData dir if the user's earlier session wrote there. This
- * happened because older builds used `~/.detour/eliza-state` while the
- * current build relies on Electrobun's userData (`~/Library/Application
- * Support/ai.detour.app/<channel>`). Without this migration the user
- * re-enters every credential because the Discord/Telegram tokens stored
- * earlier are silently invisible to the new path.
- *
- * Idempotent: skips if the destination already has vault.json.
- */
-function migrateLegacyVault(targetStateDir: string): void {
-	const targetVault = join(targetStateDir, "vault.json");
-	if (existsSync(targetVault)) return;
-	const candidates = [
-		join(homedir(), ".detour", "eliza-state"),
-	];
-	for (const src of candidates) {
-		const srcVault = join(src, "vault.json");
-		if (!existsSync(srcVault)) continue;
-		try {
-			mkdirSync(targetStateDir, { recursive: true });
-			cpSync(srcVault, targetVault, { mode: 0o600 });
-			const srcAudit = join(src, "audit");
-			if (existsSync(srcAudit)) {
-				cpSync(srcAudit, join(targetStateDir, "audit"), { recursive: true });
-			}
-			console.log(`[vault] migrated legacy vault from ${src} → ${targetStateDir}`);
-			return;
-		} catch (err) {
-			console.warn(
-				`[vault] migration from ${src} failed:`,
-				err instanceof Error ? err.message : err,
-			);
-		}
-	}
-}
 
 export type CoreHandle = {
 	port: number;
@@ -112,12 +71,12 @@ function ensureUsefulPath(): void {
 export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	ensureUsefulPath();
 	process.env.PGLITE_DATA_DIR = opts.pgliteDataDir;
-	// Anchor @elizaos/vault at our userData dir so vault.json lives next to
-	// PGlite (and per-channel: dev/stable separation comes for free). Must
-	// run BEFORE migrateLegacyVault + VaultService construction since
-	// createVault() reads ELIZA_STATE_DIR at call time.
+	// Anchor @elizaos/vault + auth at the canonical Detour data dir (~/.detour).
+	// `<ELIZA_STATE_DIR>/auth/` is a SYMLINK to ~/.eliza/auth/, so eliza's
+	// listAccounts() reads the same OAuth pool the user's other eliza apps use.
+	// Must run BEFORE VaultService construction since createVault() reads
+	// ELIZA_STATE_DIR at call time.
 	process.env.ELIZA_STATE_DIR = opts.dataDir;
-	migrateLegacyVault(opts.dataDir);
 
 	const vault = new VaultService();
 	const auth = new AuthService();
@@ -178,11 +137,17 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// pay the 1-3s model-load cost. Failure is non-fatal — the embedding
 	// plugin gracefully falls back to OpenAI key or zero vector.
 	const llama = new LlamaServerService();
-	void llama.ensureRunning().then((res) => {
+	// AWAIT llama startup BEFORE the runtime builds. Previously this was a
+	// fire-and-forget Promise — the env vars below were set asynchronously,
+	// so the embedding plugin's settings were already cached as undefined by
+	// the time runtime.initialize() ran. Plugin then defaulted to
+	// api.openai.com → OpenRouter fallback → "Invalid embedding received".
+	// Blocking ~1s on first launch (model already on disk → fast) is the
+	// price we pay for the embedding plugin to see OPENAI_EMBEDDING_URL
+	// when it loads.
+	try {
+		const res = await llama.ensureRunning();
 		if (res) {
-			// Tell our embedding plugin to use the local server. plugin-embedding-openai
-			// already speaks OpenAI-compatible HTTP, so pointing OPENAI_EMBEDDING_URL
-			// at the local server is enough.
 			process.env.OPENAI_EMBEDDING_URL = `${res.url}/v1/embeddings`;
 			process.env.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY ?? "local-llama";
 			process.env.OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? "local";
@@ -191,9 +156,9 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		} else {
 			console.warn("[core] local llama-server unavailable; embeddings will fall back to OpenAI key or zeros");
 		}
-	}).catch((err) => {
+	} catch (err) {
 		console.warn("[core] llama-server start failed:", err instanceof Error ? err.message : err);
-	});
+	}
 
 	// Import macOS contacts → entity graph + relationships, on every build
 	// where the iMessage plugin is live. The iMessage service starts async

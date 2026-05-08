@@ -794,11 +794,16 @@ export class RuntimeService {
 	}
 
 	private loadEmbeddingSettings(settings: Record<string, string>): void {
+		// Always overwrite with env-var values when present. The previous guard
+		// (`&& !settings.OPENAI_EMBEDDING_URL`) let a stale or partially
+		// initialized settings object win over the freshly resolved local
+		// llama-server URL, sending embedding requests to api.openai.com /
+		// OpenRouter even though llama was up and listening locally.
 		const llamaUrl = process.env.OPENAI_EMBEDDING_URL;
-		if (typeof llamaUrl === "string" && llamaUrl.length > 0 && !settings.OPENAI_EMBEDDING_URL) {
+		if (typeof llamaUrl === "string" && llamaUrl.length > 0) {
 			settings.OPENAI_EMBEDDING_URL = llamaUrl;
 		}
-		if (process.env.OPENAI_EMBEDDING_API_KEY && !settings.OPENAI_EMBEDDING_API_KEY) {
+		if (process.env.OPENAI_EMBEDDING_API_KEY) {
 			settings.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY;
 		}
 	}
