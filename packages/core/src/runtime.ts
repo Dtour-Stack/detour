@@ -26,17 +26,7 @@ import {
 	estimateTokens,
 	extractBody,
 	generateSkillsToon,
-	parseFrontmatter,
-	SKILL_SOURCE_PRECEDENCE,
-	type CacheOptions,
-	type LoadedSkillWithSource,
-	type PromptToonOptions,
-	type SkillCatalogEntry,
-	type SkillDetails,
-	type SkillEligibility,
-	type SkillInstructions,
-	type SkillSearchResult,
-	type SkillSource,
+	parseFrontmatter as parseFrontmatterRaw,
 } from "@elizaos/plugin-agent-skills";
 import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // Note: plugin-local-embedding (eliza's bundled choice) drags in node-llama-cpp,
@@ -168,6 +158,136 @@ function mergeSettingList(existing: string | undefined, additions: readonly stri
 	for (const value of values) seen.add(value);
 	const merged = [...seen];
 	return merged.length > 0 ? merged.join(",") : undefined;
+}
+
+type SkillSource = "workspace" | "managed" | "bundled" | "plugin" | "extra";
+
+type SkillFrontmatter = {
+	name: string;
+	description: string;
+	metadata?: Record<string, string | number | boolean | object | undefined>;
+};
+
+type LoadedSkillWithSource = {
+	slug: string;
+	name: string;
+	description: string;
+	version: string;
+	content: string;
+	frontmatter: SkillFrontmatter;
+	path: string;
+	scripts: string[];
+	references: string[];
+	assets: string[];
+	loadedAt: number;
+	source: SkillSource;
+	sourceDir: string;
+	precedence: number;
+	bundledDir?: string;
+};
+
+type PromptToonOptions = {
+	includeLocation?: boolean;
+	maxSkills?: number;
+};
+
+type CacheOptions = {
+	notOlderThan?: number;
+	forceRefresh?: boolean;
+};
+
+type SkillInstructions = {
+	slug: string;
+	body: string;
+	estimatedTokens: number;
+};
+
+type SkillEligibility = {
+	slug: string;
+	eligible: boolean;
+	reasons: Array<{
+		type: "bin" | "env" | "config";
+		missing: string;
+		message: string;
+		suggestion?: string;
+	}>;
+	checkedAt: number;
+};
+
+type SkillCatalogEntry = {
+	slug: string;
+	displayName: string;
+	summary: string | null;
+	version: string;
+	tags: Record<string, string>;
+	stats: { downloads: number; stars: number };
+	updatedAt: number;
+};
+
+type SkillSearchResult = {
+	score: number;
+	slug: string;
+	displayName: string;
+	summary: string;
+	version: string;
+	updatedAt: number;
+};
+
+type SkillDetails = {
+	skill: {
+		slug: string;
+		displayName: string;
+		summary: string;
+		tags: Record<string, string>;
+		stats: { downloads: number; stars: number; versions: number };
+		createdAt: number;
+		updatedAt: number;
+	};
+	latestVersion: { version: string; createdAt: number; changelog?: string };
+	owner?: { handle: string; displayName: string; image?: string };
+};
+
+const SKILL_SOURCE_PRECEDENCE: Record<SkillSource, number> = {
+	workspace: 5,
+	managed: 4,
+	bundled: 3,
+	plugin: 2,
+	extra: 1,
+};
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function skillMetadata(value: unknown): SkillFrontmatter["metadata"] | undefined {
+	if (!isObjectRecord(value)) return undefined;
+	const metadata: SkillFrontmatter["metadata"] = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (
+			typeof entry === "string" ||
+			typeof entry === "number" ||
+			typeof entry === "boolean" ||
+			typeof entry === "undefined" ||
+			(typeof entry === "object" && entry !== null)
+		) {
+			metadata[key] = entry;
+		}
+	}
+	return metadata;
+}
+
+function parseSkillFrontmatter(content: string): { frontmatter: SkillFrontmatter | null } {
+	const parsed = parseFrontmatterRaw(content);
+	if (!isObjectRecord(parsed)) return { frontmatter: null };
+	const frontmatter = parsed.frontmatter;
+	if (!isObjectRecord(frontmatter)) return { frontmatter: null };
+	const name = frontmatter.name;
+	const description = frontmatter.description;
+	if (typeof name !== "string" || typeof description !== "string") {
+		return { frontmatter: null };
+	}
+	const metadata = skillMetadata(frontmatter.metadata);
+	return { frontmatter: metadata ? { name, description, metadata } : { name, description } };
 }
 
 type SkillSourceDirectory = {
@@ -398,7 +518,7 @@ class DetourAgentSkillsService extends Service {
 		skillPath: string,
 	): LoadedSkillWithSource | null {
 		const content = readFileSync(skillPath, "utf8");
-		const parsed = parseFrontmatter(content);
+		const parsed = parseSkillFrontmatter(content);
 		if (!parsed.frontmatter?.name || !parsed.frontmatter.description) return null;
 		const slug = cleanSkillSlug(parsed.frontmatter.name) || cleanSkillSlug(slugFallback);
 		if (!slug) return null;
