@@ -265,4 +265,4 @@ export type {
 	SetActiveProviderBody,
 	SetEnabledBackendsBody,
 	Health,
-} from "@detour/shared";
+} from "../../shared/index";

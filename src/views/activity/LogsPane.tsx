@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ActivityLogEntry } from "@detour/shared";
+import type { ActivityLogEntry } from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 

@@ -32,7 +32,7 @@ import {
 	type SupportedPlatform,
 	type VaultEntryMeta,
 } from "@elizaos/vault";
-import type { ProviderId, ProviderInfo } from "@detour/shared";
+import type { ProviderId, ProviderInfo } from "../../shared/index";
 import { securityCliMasterKey } from "./master-key-security-cli";
 
 const PROVIDERS: ReadonlyArray<{

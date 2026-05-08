@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentCharacterConfig, AgentCharacterMessageExample } from "@detour/shared";
+import type { AgentCharacterConfig, AgentCharacterMessageExample } from "../../../shared/index";
 import type { WebClient } from "../api/client";
 
 function lines(value: string[]): string {

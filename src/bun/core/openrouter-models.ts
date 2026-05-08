@@ -1,4 +1,4 @@
-import type { OpenRouterModelBuckets, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse } from "@detour/shared";
+import type { OpenRouterModelBuckets, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse } from "../../shared/index";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=all";
 const OPENROUTER_EMBEDDING_MODELS_URL = "https://openrouter.ai/api/v1/embeddings/models";

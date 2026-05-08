@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BackendStatus, OpDiagnostic } from "@detour/shared";
+import type { BackendStatus, OpDiagnostic } from "../../../shared/index";
 import type { WebClient } from "../api/client";
 
 type InstallSpec = {

@@ -1,4 +1,4 @@
-import type { ProviderId } from "@detour/shared";
+import type { ProviderId } from "../../src/shared/index";
 import { CliClient, NoServerError, discoverServer } from "./client";
 import { runChat } from "./commands/chat";
 import {

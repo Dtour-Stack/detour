@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { OsPermissionInfo, OsPermissionStatus } from "@detour/shared";
+import type { OsPermissionInfo, OsPermissionStatus } from "../../../shared/index";
 import type { WebClient } from "../api/client";
 
 const STATUS_TONE: Record<OsPermissionStatus, string> = {

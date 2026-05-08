@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ThemeChoice } from "@detour/shared";
+import type { ThemeChoice } from "../../../shared/index";
 import type { WebClient } from "../api/client";
 
 const ACCENTS = [

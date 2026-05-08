@@ -45,7 +45,7 @@ import type {
 	WindowConfig,
 	WsClientMessage,
 	WsServerMessage,
-} from "@detour/shared";
+} from "../../../shared/index";
 
 type Listener = (msg: WsServerMessage) => void;
 

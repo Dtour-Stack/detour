@@ -1,4 +1,4 @@
-import type { ProviderId } from "@detour/shared";
+import type { ProviderId } from "../../../src/shared/index";
 import type { CliClient } from "../client";
 
 export async function listProviders(client: CliClient): Promise<void> {

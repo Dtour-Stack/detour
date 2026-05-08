@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PensieveEmbeddingMap, PensieveEmbeddingPoint } from "@detour/shared";
+import type { PensieveEmbeddingMap, PensieveEmbeddingPoint } from "../../../shared/index";
 import type { WebClient } from "../../_shared/api/client";
 
 const PALETTE = [

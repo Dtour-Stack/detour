@@ -14,7 +14,7 @@ import type {
 	ActivityLlmCall,
 	ActivityTrajectoryDetail,
 	ActivityTrajectoryStepSummary,
-} from "@detour/shared";
+} from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 
 type StageId = "input" | "should_respond" | "plan" | "actions" | "evaluators";

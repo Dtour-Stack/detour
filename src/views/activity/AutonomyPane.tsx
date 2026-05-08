@@ -4,7 +4,7 @@ import type {
 	ActivityAutonomyTask,
 	ActivityXAutonomyHandled,
 	ActivityXAutonomyUpdate,
-} from "@detour/shared";
+} from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 

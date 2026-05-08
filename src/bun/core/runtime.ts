@@ -15,7 +15,7 @@ import {
 } from "@elizaos/core";
 import sqlPlugin from "@elizaos/plugin-sql";
 import { v4 as uuidv4 } from "uuid";
-import type { ProviderId } from "@detour/shared";
+import type { ProviderId } from "../../shared/index";
 import type { VaultService } from "./vault";
 import type { AuthService } from "./auth";
 import { listAccounts, type AccountCredentialRecord } from "@elizaos/agent/auth";
@@ -25,10 +25,10 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // Until we ship a transformers.js-only local plugin, the OpenAI embeddings
 // plugin handles real embeddings when the user has an OPENAI_EMBEDDING_API_KEY;
 // otherwise embedding-stub keeps the runtime alive with zero vectors.
-import { embeddingOpenAIPlugin } from "@detour/plugin-embedding-openai";
-import { decodeCodexJwt } from "@detour/plugin-codex-chatgpt";
-import { codexHatchAction, codexPetAction, codexPetsPlugin } from "@detour/plugin-codex-pets";
-import { pensieveToolsPlugin } from "@detour/plugin-pensieve-tools";
+import { embeddingOpenAIPlugin } from "../plugins/embedding-openai/index";
+import { decodeCodexJwt } from "../plugins/codex-chatgpt/index";
+import { codexHatchAction, codexPetAction, codexPetsPlugin } from "../plugins/codex-pets/index";
+import { pensieveToolsPlugin } from "../plugins/pensieve-tools/index";
 import {
 	browserFillLoginAction,
 	browserInspectAction,
@@ -36,9 +36,9 @@ import {
 	browserScriptAction,
 	loginListAction,
 	vaultToolsPlugin,
-} from "@detour/plugin-vault-tools";
-import { cronToolsPlugin } from "@detour/plugin-cron-tools";
-import { xTweetsPlugin } from "@detour/plugin-x-tweets";
+} from "../plugins/vault-tools/index";
+import { cronToolsPlugin } from "../plugins/cron-tools/index";
+import { xTweetsPlugin } from "../plugins/x-tweets/index";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { discordContextPlugin } from "./discord-context-provider";
@@ -226,8 +226,8 @@ type RuntimeProvider = RuntimeState["provider"];
 const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugin>> = {
 	anthropic: async () => (await import("@elizaos/plugin-anthropic")).default,
 	openai: async () => (await import("@elizaos/plugin-openai")).default,
-	openrouter: async () => (await import("@detour/plugin-openrouter")).default,
-	"codex-chatgpt": async () => (await import("@detour/plugin-codex-chatgpt")).default,
+	openrouter: async () => (await import("../plugins/openrouter/index")).default,
+	"codex-chatgpt": async () => (await import("../plugins/codex-chatgpt/index")).default,
 };
 
 type ProviderAttempt = {

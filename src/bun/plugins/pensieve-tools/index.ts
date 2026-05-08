@@ -26,7 +26,7 @@ import {
 	PensieveRelationshipService,
 	PensieveTemplatesService,
 	type PensieveTemplateSummary,
-} from "@detour/core";
+} from "../../core/index";
 import {
 	type Action,
 	type ActionResult,
@@ -511,7 +511,7 @@ export const pensieveVarSetAction: Action = {
 // ── Plugin export ──────────────────────────────────────────────────────────
 
 export const pensieveToolsPlugin: Plugin = {
-	name: "@detour/plugin-pensieve-tools",
+	name: "./index",
 	description:
 		"Lets the agent read/write/search the Pensieve, link entities, create/update/render templates, and set prompt variables.",
 	providers: [pensieveChroniclerProvider],

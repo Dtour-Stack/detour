@@ -19,7 +19,7 @@ const pgliteDataDir = join(dataDir, "eliza-db");
 console.log(`[main] dataDir=${dataDir}`);
 
 console.log("[main] booting core (in-process)");
-const { startCore } = await import("@detour/core");
+const { startCore } = await import("./core/index");
 const core = await startCore({ dataDir, pgliteDataDir, port: 2138 });
 console.log(`[main] core listening on http://127.0.0.1:${core.port}`);
 

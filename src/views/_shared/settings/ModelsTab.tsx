@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse, ProviderId } from "@detour/shared";
+import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse, ProviderId } from "../../../shared/index";
 import type { WebClient } from "../api/client";
 
 const CODEX_MODELS = [

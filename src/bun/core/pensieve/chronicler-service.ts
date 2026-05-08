@@ -6,7 +6,7 @@ import type {
 	ChroniclerScreen,
 	ChroniclerStatus,
 	ChroniclerWindow,
-} from "@detour/shared";
+} from "../../../shared/index";
 import type { ConfigService } from "../config-service";
 import type { PensieveMemoryService } from "./memory-service";
 

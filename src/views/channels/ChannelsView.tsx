@@ -18,7 +18,7 @@ import type {
 	ActivityTrajectoryListResult,
 	ChannelStatus,
 	ChannelsSnapshot,
-} from "@detour/shared";
+} from "../../shared/index";
 import { WebClient, type DiscordCatchUpResult } from "../_shared/api/client";
 import { useDetourTheme } from "../_shared/useDetourTheme";
 

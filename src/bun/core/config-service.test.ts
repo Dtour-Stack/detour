@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ConfigService } from "./config-service";
 import type { VaultService } from "./vault";
-import { setPermissionConfig, getPermissionConfig } from "@detour/plugin-vault-tools";
+import { setPermissionConfig, getPermissionConfig } from "../plugins/vault-tools/index";
 
 /**
  * Tests use an in-memory fake vault that mirrors the SecretsManager / Vault

@@ -13,7 +13,7 @@ import type {
 	ActivityDbQueryResult,
 	ActivityDbTable,
 	ActivityDbTableDetail,
-} from "@detour/shared";
+} from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 
 export function DbPane({ client }: { client: WebClient }) {

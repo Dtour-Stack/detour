@@ -1,5 +1,5 @@
 import type { RPCSchema } from "electrobun/bun";
-import type { ProviderId } from "@detour/shared";
+import type { ProviderId } from "../../../shared/index";
 
 export type ChatRPC = {
 	bun: RPCSchema<{

@@ -1,4 +1,4 @@
-import type { CoreHandle } from "@detour/core";
+import type { CoreHandle } from "../core/index";
 import { ApiClient } from "./api-client";
 import { EventBus, type KernelEvents } from "./events";
 import { TrayController } from "./tray";

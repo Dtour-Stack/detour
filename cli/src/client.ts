@@ -7,7 +7,7 @@ import type {
 	ProviderInfo,
 	WsClientMessage,
 	WsServerMessage,
-} from "@detour/shared";
+} from "../../src/shared/index";
 
 const LOCK = join(homedir(), ".detour", "runtime.json");
 

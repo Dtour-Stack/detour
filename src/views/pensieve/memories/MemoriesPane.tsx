@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { PensieveMemorySummary, PensieveMemoryTree, PensieveMemoryTreeNode } from "@detour/shared";
+import type { PensieveMemorySummary, PensieveMemoryTree, PensieveMemoryTreeNode } from "../../../shared/index";
 import type { WebClient } from "../../_shared/api/client";
 import { KnowledgeUploadDropzone } from "./KnowledgeUploadDropzone";
 import { MemoryDetail } from "./MemoryDetail";

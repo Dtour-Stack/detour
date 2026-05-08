@@ -1,5 +1,5 @@
 import type { CharacterInput } from "@elizaos/core";
-import type { AgentCharacterConfig } from "@detour/shared";
+import type { AgentCharacterConfig } from "../../shared/index";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 

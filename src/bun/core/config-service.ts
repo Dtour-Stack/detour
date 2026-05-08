@@ -8,8 +8,8 @@
  * the agent's permission state survives restarts without env vars.
  */
 
-import type { AgentCharacterConfig, AgentCharacterMessageExample, AgentConfig, ChroniclerConfig, ModelConfig, WindowConfig } from "@detour/shared";
-import { setPermissionConfig, type AgentVaultMode } from "@detour/plugin-vault-tools";
+import type { AgentCharacterConfig, AgentCharacterMessageExample, AgentConfig, ChroniclerConfig, ModelConfig, WindowConfig } from "../../shared/index";
+import { setPermissionConfig, type AgentVaultMode } from "../plugins/vault-tools/index";
 import type { VaultService } from "./vault";
 import { DEFAULT_AGENT_CHARACTER } from "./agent-character";
 

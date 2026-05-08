@@ -57,7 +57,7 @@ import type {
 	BrowserCommandInput,
 	BrowserCommandResult,
 	ActivityXAutonomyUpdate,
-} from "@detour/shared";
+} from "../../../shared/index";
 
 const VERSION = "0.0.1";
 
@@ -2725,7 +2725,7 @@ async function validateXCredential(key: string, trimmed: string): Promise<Creden
 	const authToken = key === "X_AUTH_TOKEN" ? trimmed : otherValue;
 	const ct0 = key === "X_CT0" ? trimmed : otherValue;
 	try {
-		const { XClient } = await import("@detour/plugin-x-tweets");
+		const { XClient } = await import("../../plugins/x-tweets/index");
 		const client = new XClient({ cookies: { authToken, ct0 } });
 		const viewer = await client.viewer();
 		return { ok: true, info: `signed in as @${viewer.screenName}` };

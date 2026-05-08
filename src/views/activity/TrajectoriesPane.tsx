@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { ActivityTrajectoryListResult } from "@detour/shared";
+import type { ActivityTrajectoryListResult } from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 import { TrajectoryDetail } from "./TrajectoryDetail";

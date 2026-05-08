@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { ThemeChoice, UiPreferences } from "@detour/shared";
+import type { ThemeChoice, UiPreferences } from "../../shared/index";
 import { WebClient } from "./api/client";
 
 const DEFAULT_ACCENT = "#0a84ff";

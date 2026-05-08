@@ -1,5 +1,5 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { BrowserCommand, SavedLoginEntry } from "@detour/shared";
+import type { BrowserCommand, SavedLoginEntry } from "../../shared/index";
 import { WebClient } from "../_shared/api/client";
 
 type ElectrobunWebviewElement = HTMLElement & {

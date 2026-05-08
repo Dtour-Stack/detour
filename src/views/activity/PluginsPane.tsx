@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useState } from "react";
-import type { ActivityPluginDetail, ActivityPluginsSnapshot } from "@detour/shared";
+import type { ActivityPluginDetail, ActivityPluginsSnapshot } from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 

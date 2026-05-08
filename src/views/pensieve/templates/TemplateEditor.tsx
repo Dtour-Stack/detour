@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import type { PensieveTemplateDetail, PensieveTemplateRenderResult } from "@detour/shared";
+import type { PensieveTemplateDetail, PensieveTemplateRenderResult } from "../../../shared/index";
 import type { WebClient } from "../../_shared/api/client";
 
 const VAR_REGEX = /\{\{\s*([a-zA-Z_][\w-]*)\s*\}\}/g;

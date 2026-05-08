@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useState } from "react";
-import type { ActivityTasksSnapshot } from "@detour/shared";
+import type { ActivityTasksSnapshot } from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 

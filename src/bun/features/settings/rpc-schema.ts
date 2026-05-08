@@ -1,5 +1,5 @@
 import type { RPCSchema } from "electrobun/bun";
-import type { BackendStatus, ProviderId, ProviderInfo } from "@detour/shared";
+import type { BackendStatus, ProviderId, ProviderInfo } from "../../../shared/index";
 
 export type { ProviderId, ProviderInfo, BackendStatus };
 

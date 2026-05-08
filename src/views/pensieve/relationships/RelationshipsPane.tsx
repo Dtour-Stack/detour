@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PensieveEntitySummary, PensievePersonDetail } from "@detour/shared";
+import type { PensieveEntitySummary, PensievePersonDetail } from "../../../shared/index";
 import type { WebClient } from "../../_shared/api/client";
 
 export function RelationshipsPane({ client }: { client: WebClient }) {

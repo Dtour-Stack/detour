@@ -11,7 +11,7 @@
  */
 
 import type { IAgentRuntime, Task, TaskMetadata, UUID } from "@elizaos/core";
-import type { ActivityXAutonomyUpdate } from "@detour/shared";
+import type { ActivityXAutonomyUpdate } from "../../../shared/index";
 import { CONTINUOUS_IMPROVEMENT_TASK_NAME } from "../continuous-improvement-service";
 
 const AUTONOMY_SERVICE_TYPE = "AUTONOMY";

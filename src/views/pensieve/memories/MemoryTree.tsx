@@ -7,7 +7,7 @@
  */
 
 import { useState } from "react";
-import type { PensieveMemoryTree, PensieveMemoryTreeNode } from "@detour/shared";
+import type { PensieveMemoryTree, PensieveMemoryTreeNode } from "../../../shared/index";
 
 export function MemoryTree({
 	tree,

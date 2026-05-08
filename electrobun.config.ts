@@ -61,6 +61,10 @@ export default {
 			// Character knowledge bundled with the app, surfaced via
 			// resolveBundledIndex() / KnowledgeService.
 			"src/bun/core/knowledge/detour-squirrel": "knowledge/detour-squirrel",
+			// HTML shell for the single React entrypoint. Loaded by the tray as
+			// `views://main/index.html`. Sources main.js + main.css from the same
+			// directory (electrobun's view bundler emits those alongside).
+			"src/views/_shared/index.html": "views/main/index.html",
 		},
 		mac: {
 			bundleCEF: false,

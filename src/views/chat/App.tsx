@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ThemeChoice } from "@detour/shared";
+import type { ThemeChoice } from "../../shared/index";
 import { WebClient } from "../_shared/api/client";
 import { ChatView } from "./ChatView";
 import { SettingsView } from "../_shared/settings/SettingsView";

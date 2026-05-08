@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { WindowConfig } from "@detour/shared";
+import type { WindowConfig } from "../../../shared/index";
 import type { WebClient } from "../api/client";
 
 export function WindowTab({ client }: { client: WebClient }) {

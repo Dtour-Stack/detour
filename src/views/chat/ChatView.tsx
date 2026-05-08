@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ProviderId } from "@detour/shared";
+import type { ProviderId } from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 
 type Bubble = {

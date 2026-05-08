@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "@detour/shared";
+import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "../../shared/index";
 import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 

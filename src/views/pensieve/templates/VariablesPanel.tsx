@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
-import type { PensievePromptVariable, PensieveTemplateDetail } from "@detour/shared";
+import type { PensievePromptVariable, PensieveTemplateDetail } from "../../../shared/index";
 
 export function VariablesPanel({
 	detail,
