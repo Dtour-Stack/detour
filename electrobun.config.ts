@@ -42,7 +42,7 @@ export default {
 		// `views://main/index.html?view=X#X`.
 		views: {
 			main: {
-				entrypoint: "src/views/_shared/main.tsx",
+				entrypoint: "src/main/index.tsx",
 			},
 		},
 		copy: {
@@ -62,9 +62,16 @@ export default {
 			// resolveBundledIndex() / KnowledgeService.
 			"src/bun/core/knowledge/detour-squirrel": "knowledge/detour-squirrel",
 			// HTML shell for the single React entrypoint. Loaded by the tray as
-			// `views://main/index.html`. Sources main.js + main.css from the same
+			// `views://main/index.html`. Sources index.js + index.css from the same
 			// directory (electrobun's view bundler emits those alongside).
-			"src/views/_shared/index.html": "views/main/index.html",
+			"src/main/index.html": "views/main/index.html",
+			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk
+			// (Bun.Worker reads .ts source directly). Worker import of the SDK
+			// resolves via the path-preserving copy of carrot-sdk/index.ts, so
+			// the same import statement works in dev source and bundled .app.
+			// See src/bun/core/carrots/ for the host bridge.
+			"carrots/cron-tools": "carrots/cron-tools",
+			"src/bun/carrot-sdk/index.ts": "src/bun/carrot-sdk/index.ts",
 		},
 		mac: {
 			bundleCEF: false,

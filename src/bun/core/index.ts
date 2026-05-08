@@ -263,22 +263,30 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 }
 
 /**
- * Resolve the directory holding carrots.
- *
- * Carrot worker files are NOT bundled into the .app — they're spawned as
- * their own Bun Worker processes that read TS source from disk. So the
- * host needs to find them at the repo source location, even when itself
- * is running from a bundled `.app`. Resolution order:
+ * Resolve the directory holding carrots. Carrot workers are spawned as
+ * their own Bun.Worker processes that read TS source from disk, so the
+ * host needs an actual filesystem path even when running from a bundled
+ * `.app`. Resolution order:
  *
  *   1. DETOUR_CARROTS_DIR env override.
- *   2. Walk up from `process.execPath` looking for `electrobun.config.ts`
- *      (marker for the dev repo root). Bundled .app lives several levels
- *      under <repo>/build/, so this walks back to the source.
- *   3. <cwd>/carrots — works when running `bun src/bun/index.ts` directly.
+ *   2. Bundled .app: <execPath>/../Resources/app/carrots — populated by
+ *      the `carrots/cron-tools → carrots/cron-tools` copy entry in
+ *      electrobun.config.ts.
+ *   3. Dev source: walk up from `process.execPath` looking for
+ *      `electrobun.config.ts`, use that dir's `carrots/`. Useful when
+ *      running `bun src/bun/index.ts` directly without going through
+ *      `electrobun dev` — though in practice `electrobun dev` builds a
+ *      bundle and (2) catches it.
+ *   4. <cwd>/carrots — last-resort fallback.
  */
 function resolveCarrotsDir(): string | null {
 	const fromEnv = process.env.DETOUR_CARROTS_DIR?.trim();
 	if (fromEnv && existsSync(fromEnv)) return fromEnv;
+
+	if (process.execPath) {
+		const bundled = join(dirname(process.execPath), "..", "Resources", "app", "carrots");
+		if (existsSync(bundled)) return bundled;
+	}
 
 	if (process.execPath) {
 		let dir = dirname(process.execPath);

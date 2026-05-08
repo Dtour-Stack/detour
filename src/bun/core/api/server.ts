@@ -893,9 +893,18 @@ export class ApiServer {
 		// runtime, bypassing the LLM action selector. Used to validate the
 		// carrot bridge end-to-end (and any other plugin's actions) without
 		// depending on chat path / model availability.
+		//
+		// DEV-ONLY. The endpoint exposes ANY registered action by name —
+		// vault-tools, x-tweets, channel actions, etc. — to anything that
+		// can reach 127.0.0.1:2138. We keep it gated to dev .app builds
+		// (mirrors view-url.ts's dev-mode detection) so it never appears
+		// in canary/stable artifacts. Override with DETOUR_ALLOW_DEBUG_API=1.
 		async (ctx) => {
 			const { req, path, json, error } = ctx;
 			if (req.method !== "POST" || path !== "/api/debug/action") return null;
+			const isDevBundle = typeof process.execPath === "string" && process.execPath.includes("Detour-dev.app/");
+			const allowOverride = process.env.DETOUR_ALLOW_DEBUG_API === "1";
+			if (!isDevBundle && !allowOverride) return error("debug API disabled in this build", 404);
 			let body: { name?: string; options?: Record<string, unknown> } = {};
 			try { body = (await req.json()) as typeof body; } catch { return error("invalid JSON body", 400); }
 			if (!body.name) return error("missing 'name'", 400);
