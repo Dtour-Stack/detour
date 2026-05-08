@@ -19,8 +19,8 @@ import type {
 	ChannelStatus,
 	ChannelsSnapshot,
 } from "@detour/shared";
-import { WebClient, type DiscordCatchUpResult } from "../../api/client";
-import { useDetourTheme } from "../../useDetourTheme";
+import { WebClient, type DiscordCatchUpResult } from "../_shared/api/client";
+import { useDetourTheme } from "../_shared/useDetourTheme";
 
 const CHANNEL_ICONS: Record<string, string> = {
 	discord: "💬",

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentCharacterConfig, AgentCharacterMessageExample } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 function lines(value: string[]): string {
 	return value.join("\n");

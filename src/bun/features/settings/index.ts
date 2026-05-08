@@ -1,4 +1,4 @@
-import type { Feature } from "../../../bun/kernel/registry";
+import type { Feature } from "../../kernel/registry";
 
 /**
  * Settings used to be a separate window; now it lives as a drawer inside the

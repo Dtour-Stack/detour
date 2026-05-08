@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { GatewayIdentityCandidate, GatewayMessage, WebClient } from "../../../api/client";
+import type { GatewayIdentityCandidate, GatewayMessage, WebClient } from "../../_shared/api/client";
 
 const CHANNEL_COLORS: Record<string, string> = {
 	discord: "#5865F2",

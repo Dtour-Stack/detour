@@ -1,6 +1,6 @@
-import { resolveViewUrl } from "../../../bun/kernel/view-url";
-import type { Feature } from "../../../bun/kernel/registry";
-import type { WindowHandle } from "../../../bun/kernel/windows";
+import { resolveViewUrl } from "../../kernel/view-url";
+import type { Feature } from "../../kernel/registry";
+import type { WindowHandle } from "../../kernel/windows";
 import type { ChatRPC } from "./rpc-schema";
 
 const DEFAULT_WIDTH = 480;

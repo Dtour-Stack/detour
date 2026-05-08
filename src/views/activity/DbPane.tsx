@@ -14,7 +14,7 @@ import type {
 	ActivityDbTable,
 	ActivityDbTableDetail,
 } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../_shared/api/client";
 
 export function DbPane({ client }: { client: WebClient }) {
 	const [tables, setTables] = useState<ActivityDbTable[] | null>(null);

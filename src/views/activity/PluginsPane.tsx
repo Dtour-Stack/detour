@@ -10,7 +10,7 @@
 
 import { useCallback, useState } from "react";
 import type { ActivityPluginDetail, ActivityPluginsSnapshot } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 
 export function PluginsPane({ client }: { client: WebClient }) {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { WindowConfig } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 export function WindowTab({ client }: { client: WebClient }) {
 	const [cfg, setCfg] = useState<WindowConfig | null>(null);

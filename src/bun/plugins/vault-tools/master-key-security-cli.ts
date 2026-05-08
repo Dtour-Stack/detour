@@ -3,4 +3,4 @@ export {
 	securityCliMasterKey,
 	type MasterKeyResolver,
 	type SecurityCliResolverOptions,
-} from "../../core/src/master-key-security-cli";
+} from "../../core/master-key-security-cli";

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 
 const REGISTRIES: { key: keyof Pick<ActivityRuntimeSnapshot, "actions" | "providers" | "evaluators" | "services" | "plugins">; label: string }[] = [

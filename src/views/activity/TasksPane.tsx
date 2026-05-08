@@ -8,7 +8,7 @@
 
 import { useCallback, useState } from "react";
 import type { ActivityTasksSnapshot } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 
 function fmtTime(ts?: number): string {

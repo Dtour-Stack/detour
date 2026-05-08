@@ -13,7 +13,7 @@ import type {
 	PensieveTemplateDetail,
 	PensieveTemplateSummary,
 } from "@detour/shared";
-import type { WebClient } from "../../../api/client";
+import type { WebClient } from "../../_shared/api/client";
 import { TemplateEditor } from "./TemplateEditor";
 import { VariablesPanel } from "./VariablesPanel";
 

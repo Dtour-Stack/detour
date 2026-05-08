@@ -1,5 +1,5 @@
 import { Utils } from "electrobun/bun";
-import type { Feature } from "../../../bun/kernel/registry";
+import type { Feature } from "../../kernel/registry";
 
 export const notificationsFeature: Feature = {
 	id: "notifications",

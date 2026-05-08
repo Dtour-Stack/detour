@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PensieveMemoryDetail } from "@detour/shared";
-import type { WebClient } from "../../../api/client";
+import type { WebClient } from "../../_shared/api/client";
 
 export function MemoryDetail({
 	client,

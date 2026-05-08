@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { WebClient } from "../../api/client";
-import { useDetourTheme } from "../../useDetourTheme";
+import { WebClient } from "../_shared/api/client";
+import { useDetourTheme } from "../_shared/useDetourTheme";
 import { MemoriesPane } from "./memories/MemoriesPane";
 import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";

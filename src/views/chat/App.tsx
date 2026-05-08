@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThemeChoice } from "@detour/shared";
-import { WebClient } from "./api/client";
-import { ChatView } from "./features/chat/ChatView";
-import { SettingsView } from "./features/settings/SettingsView";
+import { WebClient } from "../_shared/api/client";
+import { ChatView } from "./ChatView";
+import { SettingsView } from "../_shared/settings/SettingsView";
 
 const ACCENT_SWATCHES = [
 	{ name: "Blue", value: "#0a84ff" },

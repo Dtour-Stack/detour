@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 type Entry = {
 	key: string;

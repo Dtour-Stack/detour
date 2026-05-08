@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { InboxItem, WebClient } from "../../../api/client";
+import type { InboxItem, WebClient } from "../../_shared/api/client";
 
 const STATUS_LABELS: Record<string, string> = {
 	pending: "Pending",

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 import { ProvidersTab } from "./ProvidersTab";
 import { InventoryTab } from "./InventoryTab";
 import { SavedLoginsTab } from "./SavedLoginsTab";

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ThemeChoice } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 const ACCENTS = [
 	{ name: "Blue", value: "#0a84ff" },

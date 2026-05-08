@@ -1,5 +1,5 @@
 import { GlobalShortcut } from "electrobun/bun";
-import type { Feature } from "../../../bun/kernel/registry";
+import type { Feature } from "../../kernel/registry";
 
 const TOGGLE_CHAT = "CommandOrControl+Shift+Space";
 const OPEN_SETTINGS = "CommandOrControl+Shift+S";

@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { WebClient } from "../../../api/client";
+import type { WebClient } from "../../_shared/api/client";
 
 interface UploadStatus {
 	filename: string;

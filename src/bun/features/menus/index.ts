@@ -1,5 +1,5 @@
 import { ApplicationMenu } from "electrobun/bun";
-import type { Feature } from "../../../bun/kernel/registry";
+import type { Feature } from "../../kernel/registry";
 
 export const menusFeature: Feature = {
 	id: "menus",

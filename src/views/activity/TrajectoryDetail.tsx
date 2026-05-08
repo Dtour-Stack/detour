@@ -15,7 +15,7 @@ import type {
 	ActivityTrajectoryDetail,
 	ActivityTrajectoryStepSummary,
 } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../_shared/api/client";
 
 type StageId = "input" | "should_respond" | "plan" | "actions" | "evaluators";
 type Trajectory = NonNullable<ActivityTrajectoryDetail["trajectory"]>;

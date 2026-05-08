@@ -1,6 +1,6 @@
-import type { Feature } from "../../../bun/kernel/registry";
-import type { WindowHandle } from "../../../bun/kernel/windows";
-import { resolveViewUrl } from "../../../bun/kernel/view-url";
+import type { Feature } from "../../kernel/registry";
+import type { WindowHandle } from "../../kernel/windows";
+import { resolveViewUrl } from "../../kernel/view-url";
 
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 860;

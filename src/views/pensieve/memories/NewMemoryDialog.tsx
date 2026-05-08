@@ -6,7 +6,7 @@
  */
 
 import { useState } from "react";
-import type { WebClient } from "../../../api/client";
+import type { WebClient } from "../../_shared/api/client";
 
 const TYPE_OPTIONS = [
 	{ value: "custom", label: "Custom (note)" },

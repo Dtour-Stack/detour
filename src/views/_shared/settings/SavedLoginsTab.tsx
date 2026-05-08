@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 type Login = {
 	source: "in-house" | "1password" | "bitwarden";

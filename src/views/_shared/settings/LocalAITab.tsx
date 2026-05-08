@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { LlamaServerStatus, WebClient } from "../../api/client";
+import type { LlamaServerStatus, WebClient } from "../api/client";
 
 interface DebugProbe {
 	dim: number;

@@ -1,9 +1,9 @@
-import type { Feature } from "../../../bun/kernel/registry";
-import type { WindowHandle } from "../../../bun/kernel/windows";
+import type { Feature } from "../../kernel/registry";
+import type { WindowHandle } from "../../kernel/windows";
 
 const DEFAULT_WIDTH = 1200;
 const DEFAULT_HEIGHT = 800;
-import { resolveViewUrl } from "../../../bun/kernel/view-url";
+import { resolveViewUrl } from "../../kernel/view-url";
 
 /**
  * Pensieve = activity / memories / relationships / graph browser.

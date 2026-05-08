@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentConfig, AgentVaultMode } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
 	{ id: "off", label: "Off", help: "Agent has no vault access at all." },

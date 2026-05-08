@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveEmbeddingMap, PensieveEmbeddingPoint } from "@detour/shared";
-import type { WebClient } from "../../../api/client";
+import type { WebClient } from "../../_shared/api/client";
 
 const PALETTE = [
 	"var(--accent)",

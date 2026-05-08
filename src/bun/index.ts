@@ -30,15 +30,15 @@ console.log("[main] api client connected");
 
 const { createKernel } = await import("./kernel/app");
 const { loadFeatures } = await import("./kernel/registry");
-const { chatFeature } = await import("../features/chat/bun");
-const { settingsFeature } = await import("../features/settings/bun");
-const { pensieveFeature } = await import("../features/pensieve/bun");
-const { activityFeature } = await import("../features/activity/bun");
-const { browserFeature } = await import("../features/browser/bun");
-const { channelsFeature } = await import("../features/channels/bun");
-const { shortcutsFeature } = await import("../features/shortcuts/bun");
-const { notificationsFeature } = await import("../features/notifications/bun");
-const { menusFeature } = await import("../features/menus/bun");
+const { chatFeature } = await import("./features/chat");
+const { settingsFeature } = await import("./features/settings");
+const { pensieveFeature } = await import("./features/pensieve");
+const { activityFeature } = await import("./features/activity");
+const { browserFeature } = await import("./features/browser");
+const { channelsFeature } = await import("./features/channels");
+const { shortcutsFeature } = await import("./features/shortcuts");
+const { notificationsFeature } = await import("./features/notifications");
+const { menusFeature } = await import("./features/menus");
 
 console.log("[main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core, api });

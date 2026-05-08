@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ChroniclerConfig, ChroniclerObservation, ChroniclerStatus } from "@detour/shared";
-import type { WebClient } from "../../../api/client";
+import type { WebClient } from "../../_shared/api/client";
 import { usePoller } from "../usePoller";
 
 interface ChroniclerData {

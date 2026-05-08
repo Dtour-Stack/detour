@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProviderId, ProviderInfo } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../api/client";
 
 type AccountSummary = {
 	id: string;

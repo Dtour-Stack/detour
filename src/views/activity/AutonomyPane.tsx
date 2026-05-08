@@ -5,7 +5,7 @@ import type {
 	ActivityXAutonomyHandled,
 	ActivityXAutonomyUpdate,
 } from "@detour/shared";
-import type { WebClient } from "../../api/client";
+import type { WebClient } from "../_shared/api/client";
 import { usePoller } from "./usePoller";
 
 const PRESETS = [5_000, 15_000, 30_000, 60_000, 300_000];
