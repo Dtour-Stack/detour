@@ -212,6 +212,10 @@ export class WebClient {
 		return this.json("PUT", "/api/pets/state", { state, ...(reason ? { reason } : {}) });
 	}
 
+	movePetWindow(dx: number, dy: number): void {
+		this.send({ kind: "ui:pet-window-drag", dx, dy });
+	}
+
 	detectBackends(): Promise<BackendStatus[]> {
 		return this.json("GET", "/api/backends");
 	}

@@ -32,6 +32,7 @@ export type KernelEvents = {
 	"ui:open-channels": Record<string, never>;
 	"ui:open-agents": Record<string, never>;
 	"ui:open-pet": Record<string, never>;
+	"ui:pet-window-drag": { dx: number; dy: number };
 	"ui:open-browser": Record<string, never>;
 	notify: { title: string; body?: string; subtitle?: string };
 };

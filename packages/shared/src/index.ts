@@ -225,6 +225,7 @@ export type WsClientMessage =
 	| { kind: "chat:send"; convId: string; text: string }
 	| { kind: "chat:cancel"; convId: string }
 	| { kind: "ui:close-command-palette" }
+	| { kind: "ui:pet-window-drag"; dx: number; dy: number }
 	| {
 			kind: "ui:run-chat-command";
 			command: { text: string; submit: boolean };
@@ -261,6 +262,7 @@ export type WsServerMessage =
 	| { kind: "ui:open-agents" }
 	| { kind: "ui:open-pet"; pet?: CodexPetSummary }
 	| { kind: "ui:pet-state"; state: CodexPetAnimationState; reason?: string }
+	| { kind: "ui:pet-window-drag"; dx: number; dy: number }
 	| { kind: "ui:open-browser" }
 	| { kind: "browser:command"; command: BrowserCommand }
 	| { kind: "ui:preferences-changed"; preferences: UiPreferences }

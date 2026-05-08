@@ -9,6 +9,7 @@ export const petFeature: Feature = {
 	id: "pet",
 	init(deps) {
 		let petWindow: WindowHandle | null = null;
+		let movedByUser = false;
 
 		function ensureWindow(): WindowHandle {
 			if (petWindow) return petWindow;
@@ -27,6 +28,7 @@ export const petFeature: Feature = {
 			});
 			handle.onClose(() => {
 				petWindow = null;
+				movedByUser = false;
 			});
 			petWindow = handle;
 			return handle;
@@ -34,7 +36,9 @@ export const petFeature: Feature = {
 
 		function open() {
 			const handle = ensureWindow();
-			deps.windows.positionUnderTrayBounds(handle, deps.tray.getBounds(), WIDTH, HEIGHT, 16);
+			if (!movedByUser) {
+				deps.windows.positionUnderTrayBounds(handle, deps.tray.getBounds(), WIDTH, HEIGHT, 16);
+			}
 			handle.show();
 		}
 
@@ -49,5 +53,14 @@ export const petFeature: Feature = {
 			},
 		);
 		deps.events.on("ui:open-pet", () => open());
+		deps.events.on("ui:pet-window-drag", ({ dx, dy }) => {
+			if (!petWindow) return;
+			movedByUser = true;
+			const position = petWindow.window.getPosition();
+			petWindow.window.setPosition(
+				Math.round(position.x + dx),
+				Math.round(position.y + dy),
+			);
+		});
 	},
 };

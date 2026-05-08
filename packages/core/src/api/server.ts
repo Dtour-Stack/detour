@@ -1865,16 +1865,16 @@ export class ApiServer {
 						this.send(ws, { kind: "pong" });
 						return;
 					}
-					if (msg.kind === "log:webview") {
-						this.activity.logs.captureWebviewLog({
-							level: msg.level,
-							msg: msg.msg,
+						if (msg.kind === "log:webview") {
+							this.activity.logs.captureWebviewLog({
+								level: msg.level,
+								msg: msg.msg,
 							...(msg.source ? { source: msg.source } : {}),
 							...(msg.traceId ? { traceId: msg.traceId } : {}),
 							...(msg.extras ? { extras: msg.extras } : {}),
-						});
-						return;
-					}
+							});
+							return;
+						}
 						if (msg.kind === "chat:cancel") {
 							this.activeChatTurns.get(msg.convId)?.cancel();
 							return;
@@ -1883,12 +1883,23 @@ export class ApiServer {
 							this.broadcast({ kind: "ui:close-command-palette" });
 							return;
 						}
+						if (msg.kind === "ui:pet-window-drag") {
+							if (
+								Number.isFinite(msg.dx) &&
+							Number.isFinite(msg.dy) &&
+							Math.abs(msg.dx) <= 240 &&
+							Math.abs(msg.dy) <= 240
+						) {
+							this.broadcast({ kind: "ui:pet-window-drag", dx: msg.dx, dy: msg.dy });
+							}
+							return;
+						}
 						if (msg.kind === "ui:run-chat-command") {
 							this.broadcast({ kind: "ui:run-chat-command", command: msg.command });
 							return;
 						}
-					if (msg.kind === "chat:send") {
-						const { convId, text } = msg;
+						if (msg.kind === "chat:send") {
+							const { convId, text } = msg;
 						// One trace id per chat send. Stamps every log line emitted
 						// during the eliza pipeline (via AsyncLocalStorage) and
 						// every chat:* WS message back to the webview, so the

@@ -3163,9 +3163,6 @@ html[data-surface="pet"] #root {
 	background: transparent;
 	color: var(--fg);
 	user-select: none;
-	-webkit-app-region: drag;
-	app-region: drag;
-	cursor: grab;
 }
 
 .pet-window.dragging {
@@ -3202,8 +3199,11 @@ html[data-surface="pet"] #root {
 	color: inherit;
 	cursor: pointer;
 	pointer-events: auto;
-	-webkit-app-region: no-drag;
-	app-region: no-drag;
+	touch-action: none;
+}
+
+.pet-window.dragging .pet-character-button {
+	cursor: grabbing;
 }
 
 .pet-character-button:focus-visible {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CodexPetActivity, CodexPetAnimationState, CodexPetSummary, WindowOpenTarget } from "@detour/shared";
 import { WebClient } from "../../api/client";
 
@@ -50,6 +50,13 @@ type PetMenuItemStyle = CSSProperties & {
 	"--pet-menu-index": number;
 };
 
+type PetDrag = {
+	pointerId: number;
+	lastX: number;
+	lastY: number;
+	total: number;
+};
+
 function clampText(value: string | undefined, max = 92): string {
 	if (!value) return "";
 	const single = value.replace(/\s+/g, " ").trim();
@@ -69,6 +76,7 @@ export function PetWindow() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [idleIndex, setIdleIndex] = useState(0);
 	const [error, setError] = useState<string | null>(null);
+	const dragRef = useRef<PetDrag | null>(null);
 
 	useEffect(() => {
 		document.documentElement.setAttribute("data-surface", "pet");
@@ -153,15 +161,44 @@ export function PetWindow() {
 		setPet(spawned.pet);
 		setManualState(spawned.state);
 	};
+	const startDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+		if (event.button !== 0) return;
+		event.currentTarget.setPointerCapture(event.pointerId);
+		dragRef.current = {
+			pointerId: event.pointerId,
+			lastX: event.screenX,
+			lastY: event.screenY,
+			total: 0,
+		};
+		setDragging(true);
+	};
+	const moveDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+		const drag = dragRef.current;
+		if (!drag || drag.pointerId !== event.pointerId) return;
+		const dx = event.screenX - drag.lastX;
+		const dy = event.screenY - drag.lastY;
+		if (dx === 0 && dy === 0) return;
+		drag.lastX = event.screenX;
+		drag.lastY = event.screenY;
+		drag.total += Math.hypot(dx, dy);
+		if (drag.total > 4 && menuOpen) setMenuOpen(false);
+		client.movePetWindow(dx, dy);
+	};
+	const stopDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+		const drag = dragRef.current;
+		if (!drag || drag.pointerId !== event.pointerId) return;
+		dragRef.current = null;
+		setDragging(false);
+		if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+			event.currentTarget.releasePointerCapture(event.pointerId);
+		}
+		if (drag.total <= 4) setMenuOpen((open) => !open);
+	};
 
 	return (
 		<div
-			className={`pet-window electrobun-webkit-app-region-drag${dragging ? " dragging" : ""}`}
+			className={`pet-window${dragging ? " dragging" : ""}`}
 			title={`${pet.displayName} - drag to move`}
-			onPointerDown={() => setDragging(true)}
-			onPointerUp={() => setDragging(false)}
-			onPointerCancel={() => setDragging(false)}
-			onPointerLeave={() => setDragging(false)}
 		>
 			<div className="pet-activity">
 				<div className={`pet-activity-dot ${activity?.state ?? animation.state}`} />
@@ -173,8 +210,17 @@ export function PetWindow() {
 			<div className="pet-stage">
 				<button
 					type="button"
-					className="pet-character-button electrobun-webkit-app-region-no-drag"
-					onClick={() => setMenuOpen((open) => !open)}
+					className="pet-character-button"
+					onPointerDown={startDrag}
+					onPointerMove={moveDrag}
+					onPointerUp={stopDrag}
+					onPointerCancel={stopDrag}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" || event.key === " ") {
+							event.preventDefault();
+							setMenuOpen((open) => !open);
+						}
+					}}
 					aria-expanded={menuOpen}
 					aria-label={`${pet.displayName} menu`}
 				>
