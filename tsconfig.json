@@ -1,0 +1,45 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"useDefineForClassFields": true,
+		"module": "ESNext",
+		"resolveJsonModule": true,
+		"allowJs": true,
+		"isolatedModules": true,
+		"moduleDetection": "force",
+		"noEmit": true,
+		"skipLibCheck": true,
+		"strict": true,
+		"noFallthroughCasesInSwitch": true,
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"types": ["bun-types"],
+		"baseUrl": ".",
+		"paths": {
+			"@detour/core": ["./src/bun/core/index.ts"],
+			"@detour/core/*": ["./src/bun/core/*"],
+			"@detour/shared": ["./src/shared/index.ts"],
+			"@detour/shared/*": ["./src/shared/*"],
+			"@detour/plugin-codex-chatgpt": ["./src/bun/plugins/codex-chatgpt/index.ts"],
+			"@detour/plugin-codex-pets": ["./src/bun/plugins/codex-pets/index.ts"],
+			"@detour/plugin-cron-tools": ["./src/bun/plugins/cron-tools/index.ts"],
+			"@detour/plugin-embedding-openai": ["./src/bun/plugins/embedding-openai/index.ts"],
+			"@detour/plugin-openrouter": ["./src/bun/plugins/openrouter/index.ts"],
+			"@detour/plugin-pensieve-tools": ["./src/bun/plugins/pensieve-tools/index.ts"],
+			"@detour/plugin-vault-tools": ["./src/bun/plugins/vault-tools/index.ts"],
+			"@detour/plugin-vault-tools/*": ["./src/bun/plugins/vault-tools/*"],
+			"@detour/plugin-x-tweets": ["./src/bun/plugins/x-tweets/index.ts"],
+			"@detour/cli": ["./cli/src/index.ts"]
+		}
+	},
+	"include": ["src", "cli/src", "electrobun.config.ts"],
+	"exclude": [
+		"node_modules",
+		"build",
+		"packages",
+		"eliza",
+		"docs",
+		"src/views/_shared/public"
+	]
+}

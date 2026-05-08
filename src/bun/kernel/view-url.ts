@@ -1,7 +1,7 @@
 /**
  * Pick the right URL for a tray window's React view.
  *
- *   - In a packaged .app: `views://web/index.html#<route>` — Electrobun
+ *   - In a packaged .app: `views://main/index.html#<route>` — Electrobun
  *     resolves `views://` against `Resources/app/views/`, where
  *     electrobun.config.ts copies the production Vite build (web/dist).
  *   - In dev: Vite dev server (default http://localhost:5180), with a hash
@@ -38,8 +38,8 @@ function resolveBundledIndex(): string | null {
 	const candidates = [
 		// Bundled .app — process.execPath is .../Contents/MacOS/bun (or launcher)
 		// and the Resources tree is at .../Contents/Resources/app/views/web/.
-		process.execPath ? join(dirname(process.execPath), "..", "Resources", "app", "views", "web", "index.html") : null,
-		process.execPath ? join(dirname(process.execPath), "views", "web", "index.html") : null,
+		process.execPath ? join(dirname(process.execPath), "..", "Resources", "app", "views", "main", "index.html") : null,
+		process.execPath ? join(dirname(process.execPath), "views", "main", "index.html") : null,
 	].filter((p): p is string => typeof p === "string" && p.length > 0);
 	for (const candidate of candidates) {
 		if (existsSync(candidate)) {
@@ -62,7 +62,7 @@ export function resolveViewUrl(hash?: string): string {
 	const fragment = hash ? `#${hash}` : "";
 	const bundled = resolveBundledIndex();
 	if (bundled) {
-		return `views://web/index.html${fragment}`;
+		return `views://main/index.html${fragment}`;
 	}
 	return `${DEV_URL}/${fragment}`;
 }
