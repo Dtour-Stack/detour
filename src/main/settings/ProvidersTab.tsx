@@ -135,33 +135,52 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	}
 
 	async function startOAuth(provider: "anthropic-subscription" | "openai-codex", label: string) {
-		const handle = await client.startAuthFlow(provider, label);
-		setActiveFlow({
-			sessionId: handle.sessionId,
-			provider,
-			authUrl: handle.authUrl,
-			needsCodeSubmission: handle.needsCodeSubmission,
-			status: "pending",
-		});
-		setCode("");
-		await client.openExternal(handle.authUrl);
+		try {
+			setError(null);
+			const handle = await client.startAuthFlow(provider, label);
+			setActiveFlow({
+				sessionId: handle.sessionId,
+				provider,
+				authUrl: handle.authUrl,
+				needsCodeSubmission: handle.needsCodeSubmission,
+				status: "pending",
+			});
+			setCode("");
+			try { await client.openExternal(handle.authUrl); }
+			catch (err) { setError(`Couldn't open browser: ${err instanceof Error ? err.message : String(err)}. Authorize at: ${handle.authUrl}`); }
+		} catch (err) {
+			setError(`OAuth start failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	async function submitCode() {
 		if (!activeFlow) return;
-		await client.submitFlowCode(activeFlow.sessionId, code.trim());
+		try {
+			setError(null);
+			await client.submitFlowCode(activeFlow.sessionId, code.trim());
+		} catch (err) {
+			setError(`Submit code failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	async function cancelFlow() {
 		if (!activeFlow) return;
-		await client.cancelFlow(activeFlow.sessionId);
-		setActiveFlow(null);
+		try {
+			await client.cancelFlow(activeFlow.sessionId);
+			setActiveFlow(null);
+		} catch (err) {
+			setError(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	async function removeAccount(provider: string, accountId: string) {
 		if (!confirm(`Remove ${provider} account?`)) return;
-		await client.deleteAccount(provider, accountId);
-		await refresh();
+		try {
+			await client.deleteAccount(provider, accountId);
+			await refresh();
+		} catch (err) {
+			setError(`Remove failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	return (
