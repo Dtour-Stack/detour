@@ -1,4 +1,4 @@
-export type ProviderId = "anthropic" | "openai" | "openrouter";
+export type ProviderId = "anthropic" | "openai" | "openrouter" | "elizacloud";
 
 export type ProviderInfo = {
 	id: ProviderId;

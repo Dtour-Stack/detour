@@ -88,6 +88,19 @@ export type AuthRequests = {
 			needsCodeSubmission: false;
 		};
 	};
+	// ElizaOS Cloud CLI-session device flow — POST to create a session,
+	// open browser to /auth/cli-login?session=<id>, poll until the
+	// returned status flips to "success" with an apiKey. Stores under
+	// ELIZAOS_CLOUD_API_KEY. Pattern mirrors the milady-ai/milady client
+	// implementation at apps/homepage/src/lib/auth.ts.
+	authStartElizaCloudFlow: {
+		params: { label?: string };
+		response: {
+			sessionId: string;
+			authUrl: string;
+			needsCodeSubmission: false;
+		};
+	};
 };
 
 export type AuthMessages = {

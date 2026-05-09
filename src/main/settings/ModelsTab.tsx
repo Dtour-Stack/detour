@@ -20,6 +20,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 	openai: "OpenAI",
 	anthropic: "Anthropic",
 	openrouter: "OpenRouter",
+	elizacloud: "ElizaOS Cloud",
 };
 
 const selectStyle = {

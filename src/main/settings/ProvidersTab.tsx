@@ -26,12 +26,12 @@ type ActiveFlow = {
 type VendorSpec = {
 	id: ProviderId;
 	label: string;
-	// `openrouter-pkce` is a synthetic provider id used only for the
-	// OAuth UI dispatch — OpenRouter doesn't have an OAuth account record
-	// (the flow returns a raw API key, stored under OPENROUTER_API_KEY in
-	// the vault). The button below routes it through
-	// `authStartOpenRouterFlow` instead of the standard `authStartFlow`.
-	oauthProvider?: "anthropic-subscription" | "openai-codex" | "openrouter-pkce";
+	// `openrouter-pkce` and `elizacloud-cli` are synthetic provider ids
+	// used only for the OAuth UI dispatch — they don't have OAuth account
+	// records (the flows return raw API keys stored under their respective
+	// envKey in the vault). The button routes them through bespoke RPC
+	// methods rather than the standard `authStartFlow`.
+	oauthProvider?: "anthropic-subscription" | "openai-codex" | "openrouter-pkce" | "elizacloud-cli";
 	oauthLabel?: string;
 };
 
@@ -53,6 +53,12 @@ const VENDORS: VendorSpec[] = [
 		label: "OpenRouter",
 		oauthProvider: "openrouter-pkce",
 		oauthLabel: "Connect via OpenRouter (one-click PKCE)",
+	},
+	{
+		id: "elizacloud",
+		label: "ElizaOS Cloud",
+		oauthProvider: "elizacloud-cli",
+		oauthLabel: "Connect via ElizaOS Cloud",
 	},
 ];
 
@@ -214,6 +220,25 @@ export function ProvidersTab() {
 		}
 	}
 
+	async function startElizaCloudFlow(label: string) {
+		try {
+			setError(null);
+			const handle = await rpc.request.authStartElizaCloudFlow({ label });
+			setActiveFlow({
+				sessionId: handle.sessionId,
+				provider: "elizacloud",
+				authUrl: handle.authUrl,
+				needsCodeSubmission: false,
+				status: "pending",
+			});
+			setCode("");
+			try { await rpc.request.externalOpen({ url: handle.authUrl }); }
+			catch (err) { setError(`Couldn't open browser: ${err instanceof Error ? err.message : String(err)}. Authorize at: ${handle.authUrl}`); }
+		} catch (err) {
+			setError(`ElizaOS Cloud sign-in failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
 	async function submitCode() {
 		if (!activeFlow) return;
 		try {
@@ -308,14 +333,18 @@ export function ProvidersTab() {
 				// reflects it). There's no per-account record like the OAuth
 				// providers, so `oauthAccounts` is always empty for it.
 				const isOpenRouterPkce = vendor.oauthProvider === "openrouter-pkce";
+				const isElizaCloudCli = vendor.oauthProvider === "elizacloud-cli";
+				const isSyntheticFlow = isOpenRouterPkce || isElizaCloudCli;
 				const oauthAccounts =
-					vendor.oauthProvider && !isOpenRouterPkce
+					vendor.oauthProvider && !isSyntheticFlow
 						? accounts[vendor.oauthProvider] ?? []
 						: [];
 				const usableOAuth = oauthAccounts.find((a) => !a.expired);
 				const startVendorOAuth = isOpenRouterPkce
 					? () => startOpenRouterOAuth("Default")
-					: () => startOAuth(vendor.oauthProvider as "anthropic-subscription" | "openai-codex", "Default");
+					: isElizaCloudCli
+						? () => startElizaCloudFlow("Default")
+						: () => startOAuth(vendor.oauthProvider as "anthropic-subscription" | "openai-codex", "Default");
 				return (
 					<div className="card" key={vendor.id}>
 						<div className="provider-header">
@@ -333,7 +362,11 @@ export function ProvidersTab() {
 						{vendor.oauthProvider && (
 							<div style={{ marginBottom: 12 }}>
 								<div style={{ fontSize: 11, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-									{isOpenRouterPkce ? "OAuth (one-click)" : "Subscription (OAuth)"}
+									{isOpenRouterPkce
+									? "OAuth (one-click)"
+									: isElizaCloudCli
+										? "Cloud sign-in"
+										: "Subscription (OAuth)"}
 								</div>
 								{oauthAccounts.length === 0 ? (
 									<button

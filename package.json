@@ -20,6 +20,7 @@
     "@elizaos/core": "workspace:*",
     "@elizaos/plugin-anthropic": "workspace:*",
     "@elizaos/plugin-discord": "workspace:*",
+    "@elizaos/plugin-elizacloud": "workspace:*",
     "@elizaos/plugin-github": "workspace:*",
     "@elizaos/plugin-imessage": "workspace:*",
     "@elizaos/plugin-openai": "workspace:*",

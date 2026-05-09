@@ -43,6 +43,7 @@ const PROVIDERS: ReadonlyArray<{
 	{ id: "anthropic", label: "Anthropic (Claude)", envKey: "ANTHROPIC_API_KEY" },
 	{ id: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
 	{ id: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY" },
+	{ id: "elizacloud", label: "ElizaOS Cloud", envKey: "ELIZAOS_CLOUD_API_KEY" },
 ];
 
 const ACTIVE_PROVIDER_KEY = "trayapp.activeProvider";

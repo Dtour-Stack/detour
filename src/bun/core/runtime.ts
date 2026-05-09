@@ -226,6 +226,7 @@ const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugi
 	anthropic: async () => (await import("@elizaos/plugin-anthropic")).default,
 	openai: async () => (await import("@elizaos/plugin-openai")).default,
 	openrouter: async () => (await import("../plugins/openrouter/index")).default,
+	elizacloud: async () => (await import("@elizaos/plugin-elizacloud")).default,
 	"codex-chatgpt": async () => (await import("../plugins/codex-chatgpt/index")).default,
 };
 
@@ -942,12 +943,16 @@ export class RuntimeService {
 			openai: await this.providerApiKey("openai", "OPENAI_API_KEY"),
 			anthropic: await this.providerApiKey("anthropic", "ANTHROPIC_API_KEY"),
 			openrouter: await this.providerApiKey("openrouter", "OPENROUTER_API_KEY"),
+			elizacloud: await this.providerApiKey("elizacloud", "ELIZAOS_CLOUD_API_KEY"),
 		};
 		for (const provider of order) {
 			if (provider === "openai") attempts.push(...await this.openAiAttempts(directKeys.openai));
 			if (provider === "anthropic") attempts.push(...this.anthropicAttempts(directKeys.anthropic));
 			if (provider === "openrouter" && directKeys.openrouter) {
 				attempts.push(this.apiAttempt("openrouter", "openrouter", "OPENROUTER_API_KEY", directKeys.openrouter, "OpenRouter API key"));
+			}
+			if (provider === "elizacloud" && directKeys.elizacloud) {
+				attempts.push(this.apiAttempt("elizacloud", "elizacloud", "ELIZAOS_CLOUD_API_KEY", directKeys.elizacloud, "ElizaOS Cloud API key"));
 			}
 		}
 		return attempts;

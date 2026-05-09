@@ -20,6 +20,18 @@ const ANTHROPIC_CLIENT_ID = atob("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZj
 const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
 
+// ElizaOS Cloud CLI-session device flow —
+// pattern: POST /api/auth/cli-session with sessionId → user opens
+// browser to /auth/cli-login?session=<id> → poll
+// /api/auth/cli-session/<id> until { status: "success", apiKey }.
+// Mirrors milady-ai/milady's `cloudLogin` /  `cloudLoginPoll` helpers
+// (apps/homepage/src/lib/auth.ts) so an ElizaCloud account that works
+// with one client works with the other.
+const ELIZACLOUD_BASE = "https://www.elizacloud.ai";
+const ELIZACLOUD_SESSION_CREATE = `${ELIZACLOUD_BASE}/api/auth/cli-session`;
+const ELIZACLOUD_FLOW_POLL_INTERVAL_MS = 2_000;
+const ELIZACLOUD_FLOW_TIMEOUT_MS = 5 * 60_000;
+
 // OpenRouter PKCE flow constants —
 // https://openrouter.ai/docs/guides/overview/auth/oauth
 //
@@ -355,6 +367,115 @@ export function authRequests(deps: RpcDeps) {
 				} finally {
 					try { deps.portless.removeRoute(fqHostname); } catch { /* ignore */ }
 					try { server.close(); } catch { /* ignore */ }
+				}
+			})();
+
+			return { sessionId, authUrl, needsCodeSubmission: false };
+		},
+
+		/**
+		 * ElizaOS Cloud CLI-session device flow. Mirrors the
+		 * milady-ai/milady pattern (apps/homepage/src/lib/auth.ts):
+		 *   1. Generate a sessionId, POST it to
+		 *      https://www.elizacloud.ai/api/auth/cli-session.
+		 *   2. Open browser to /auth/cli-login?session=<id>; user signs in.
+		 *   3. Poll /api/auth/cli-session/<id> every 2s until status
+		 *      flips to "success" with an apiKey, or until 5min timeout.
+		 *   4. Store apiKey under ELIZAOS_CLOUD_API_KEY in the vault.
+		 *
+		 * Same broadcast/UI pattern as the OpenRouter handler — RPC
+		 * returns immediately with the auth URL; status updates flow
+		 * through `authFlowUpdate`.
+		 */
+		authStartElizaCloudFlow: async (_params: {
+			label?: string;
+		}): Promise<{
+			sessionId: string;
+			authUrl: string;
+			needsCodeSubmission: false;
+		}> => {
+			const sessionId = crypto.randomUUID();
+			const startedAt = Date.now();
+			const authUrl = `${ELIZACLOUD_BASE}/auth/cli-login?session=${encodeURIComponent(sessionId)}`;
+
+			// Create the session server-side BEFORE returning. If this
+			// fails (network down, ElizaCloud 5xx), surface synchronously
+			// so the UI shows an error instead of a stuck "pending" card.
+			const createRes = await fetch(ELIZACLOUD_SESSION_CREATE, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ sessionId }),
+				redirect: "manual",
+			});
+			if (!createRes.ok) {
+				const errText = await createRes.text().catch(() => createRes.statusText);
+				throw new Error(`ElizaCloud session create failed: ${createRes.status} ${errText}`);
+			}
+
+			const initialState = {
+				sessionId,
+				providerId: "elizacloud" as const,
+				status: "pending" as const,
+				authUrl,
+				needsCodeSubmission: false,
+				startedAt,
+			};
+			deps.broadcaster.broadcast("authFlowUpdate", { sessionId, state: initialState });
+
+			// Poll in the background until success / timeout / error. The
+			// API returns { status: string, apiKey?: string } — `apiKey`
+			// only lands once the user completes the browser sign-in.
+			void (async () => {
+				const deadline = Date.now() + ELIZACLOUD_FLOW_TIMEOUT_MS;
+				try {
+					while (Date.now() < deadline) {
+						const pollRes = await fetch(
+							`${ELIZACLOUD_SESSION_CREATE}/${encodeURIComponent(sessionId)}`,
+							{ redirect: "manual" },
+						);
+						if (pollRes.status === 404) {
+							throw new Error("ElizaCloud session expired");
+						}
+						if (pollRes.ok) {
+							const data = (await pollRes.json()) as { status?: string; apiKey?: string };
+							if (data.apiKey) {
+								await deps.vault.setProviderKey("elizacloud", data.apiKey);
+								console.log(`[auth] Imported ElizaCloud API key via CLI-session flow (sessionId=${sessionId})`);
+								deps.broadcaster.broadcast("authFlowUpdate", {
+									sessionId,
+									state: { ...initialState, status: "success", endedAt: Date.now() },
+								});
+								// Background rebuild — same rationale as
+								// OpenRouter / Anthropic handlers.
+								deps.runtime
+									.rebuild()
+									.then(() => {
+										deps.broadcaster.broadcast("providerChanged", {
+											activeProvider: deps.runtime.getCurrentProvider(),
+										});
+									})
+									.catch((err) =>
+										console.error("[runtime] rebuild after ElizaCloud import failed:", err),
+									);
+								return;
+							}
+							// status pending — keep polling.
+						}
+						await new Promise((resolve) => setTimeout(resolve, ELIZACLOUD_FLOW_POLL_INTERVAL_MS));
+					}
+					throw new Error(`ElizaCloud sign-in timed out after ${ELIZACLOUD_FLOW_TIMEOUT_MS / 1000}s`);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const isTimeout = message.includes("timed out") || message.includes("expired");
+					deps.broadcaster.broadcast("authFlowUpdate", {
+						sessionId,
+						state: {
+							...initialState,
+							status: isTimeout ? "timeout" : "error",
+							error: message,
+							endedAt: Date.now(),
+						},
+					});
 				}
 			})();
 
