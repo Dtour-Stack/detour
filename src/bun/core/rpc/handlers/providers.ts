@@ -24,10 +24,24 @@ export function providersRequests(deps: RpcDeps) {
 	return {
 		providersList: async (_params: Record<string, never>): Promise<ProviderInfo[]> => {
 			const list = await deps.vault.listProviders();
-			// Mirror server.ts:983-991 — ensure the runtime has built once so
-			// `getCurrentProvider()` reflects the active state, then enrich
-			// each entry with `active`.
-			await deps.runtime.getOrBuild().catch(() => {});
+			// Don't await runtime build here — the build can take many
+			// seconds (eliza plugin init + PGlite migrations + channel
+			// boot), and blocking providersList means the Providers tab
+			// hangs on every refresh while the runtime catches up. Read
+			// current state synchronously; if the runtime hasn't built
+			// yet, kick off a background build whose `providerChanged`
+			// broadcast on success will trigger another refresh from
+			// the view.
+			if (!deps.runtime.peek()) {
+				void deps.runtime
+					.getOrBuild()
+					.then(() => {
+						deps.broadcaster.broadcast("providerChanged", {
+							activeProvider: deps.runtime.getCurrentProvider(),
+						});
+					})
+					.catch(() => {});
+			}
 			const runtimeProvider = deps.runtime.getCurrentProvider();
 			return list.map((p) => ({
 				...p,
@@ -38,7 +52,19 @@ export function providersRequests(deps: RpcDeps) {
 		providersSetKey: async (params: { id: ProviderId; key: string }): Promise<{ ok: true }> => {
 			await deps.vault.setProviderKey(params.id, params.key);
 			const current = deps.runtime.getCurrentProvider();
-			if (!current || current === params.id) await deps.runtime.rebuild();
+			// Background rebuild — broadcast the new active state once it
+			// finishes. Same rationale as providersList: the rebuild can
+			// take many seconds, and we don't want the save click to hang.
+			if (!current || current === params.id) {
+				void deps.runtime
+					.rebuild()
+					.then(() => {
+						deps.broadcaster.broadcast("providerChanged", {
+							activeProvider: deps.runtime.getCurrentProvider(),
+						});
+					})
+					.catch((err) => console.error("[runtime] rebuild after setProviderKey failed:", err));
+			}
 			deps.broadcaster.broadcast("providerChanged", {
 				activeProvider: await deps.vault.getActiveProvider(),
 			});
@@ -48,7 +74,14 @@ export function providersRequests(deps: RpcDeps) {
 		providersRemoveKey: async (params: { id: ProviderId }): Promise<{ ok: true }> => {
 			await deps.vault.removeProviderKey(params.id);
 			if (deps.runtime.getCurrentProvider() === params.id) {
-				await deps.runtime.rebuild();
+				void deps.runtime
+					.rebuild()
+					.then(() => {
+						deps.broadcaster.broadcast("providerChanged", {
+							activeProvider: deps.runtime.getCurrentProvider(),
+						});
+					})
+					.catch((err) => console.error("[runtime] rebuild after removeProviderKey failed:", err));
 			}
 			deps.broadcaster.broadcast("providerChanged", {
 				activeProvider: await deps.vault.getActiveProvider(),
@@ -58,7 +91,14 @@ export function providersRequests(deps: RpcDeps) {
 
 		providersSetActive: async (params: { id: ProviderId }): Promise<{ ok: true }> => {
 			await deps.vault.setActiveProvider(params.id);
-			await deps.runtime.rebuild();
+			void deps.runtime
+				.rebuild()
+				.then(() => {
+					deps.broadcaster.broadcast("providerChanged", {
+						activeProvider: deps.runtime.getCurrentProvider(),
+					});
+				})
+				.catch((err) => console.error("[runtime] rebuild after setActiveProvider failed:", err));
 			deps.broadcaster.broadcast("providerChanged", {
 				activeProvider: params.id,
 			});

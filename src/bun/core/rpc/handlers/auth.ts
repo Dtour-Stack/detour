@@ -23,18 +23,21 @@ const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callbac
 // OpenRouter PKCE flow constants —
 // https://openrouter.ai/docs/guides/overview/auth/oauth
 //
-// OpenRouter's docs recommend `http://localhost:3000` as the callback
-// for local-first apps; ephemeral 127.0.0.1 ports trip a 409 "Failed to
-// create or update app while creating auth code" on their side because
-// each unique callback URL gets registered as a distinct "app" tied to
-// the user's account. Sticking to a stable localhost:3000 callback
-// matches what their docs explicitly bless. If 3000 is in use, we fall
-// through to a small set of stable alternatives before erroring.
+// OpenRouter dedupes callback URLs as "apps" on their side, so a
+// stable callback URL across restarts is required (ephemeral ports
+// trigger HTTP 409 "Failed to create or update app while creating
+// auth code"). We route the callback through Detour's portless
+// reverse proxy: bind an ephemeral local listener, register
+// `detour-auth.localhost` → that port via portless, and use
+// `http://detour-auth.localhost:<portlessProxyPort>/openrouter-callback`
+// as the callback URL. The hostname is stable across runs even when
+// the underlying ephemeral port rotates, so OpenRouter sees the same
+// "app" each time. Portless naturally falls under their localhost
+// allowlist (it resolves through 127.0.0.1 via the .localhost TLD).
 const OPENROUTER_AUTH_URL = "https://openrouter.ai/auth";
 const OPENROUTER_TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
 const OPENROUTER_CALLBACK_PATH = "/openrouter-callback";
-// 4848 is reserved for Detour's portless reverse proxy — skip.
-const OPENROUTER_PREFERRED_PORTS = [3000, 5454, 6464, 7373];
+const OPENROUTER_CALLBACK_HOSTNAME = "detour-auth";
 const OPENROUTER_FLOW_TIMEOUT_MS = 5 * 60_000;
 
 const OPENROUTER_SUCCESS_HTML = `<!doctype html>
@@ -238,44 +241,40 @@ export function authRequests(deps: RpcDeps) {
 				}
 			});
 
-			let boundPort: number | null = null;
-			let lastErr: Error | null = null;
-			for (const candidate of OPENROUTER_PREFERRED_PORTS) {
-				try {
-					await new Promise<void>((resolve, reject) => {
-						const onError = (err: Error) => {
-							server.removeListener("error", onError);
-							reject(err);
-						};
-						server.once("error", onError);
-						server.listen(candidate, "127.0.0.1", () => {
-							server.removeListener("error", onError);
-							resolve();
-						});
-					});
-					boundPort = candidate;
-					break;
-				} catch (err) {
-					lastErr = err instanceof Error ? err : new Error(String(err));
-					// EADDRINUSE → try next port. Anything else → bubble.
-					if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") {
-						server.close();
-						throw lastErr;
-					}
-				}
+			// Bind an ephemeral local listener — port can rotate freely; the
+			// portless route below gives OpenRouter a stable hostname.
+			await new Promise<void>((resolve, reject) => {
+				const onError = (err: Error) => {
+					server.removeListener("error", onError);
+					reject(err);
+				};
+				server.once("error", onError);
+				server.listen(0, "127.0.0.1", () => {
+					server.removeListener("error", onError);
+					resolve();
+				});
+			});
+			const address = server.address();
+			if (!address || typeof address === "string") {
+				server.close();
+				throw new Error("Failed to bind OpenRouter callback listener");
 			}
-			if (boundPort === null) {
+			const localPort = address.port;
+
+			// Register the route through Detour's portless proxy so the
+			// callback URL the user sees is stable (`detour-auth.localhost:4848`)
+			// across restarts — OpenRouter's "app" registry keys off the
+			// callback URL so this avoids the 409 dedupe trap.
+			const portlessSnap = deps.portless.snapshot();
+			if (!portlessSnap.running) {
 				server.close();
 				throw new Error(
-					`Couldn't bind any of the recommended OpenRouter callback ports (${OPENROUTER_PREFERRED_PORTS.join(", ")}). Last error: ${lastErr?.message ?? "unknown"}`,
+					"Portless proxy isn't running — required for OpenRouter callback routing. Check the Portless tab.",
 				);
 			}
-			// Use `localhost` (not `127.0.0.1`) in the callback URL — OpenRouter's
-			// docs explicitly recommend `http://localhost:3000` for local-first
-			// apps, and they normalize the host as part of their "app" registry
-			// dedupe. Going through 127.0.0.1 produces a 409 "Failed to create
-			// or update app".
-			const callbackUrl = `http://localhost:${boundPort}${OPENROUTER_CALLBACK_PATH}`;
+			const fqHostname = `${OPENROUTER_CALLBACK_HOSTNAME}.${portlessSnap.tld}`;
+			deps.portless.addRoute(fqHostname, localPort, { force: true });
+			const callbackUrl = `http://${fqHostname}:${portlessSnap.proxyPort}${OPENROUTER_CALLBACK_PATH}`;
 			const authUrl =
 				`${OPENROUTER_AUTH_URL}?callback_url=${encodeURIComponent(callbackUrl)}` +
 				`&code_challenge=${encodeURIComponent(challenge)}` +
@@ -319,16 +318,27 @@ export function authRequests(deps: RpcDeps) {
 					if (!data.key) throw new Error("OpenRouter response missing 'key'");
 					await deps.vault.setProviderKey("openrouter", data.key);
 					console.log(`[auth] Imported OpenRouter API key via PKCE flow (sessionId=${sessionId})`);
-					await deps.runtime.rebuild().catch((err) =>
-						console.error("[runtime] rebuild after OpenRouter import failed:", err),
-					);
+					// Broadcast SUCCESS before kicking off the rebuild — the UI
+					// only needs the key in the vault to flip "Configured", and
+					// runtime.rebuild() can take many seconds (eliza plugin init,
+					// PGlite migrations, channel plugin boot). Keeping the
+					// success broadcast on the critical path made the
+					// activeFlow card hang on "pending" until the runtime
+					// finished, which looked like a stuck state.
 					deps.broadcaster.broadcast("authFlowUpdate", {
 						sessionId,
 						state: { ...initialState, status: "success", endedAt: Date.now() },
 					});
-					deps.broadcaster.broadcast("providerChanged", {
-						activeProvider: deps.runtime.getCurrentProvider(),
-					});
+					deps.runtime
+						.rebuild()
+						.then(() => {
+							deps.broadcaster.broadcast("providerChanged", {
+								activeProvider: deps.runtime.getCurrentProvider(),
+							});
+						})
+						.catch((err) =>
+							console.error("[runtime] rebuild after OpenRouter import failed:", err),
+						);
 				} catch (err) {
 					clearTimeout(timeoutTimer);
 					const message = err instanceof Error ? err.message : String(err);
@@ -343,6 +353,7 @@ export function authRequests(deps: RpcDeps) {
 						},
 					});
 				} finally {
+					try { deps.portless.removeRoute(fqHostname); } catch { /* ignore */ }
 					try { server.close(); } catch { /* ignore */ }
 				}
 			})();
