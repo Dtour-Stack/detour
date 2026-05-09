@@ -38,6 +38,8 @@ import {
 	vaultToolsPlugin,
 } from "../plugins/vault-tools/index";
 import { xTweetsPlugin } from "../plugins/x-tweets/index";
+import { codingToolsPlugin } from "@elizaos/plugin-coding-tools";
+import { cloudAppsPlugin } from "../plugins/cloud-apps/index";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { discordContextPlugin } from "./discord-context-provider";
@@ -797,6 +799,22 @@ export class RuntimeService {
 		settings.TELEGRAM_AUTO_REPLY ??= "true";
 		settings.DISCORD_AUTO_REPLY ??= "true";
 		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "false";
+		// Per-agent sandbox dir for plugin-coding-tools. The plugin itself
+		// is blocklist-based (denies user-private + system paths) and
+		// otherwise allows any absolute path; the agent reads this setting
+		// to know where to default new files when the user says "save it"
+		// or "make a new project". Pre-created at boot in
+		// src/bun/core/index.ts so the path always exists.
+		settings.DETOUR_AGENT_SANDBOX ??= join(homedir(), ".detour", "agent-sandbox");
+		// Forward to env so plugin actions that read process.env
+		// (e.g. CLOUD_LIST_APPS / CLOUD_CREATE_APP) pick up the same value.
+		process.env.DETOUR_AGENT_SANDBOX = settings.DETOUR_AGENT_SANDBOX;
+		// Forward the stored ElizaCloud key so plugin-cloud-apps actions
+		// can authenticate without an extra round-trip through the vault
+		// service. setProviderKey already mirrors into process.env when
+		// the key is set/rotated.
+		const cloudKey = process.env.ELIZAOS_CLOUD_API_KEY;
+		if (cloudKey) settings.ELIZAOS_CLOUD_API_KEY = cloudKey;
 		this.loadEmbeddingSettings(settings);
 		await this.loadXSettings(settings);
 		return settings;
@@ -842,11 +860,13 @@ export class RuntimeService {
 			embeddingStubPlugin,
 			vaultToolsPlugin,
 			pensieveToolsPlugin,
+			codingToolsPlugin,
 			codexPetsPlugin,
 			discordMentionAliasPlugin,
 			discordContextPlugin,
 			dpeFallbackPlugin,
 			xTweetsPlugin,
+			cloudAppsPlugin,
 			// cronToolsPlugin: replaced by `cron-tools` carrot loaded via the
 			// carrot bridge — see core/index.ts and src/bun/core/carrots/. The
 			// carrot worker.ts mirrors the static plugin's actions, but runs

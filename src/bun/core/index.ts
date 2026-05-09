@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ActivityService } from "./activity";
 import { ApiServer } from "./api/server";
@@ -84,6 +84,17 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// Must run BEFORE VaultService construction since createVault() reads
 	// ELIZA_STATE_DIR at call time.
 	process.env.ELIZA_STATE_DIR = opts.dataDir;
+	// Per-agent sandbox dir for plugin-coding-tools. Pre-created here so
+	// the path exists before any FILE/WRITE action fires; surfaced to the
+	// agent via runtime settings (DETOUR_AGENT_SANDBOX) in
+	// runtime.ts:buildRuntimeSettings.
+	try {
+		const agentSandboxDir = join(opts.dataDir, "agent-sandbox");
+		mkdirSync(agentSandboxDir, { recursive: true });
+		process.env.DETOUR_AGENT_SANDBOX = agentSandboxDir;
+	} catch (err) {
+		console.warn("[core] failed to create agent sandbox dir:", err instanceof Error ? err.message : err);
+	}
 
 	const vault = new VaultService();
 	const auth = new AuthService();
