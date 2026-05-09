@@ -1,10 +1,15 @@
 import type {
+	ElizaCloudModelsResponse,
 	OpenRouterModelsResponse,
 	ProviderId,
 	ProviderInfo,
 } from "../../../../shared/index";
+import type { CloudCreditsBalance } from "../../../../shared/rpc/providers";
 import { fetchOpenRouterModels } from "../../openrouter-models";
+import { fetchElizaCloudModels } from "../../elizacloud-models";
 import type { RpcDeps } from "../types";
+
+const ELIZACLOUD_BALANCE_URL = "https://www.elizacloud.ai/api/v1/credits/balance";
 
 /**
  * Providers RPC handlers — replaces the HTTP routes:
@@ -113,6 +118,49 @@ export function providersRequests(deps: RpcDeps) {
 				? await manager.get("OPENROUTER_API_KEY")
 				: undefined;
 			return fetchOpenRouterModels({ apiKey });
+		},
+
+		providersElizaCloudModels: async (
+			_params: Record<string, never>,
+		): Promise<ElizaCloudModelsResponse> => {
+			const manager = await deps.vault.manager();
+			const apiKey = (await manager.has("ELIZAOS_CLOUD_API_KEY"))
+				? await manager.get("ELIZAOS_CLOUD_API_KEY")
+				: undefined;
+			return fetchElizaCloudModels({ apiKey });
+		},
+
+		cloudCreditsBalance: async (
+			_params: Record<string, never>,
+		): Promise<CloudCreditsBalance> => {
+			const manager = await deps.vault.manager();
+			if (!(await manager.has("ELIZAOS_CLOUD_API_KEY"))) {
+				return { balance: 0, signedIn: false };
+			}
+			const apiKey = await manager.get("ELIZAOS_CLOUD_API_KEY");
+			try {
+				const res = await fetch(ELIZACLOUD_BALANCE_URL, {
+					headers: { Authorization: `Bearer ${apiKey}` },
+				});
+				if (res.status === 401 || res.status === 403) {
+					return { balance: 0, signedIn: false, error: "API key was rejected (401/403). Reconnect via Cloud sign-in." };
+				}
+				if (!res.ok) {
+					const body = await res.text().catch(() => res.statusText);
+					return { balance: 0, signedIn: true, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
+				}
+				const data = (await res.json()) as { balance?: number };
+				return {
+					balance: typeof data.balance === "number" ? data.balance : 0,
+					signedIn: true,
+				};
+			} catch (err) {
+				return {
+					balance: 0,
+					signedIn: true,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
 		},
 	};
 }

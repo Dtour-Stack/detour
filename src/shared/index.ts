@@ -88,6 +88,24 @@ export type OpenRouterModelsResponse = {
 	error?: string;
 };
 
+// ElizaOS Cloud /models catalog — flat list grouped by upstream
+// provider (openai/anthropic/google/etc) inferred from the model id.
+// Bucketing matches @elizaos/plugin-elizacloud's CloudModelRegistryService
+// so a model picked here routes to the same upstream the agent uses.
+export type ElizaCloudModelInfo = {
+	id: string;
+	provider: string;
+	ownedBy: string;
+	createdAt: number;
+};
+
+export type ElizaCloudModelsResponse = {
+	fetchedAt: number;
+	models: ElizaCloudModelInfo[];
+	byProvider: Record<string, ElizaCloudModelInfo[]>;
+	error?: string;
+};
+
 // --- generic vault keys ---
 // `descriptor` mirrors @elizaos/vault's VaultDescriptor — duplicated as a
 // loose record so non-Bun clients don't need the @elizaos/vault dep just

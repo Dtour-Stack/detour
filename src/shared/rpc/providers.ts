@@ -1,8 +1,15 @@
 import type {
+	ElizaCloudModelsResponse,
 	OpenRouterModelsResponse,
 	ProviderId,
 	ProviderInfo,
 } from "../index";
+
+export type CloudCreditsBalance = {
+	balance: number;
+	error?: string;
+	signedIn: boolean;
+};
 
 export type ProvidersRequests = {
 	providersList: {
@@ -24,6 +31,22 @@ export type ProvidersRequests = {
 	providersOpenRouterModels: {
 		params: Record<string, never>;
 		response: OpenRouterModelsResponse;
+	};
+	// ElizaCloud model catalog — same fetch-and-bucket pattern as
+	// OpenRouter, hits https://www.elizacloud.ai/api/v1/models with the
+	// stored API key. Returns a flat list grouped by inferred upstream
+	// provider for the Cloud tab's model pickers.
+	providersElizaCloudModels: {
+		params: Record<string, never>;
+		response: ElizaCloudModelsResponse;
+	};
+	// ElizaCloud credit balance — surfaces the user's remaining cloud
+	// credits in the Cloud tab. Wraps GET /api/v1/credits/balance with
+	// the stored API key. Soft-fails on 401/403/network errors so the
+	// tab never crashes — `signedIn` and `error` carry the diagnostic.
+	cloudCreditsBalance: {
+		params: Record<string, never>;
+		response: CloudCreditsBalance;
 	};
 };
 

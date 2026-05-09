@@ -10,11 +10,13 @@ import { ModelsTab } from "./ModelsTab";
 import { WindowTab } from "./WindowTab";
 import { OsPermissionsTab } from "./OsPermissionsTab";
 import { LocalAITab } from "./LocalAITab";
+import { ElizaCloudTab } from "./ElizaCloudTab";
 
-type Section = "configuration" | "vault";
+type Section = "configuration" | "vault" | "cloud";
 
 type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "character" | "agent" | "os" | "window";
 type VaultTab = "inventory" | "saved-logins" | "backends";
+type CloudTab = "elizacloud";
 
 const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "appearance", label: "Appearance" },
@@ -31,6 +33,10 @@ const VAULT_TABS: { id: VaultTab; label: string }[] = [
 	{ id: "inventory", label: "Inventory" },
 	{ id: "saved-logins", label: "Saved Logins" },
 	{ id: "backends", label: "Backends" },
+];
+
+const CLOUD_TABS: { id: CloudTab; label: string }[] = [
+	{ id: "elizacloud", label: "ElizaOS Cloud" },
 ];
 
 function ConfigContent({ tab }: { tab: ConfigTab }) {
@@ -66,6 +72,15 @@ function VaultContent({ tab }: { tab: VaultTab }) {
 			return <BackendsTab />;
 		default:
 			return <div className="empty">Unknown vault tab.</div>;
+	}
+}
+
+function CloudContent({ tab }: { tab: CloudTab }) {
+	switch (tab) {
+		case "elizacloud":
+			return <ElizaCloudTab />;
+		default:
+			return <div className="empty">Unknown cloud tab.</div>;
 	}
 }
 
@@ -111,6 +126,7 @@ export function SettingsView() {
 	const [section, setSection] = useState<Section>("configuration");
 	const [configTab, setConfigTab] = useState<ConfigTab>("appearance");
 	const [vaultTab, setVaultTab] = useState<VaultTab>("inventory");
+	const [cloudTab, setCloudTab] = useState<CloudTab>("elizacloud");
 
 	return (
 		<div className="settings-shell">
@@ -131,10 +147,22 @@ export function SettingsView() {
 					onTab={setVaultTab}
 					tabs={VAULT_TABS}
 				/>
+				<SidebarSection
+					active={section === "cloud"}
+					current={cloudTab}
+					label="Cloud"
+					onSelect={() => setSection("cloud")}
+					onTab={setCloudTab}
+					tabs={CLOUD_TABS}
+				/>
 			</aside>
 
 			<main className="settings-main">
-				{section === "configuration" ? <ConfigContent tab={configTab} /> : <VaultContent tab={vaultTab} />}
+				{section === "configuration"
+					? <ConfigContent tab={configTab} />
+					: section === "vault"
+						? <VaultContent tab={vaultTab} />
+						: <CloudContent tab={cloudTab} />}
 			</main>
 		</div>
 	);
