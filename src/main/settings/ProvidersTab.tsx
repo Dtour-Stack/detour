@@ -49,6 +49,21 @@ const VENDORS: VendorSpec[] = [
 	},
 ];
 
+/**
+ * The Anthropic OAuth callback page surfaces a literal `<code>#<state>`
+ * blob (no `sk-` prefix; both halves are URL-safe base64). Detect it so
+ * `saveKey` can short-circuit the API-key path and run the token
+ * exchange directly.
+ */
+function isAnthropicOAuthCodeBlob(input: string): boolean {
+	if (input.startsWith("sk-")) return false;
+	const splits = input.split("#");
+	if (splits.length !== 2) return false;
+	const [code, state] = splits;
+	if (!code || !state) return false;
+	return /^[A-Za-z0-9_-]+$/.test(code) && /^[A-Za-z0-9_-]+$/.test(state);
+}
+
 function fmtExpires(expires?: number) {
 	if (!expires) return "";
 	const ms = expires - Date.now();
@@ -115,7 +130,17 @@ export function ProvidersTab() {
 		if (!k) return;
 		try {
 			setError(null);
-			await rpc.request.providersSetKey({ id, key: k });
+			// Anthropic's OAuth redirect surfaces a `<code>#<state>` blob
+			// on the callback page. Users routinely paste it into the API
+			// key box by mistake — auto-detect and route through the OAuth
+			// token-exchange instead. Anthropic's flow encodes the PKCE
+			// verifier in the state half, so we can do the exchange with
+			// just the pasted blob (no originating-session state required).
+			if (id === "anthropic" && isAnthropicOAuthCodeBlob(k)) {
+				await rpc.request.authImportAnthropicCode({ code: k });
+			} else {
+				await rpc.request.providersSetKey({ id, key: k });
+			}
 			setDrafts((d) => ({ ...d, [id]: "" }));
 			await refresh();
 		} catch (err) {
@@ -317,12 +342,18 @@ export function ProvidersTab() {
 						{/* Direct API key section */}
 						<div>
 							<div style={{ fontSize: 11, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-								API key
+								{vendor.id === "anthropic" ? "API key or OAuth code" : "API key"}
 							</div>
 							<div className="row">
 								<input
 									type="password"
-									placeholder={provider?.hasKey ? "•••••••• stored" : "Paste API key"}
+									placeholder={
+										provider?.hasKey
+											? "•••••••• stored"
+											: vendor.id === "anthropic"
+												? "Paste API key (sk-ant-…) or OAuth code#state"
+												: "Paste API key"
+									}
 									value={drafts[vendor.id] ?? ""}
 									onChange={(e) => setDrafts((d) => ({ ...d, [vendor.id]: e.target.value }))}
 								/>

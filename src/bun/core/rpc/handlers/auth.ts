@@ -6,7 +6,32 @@ import {
 	type AccountCredentialProvider,
 	type SubscriptionProvider,
 } from "../../auth";
+import { saveAccount, type AccountCredentialRecord } from "@elizaos/agent/auth";
 import type { RpcDeps } from "../types";
+
+// Anthropic OAuth constants — duplicated from
+// eliza/packages/agent/src/auth/vendor/pi-oauth/anthropic-login.ts so the
+// post-hoc token exchange below doesn't have to spin up a full flow
+// (which would generate a fresh PKCE verifier that mismatches the one
+// embedded in the user's pasted blob's `state` half).
+const ANTHROPIC_CLIENT_ID = atob("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
+const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
+const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
+
+/**
+ * Detect whether a user-pasted string is an Anthropic OAuth callback
+ * `code#state` blob. The redirect page surfaces literally
+ * `<base64url-code>#<base64url-state>` — both halves are URL-safe base64
+ * and contain no `sk-` API-key prefix.
+ */
+export function looksLikeAnthropicOAuthCode(input: string): boolean {
+	if (input.startsWith("sk-")) return false;
+	const splits = input.split("#");
+	if (splits.length !== 2) return false;
+	const [code, state] = splits;
+	if (!code || !state) return false;
+	return /^[A-Za-z0-9_-]+$/.test(code) && /^[A-Za-z0-9_-]+$/.test(state);
+}
 
 /**
  * Auth RPC handlers — replaces the HTTP routes:
@@ -120,6 +145,83 @@ export function authRequests(deps: RpcDeps) {
 		}): Promise<{ ok: boolean }> => {
 			const ok = deps.auth.submitFlowCode(params.sessionId, params.code);
 			return { ok };
+		},
+
+		/**
+		 * Direct token-exchange for an Anthropic OAuth `code#state` blob.
+		 * Used when the user pastes the redirect-page output anywhere
+		 * (e.g. the API key field) instead of the dedicated flow box.
+		 * Bypasses the session-bound `submitFlowCode` path — Anthropic's
+		 * flow uses the PKCE verifier as the `state` parameter, so the
+		 * exchange can be done with just the pasted blob.
+		 */
+		authImportAnthropicCode: async (params: {
+			code: string;
+			label?: string;
+		}): Promise<{ ok: true; accountId: string }> => {
+			const blob = params.code.trim();
+			const splits = blob.split("#");
+			if (splits.length !== 2) {
+				throw new Error("Expected '<code>#<state>' format");
+			}
+			const [code, state] = splits;
+			if (!code || !state) {
+				throw new Error("Both halves of '<code>#<state>' are required");
+			}
+			const tokenResponse = await fetch(ANTHROPIC_TOKEN_URL, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					grant_type: "authorization_code",
+					client_id: ANTHROPIC_CLIENT_ID,
+					code,
+					state,
+					redirect_uri: ANTHROPIC_REDIRECT_URI,
+					// Anthropic stores the PKCE verifier in the `state` round-trip,
+					// so the verifier IS the state half of the blob.
+					code_verifier: state,
+				}),
+			});
+			if (!tokenResponse.ok) {
+				const errText = await tokenResponse.text().catch(() => tokenResponse.statusText);
+				throw new Error(`Anthropic token exchange failed: ${errText}`);
+			}
+			const tokenData = (await tokenResponse.json()) as {
+				refresh_token: string;
+				access_token: string;
+				expires_in: number;
+			};
+			const expiresAt = Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000;
+			const accountId = crypto.randomUUID();
+			const now = Date.now();
+			const record: AccountCredentialRecord = {
+				id: accountId,
+				providerId: "anthropic-subscription",
+				label: params.label?.trim() || "Default",
+				source: "oauth",
+				credentials: {
+					access: tokenData.access_token,
+					refresh: tokenData.refresh_token,
+					expires: expiresAt,
+				},
+				createdAt: now,
+				updatedAt: now,
+			};
+			saveAccount(record);
+			console.log(`[auth] Imported anthropic-subscription account "${accountId}" via direct code exchange`);
+			// Rebuild + broadcast so the new OAuth account immediately
+			// becomes the active provider for chat.
+			deps.runtime
+				.rebuild()
+				.then(() => {
+					deps.broadcaster.broadcast("providerChanged", {
+						activeProvider: deps.runtime.getCurrentProvider(),
+					});
+				})
+				.catch((err) =>
+					console.error("[runtime] rebuild after Anthropic code import failed:", err),
+				);
+			return { ok: true, accountId };
 		},
 	};
 }

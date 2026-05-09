@@ -63,6 +63,18 @@ export type AuthRequests = {
 		params: { sessionId: string; code: string };
 		response: { ok: boolean };
 	};
+	// Direct token-exchange import for the Anthropic OAuth `code#state`
+	// blob (the redirect-page output of the Pro/Max OAuth flow). Lets a
+	// user paste the blob anywhere — the API key field, a fresh app
+	// install, or after a stale flow timed out — without needing the
+	// originating session's PKCE state. Anthropic's flow encodes the
+	// PKCE verifier directly into the `state` half, so the server-side
+	// token exchange can be done from the blob alone (see
+	// eliza/packages/agent/src/auth/vendor/pi-oauth/anthropic-login.ts:58).
+	authImportAnthropicCode: {
+		params: { code: string; label?: string };
+		response: { ok: true; accountId: string };
+	};
 };
 
 export type AuthMessages = {
