@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AgentCharacterConfig, AgentCharacterMessageExample } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 function lines(value: string[]): string {
 	return value.join("\n");
@@ -188,7 +189,7 @@ export function AgentCharacterTab({ client }: { client: WebClient }) {
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 
 	useEffect(() => {
-		void client.getAgentCharacter().then((character) => {
+		void rpc.request.configGetCharacter({}).then((character) => {
 			setCfg(character);
 			setDraft(draftFromCharacter(character));
 		});
@@ -201,7 +202,7 @@ export function AgentCharacterTab({ client }: { client: WebClient }) {
 		try {
 			const messageExamples = parseExamples(draft.messageExamples ?? "[]");
 			const payload = draftCharacter(cfg, draft, messageExamples);
-			await client.setAgentCharacter(payload);
+			await rpc.request.configSetCharacter(payload);
 			setCfg(payload);
 			setSavedAt(Date.now());
 		} catch (err) {

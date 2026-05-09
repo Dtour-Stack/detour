@@ -1,14 +1,10 @@
 import { useEffect, useState } from "react";
 import type { WebClient } from "../api/client";
+import type { RevealedLogin, SavedLoginsListResult } from "../../shared/index";
+import { rpc } from "../rpc";
+import { onBackendChanged } from "../rpc-listeners/vault";
 
-type Login = {
-	source: "in-house" | "1password" | "bitwarden";
-	identifier: string;
-	domain?: string;
-	username?: string;
-	title?: string;
-	updatedAt?: number;
-};
+type Login = SavedLoginsListResult["logins"][number];
 
 type Result = {
 	logins: Login[];
@@ -19,25 +15,36 @@ function displayLabel(l: Login): string {
 	return l.title || l.domain || l.identifier;
 }
 
+type RevealError = { error: string };
+type RevealOk = RevealedLogin & { error?: undefined };
+type RevealResult = RevealOk | RevealError;
+
+function isError(r: RevealResult): r is RevealError {
+	return typeof (r as RevealError).error === "string";
+}
+
 function displayUsername(l: Login): string {
 	if (!l.username) return "—";
 	return l.username;
 }
 
-export function SavedLoginsTab({ client }: { client: WebClient }) {
+export function SavedLoginsTab({ client: _client }: { client: WebClient }) {
 	const [data, setData] = useState<Result | null>(null);
-	const [revealing, setRevealing] = useState<Record<string, any>>({});
+	const [revealing, setRevealing] = useState<Record<string, RevealResult>>({});
 	const [filter, setFilter] = useState("");
 
 	async function refresh() {
-		const r = await client.listSavedLogins();
-		setData(r as Result);
+		const r = await rpc.request.savedLoginsList({});
+		setData({
+			logins: [...r.logins],
+			failures: [...r.failures],
+		});
 	}
 
 	useEffect(() => {
 		void refresh();
-		const off = client.on((m) => {
-			if (m.kind === "backend:changed") void refresh();
+		const off = onBackendChanged(() => {
+			void refresh();
 		});
 		return off;
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -46,7 +53,10 @@ export function SavedLoginsTab({ client }: { client: WebClient }) {
 	async function reveal(login: Login) {
 		const k = `${login.source}:${login.identifier}`;
 		try {
-			const r = await client.revealSavedLogin(login.source, login.identifier);
+			const r = await rpc.request.savedLoginsReveal({
+				source: login.source,
+				identifier: login.identifier,
+			});
 			setRevealing((s) => ({ ...s, [k]: r }));
 		} catch (err) {
 			setRevealing((s) => ({
@@ -135,7 +145,7 @@ export function SavedLoginsTab({ client }: { client: WebClient }) {
 									<span className="badge muted">{displayUsername(l)}</span>
 								</div>
 								{r ? (
-									r.error ? (
+									isError(r) ? (
 										<div>
 											<div className="banner error" style={{ marginBottom: 8 }}>
 												{r.error}
@@ -175,7 +185,7 @@ export function SavedLoginsTab({ client }: { client: WebClient }) {
 														<button
 															type="button"
 															className="btn secondary small"
-															onClick={() => copy(r.totp)}
+															onClick={() => copy(r.totp ?? "")}
 														>
 															Copy TOTP
 														</button>
@@ -187,7 +197,7 @@ export function SavedLoginsTab({ client }: { client: WebClient }) {
 													<button
 														type="button"
 														className="btn secondary small"
-														onClick={() => copy(r.totp)}
+														onClick={() => copy(r.totp ?? "")}
 													>
 														Copy TOTP
 													</button>

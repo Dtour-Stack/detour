@@ -15,8 +15,9 @@ import type {
 	ActivityDbTableDetail,
 } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
-export function DbPane({ client }: { client: WebClient }) {
+export function DbPane({ client: _client }: { client: WebClient }) {
 	const [tables, setTables] = useState<ActivityDbTable[] | null>(null);
 	const [available, setAvailable] = useState<boolean>(true);
 	const [error, setError] = useState<string | null>(null);
@@ -30,14 +31,14 @@ export function DbPane({ client }: { client: WebClient }) {
 
 	const loadTables = useCallback(async () => {
 		try {
-			const res = await client.activityDbTables();
+			const res = await rpc.request.activityDbTablesList({});
 			setAvailable(res.available);
 			setTables(res.tables);
 			setError(null);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [client]);
+	}, []);
 
 	useEffect(() => { void loadTables(); }, [loadTables]);
 
@@ -45,24 +46,24 @@ export function DbPane({ client }: { client: WebClient }) {
 		if (!selected) { setDetail(null); return; }
 		let cancelled = false;
 		setDetail(null);
-		client.activityDbTable(selected.schema, selected.name)
+		rpc.request.activityDbTableGet({ schema: selected.schema, name: selected.name })
 			.then((d) => { if (!cancelled) setDetail(d); })
 			.catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
 		return () => { cancelled = true; };
-	}, [client, selected]);
+	}, [selected]);
 
 	const runQuery = useCallback(async () => {
 		setQueryRunning(true);
 		setQueryError(null);
 		try {
-			const r = await client.activityDbQuery(sqlText);
+			const r = await rpc.request.activityDbQuery({ sql: sqlText });
 			setQueryResult(r);
 		} catch (e) {
 			setQueryError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setQueryRunning(false);
 		}
-	}, [client, sqlText]);
+	}, [sqlText]);
 
 	if (error) return <div className="banner error">{error}</div>;
 	if (!available) {

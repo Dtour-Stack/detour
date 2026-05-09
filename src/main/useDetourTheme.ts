@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import type { ThemeChoice, UiPreferences } from "../shared/index";
 import { WebClient } from "./api/client";
+import { rpc } from "./rpc";
+import { onUiPreferencesChanged } from "./rpc-listeners/config";
 
 const DEFAULT_ACCENT = "#0a84ff";
 
@@ -29,15 +31,14 @@ function applyPrefs(p: Partial<UiPreferences>): void {
  * popup — Pensieve/Activity/Channels keep the default colors because each
  * window owns its own DOM.
  *
- * Server broadcasts `ui:preferences-changed` whenever any window saves new
- * preferences via PUT /api/ui/preferences, so other open windows update
- * live without needing a reload.
+ * Server broadcasts `uiPreferencesChanged` (typed RPC) whenever any window
+ * saves new preferences, so other open windows update live without a reload.
  */
-export function useDetourTheme(client: WebClient): void {
+export function useDetourTheme(_client: WebClient): void {
 	useEffect(() => {
 		let cancelled = false;
-		client
-			.getUiPreferences()
+		rpc.request
+			.uiGetPreferences({})
 			.then((p) => {
 				if (cancelled) return;
 				applyPrefs(p);
@@ -45,12 +46,10 @@ export function useDetourTheme(client: WebClient): void {
 			.catch(() => {
 				/* keep default colors */
 			});
-		const off = client.on((m) => {
-			if (m.kind === "ui:preferences-changed") applyPrefs(m.preferences);
-		});
+		const off = onUiPreferencesChanged((payload) => applyPrefs(payload.preferences));
 		return () => {
 			cancelled = true;
 			off();
 		};
-	}, [client]);
+	}, [_client]);
 }

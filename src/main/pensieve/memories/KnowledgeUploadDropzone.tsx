@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 interface UploadStatus {
 	filename: string;
@@ -50,7 +51,7 @@ export function KnowledgeUploadDropzone({
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
-		client.pensieveKnowledgeStatus()
+		rpc.request.pensieveKnowledgeStatus({})
 			.then((s) => setAvailable(s.available))
 			.catch(() => setAvailable(false));
 	}, [client]);
@@ -65,7 +66,7 @@ export function KnowledgeUploadDropzone({
 			setItems((s) => [...s, { filename: file.name, state: "uploading" }]);
 			try {
 				const content = await readAsText(file);
-				const result = await client.pensieveIngestKnowledge({
+				const result = await rpc.request.pensieveKnowledgeIngest({
 					filename: file.name,
 					contentType: file.type || "text/plain",
 					content,

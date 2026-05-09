@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActivityLogEntry } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -12,10 +13,13 @@ const LEVEL_COLORS: Record<string, string> = {
 	fatal: "var(--error)",
 };
 
-export function LogsPane({ client }: { client: WebClient }) {
+export function LogsPane({ client: _client }: { client: WebClient }) {
 	const [level, setLevel] = useState("info");
 	const [q, setQ] = useState("");
-	const fetcher = useCallback(() => client.activityLogs({ level, q: q || undefined, limit: 500 }), [client, level, q]);
+	const fetcher = useCallback(
+		() => rpc.request.activityLogs({ level, ...(q ? { q } : {}), limit: 500 }),
+		[level, q],
+	);
 	const { data, error } = usePoller<ActivityLogEntry[]>(fetcher, 5000, [level, q]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [autoScroll, setAutoScroll] = useState(true);

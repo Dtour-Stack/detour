@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PensieveMemorySummary, PensieveMemoryTree, PensieveMemoryTreeNode } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 import { KnowledgeUploadDropzone } from "./KnowledgeUploadDropzone";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryTree } from "./MemoryTree";
@@ -44,7 +45,7 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 
 	const loadTree = useCallback(async () => {
 		try {
-			const t = await client.pensieveMemoryTree();
+			const t = await rpc.request.pensieveMemoryTree({});
 			setTree(scopeTree(t, config.rootPath));
 		} catch (e) {
 			console.warn(`[${scope}] tree load failed`, e);
@@ -59,12 +60,12 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 			const effectivePath = pathFilter && pathFilter !== "/" ? pathFilter : config.rootPath;
 			const usePathFilter = effectivePath !== "/";
 			if (searchMode === "vector" && q.trim().length > 0) {
-				rows = await client.pensieveSearchMemories(q, 100);
+				rows = await rpc.request.pensieveMemoriesSearch({ text: q, limit: 100 });
 				if (usePathFilter) {
 					rows = rows.filter((m) => m.path === effectivePath || m.path.startsWith(`${effectivePath}/`));
 				}
 			} else {
-				rows = await client.pensieveMemories({
+				rows = await rpc.request.pensieveMemoriesList({
 					limit: 200,
 					...(type ? { type } : {}),
 					...(q ? { q } : {}),

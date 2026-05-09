@@ -9,6 +9,7 @@
 import { useCallback, useState } from "react";
 import type { ActivityTasksSnapshot } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
 function fmtTime(ts?: number): string {
@@ -38,10 +39,10 @@ function fmtInterval(ms?: number): string {
 	return `${Math.round(ms / 86_400_000)}d`;
 }
 
-export function TasksPane({ client }: { client: WebClient }) {
+export function TasksPane({ client: _client }: { client: WebClient }) {
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const fetcher = useCallback(() => client.activityTasks(), [client]);
+	const fetcher = useCallback(() => rpc.request.activityTasksList({}), []);
 	const { data, error, refresh } = usePoller<ActivityTasksSnapshot>(fetcher, 5000);
 
 	const act = useCallback(
@@ -49,12 +50,12 @@ export function TasksPane({ client }: { client: WebClient }) {
 			setBusyId(id);
 			setActionError(null);
 			try {
-				if (op === "run") await client.activityRunTask(id);
-				else if (op === "pause") await client.activityPauseTask(id);
-				else if (op === "resume") await client.activityResumeTask(id);
+				if (op === "run") await rpc.request.activityTaskRun({ id });
+				else if (op === "pause") await rpc.request.activityTaskPause({ id });
+				else if (op === "resume") await rpc.request.activityTaskResume({ id });
 				else if (op === "delete") {
 					if (!confirm("Delete this task? This cannot be undone.")) return;
-					await client.activityDeleteTask(id);
+					await rpc.request.activityTaskDelete({ id });
 				}
 				refresh();
 			} catch (e) {
@@ -63,7 +64,7 @@ export function TasksPane({ client }: { client: WebClient }) {
 				setBusyId(null);
 			}
 		},
-		[client, refresh],
+		[refresh],
 	);
 
 	if (error) return <div className="banner error">{error}</div>;

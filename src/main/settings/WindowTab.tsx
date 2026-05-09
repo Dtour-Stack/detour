@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WindowConfig } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 export function WindowTab({ client }: { client: WebClient }) {
 	const [cfg, setCfg] = useState<WindowConfig | null>(null);
@@ -8,18 +9,18 @@ export function WindowTab({ client }: { client: WebClient }) {
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 
 	useEffect(() => {
-		void client.getWindowConfig().then(setCfg);
+		void rpc.request.configGetWindow({}).then(setCfg);
 	}, [client]);
 
 	async function save(next: WindowConfig) {
 		setSaving(true);
 		try {
-			await client.setWindowConfig(next);
+			await rpc.request.configSetWindow(next);
 			setCfg(next);
 			setSavedAt(Date.now());
 			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);
 			if (next.width !== cfg?.width || next.height !== cfg?.height) {
-				await client.resizeWindow(next.width, next.height).catch(() => {});
+				await rpc.request.windowResize({ width: next.width, height: next.height }).catch(() => {});
 			}
 		} finally {
 			setSaving(false);

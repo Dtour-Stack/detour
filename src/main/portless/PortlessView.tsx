@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { WebClient, type PortlessSnapshot } from "../api/client";
+import type { PortlessSnapshot } from "../../shared/index";
+import { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
 const client = new WebClient();
@@ -13,7 +15,7 @@ export function PortlessView() {
 
 	const refresh = useCallback(async () => {
 		try {
-			const s = await client.portlessStatus();
+			const s = await rpc.request.portlessStatus({});
 			setSnapshot(s);
 			setError(null);
 		} catch (err) {
@@ -34,7 +36,7 @@ export function PortlessView() {
 			return;
 		}
 		try {
-			await client.portlessAddRoute(hostname, portNum, true);
+			await rpc.request.portlessAddRoute({ hostname, port: portNum, force: true });
 			setHostname("");
 			setPort("3000");
 			await refresh();
@@ -44,12 +46,12 @@ export function PortlessView() {
 	}, [hostname, port, refresh]);
 
 	const onRemove = useCallback(async (h: string) => {
-		try { await client.portlessRemoveRoute(h); await refresh(); }
+		try { await rpc.request.portlessRemoveRoute({ hostname: h }); await refresh(); }
 		catch (err) { setError(err instanceof Error ? err.message : String(err)); }
 	}, [refresh]);
 
 	const onPrune = useCallback(async () => {
-		try { await client.portlessPrune(); await refresh(); }
+		try { await rpc.request.portlessPrune({}); await refresh(); }
 		catch (err) { setError(err instanceof Error ? err.message : String(err)); }
 	}, [refresh]);
 

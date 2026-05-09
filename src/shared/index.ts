@@ -22,6 +22,23 @@ export type BackendStatus = {
 
 export type Health = { ok: true; version: string };
 
+// --- portless (local-dev reverse proxy) ---
+export type PortlessRoute = {
+	hostname: string;
+	port: number;
+	pid: number;
+	tailscaleUrl?: string;
+	tailscaleHttpsPort?: number;
+	tailscaleFunnel?: boolean;
+};
+
+export type PortlessSnapshot = {
+	running: boolean;
+	proxyPort: number;
+	tld: string;
+	routes: PortlessRoute[];
+};
+
 export type SetProviderKeyBody = { key: string };
 export type SetActiveProviderBody = { id: ProviderId };
 export type SetEnabledBackendsBody = { enabled: string[] };
@@ -72,17 +89,52 @@ export type OpenRouterModelsResponse = {
 };
 
 // --- generic vault keys ---
+// `descriptor` mirrors @elizaos/vault's VaultDescriptor — duplicated as a
+// loose record so non-Bun clients don't need the @elizaos/vault dep just
+// to know the wire shape.
 export type VaultKeyDescriptor = {
-	key: string;
-	sensitive: boolean;
-	source: "in-house" | "1password" | "bitwarden" | "protonpass";
-	updatedAt?: string;
-	createdAt?: string;
+	readonly key: string;
+	readonly source: "file" | "keychain-encrypted" | "1password" | "protonpass";
+	readonly sensitive: boolean;
+	readonly lastModified: number;
+};
+
+export type VaultStats = {
+	readonly total: number;
+	readonly sensitive: number;
+	readonly nonSensitive: number;
+	readonly references: number;
+};
+
+// Returned by `/api/vault/inventory` — the raw vault entry plus the
+// server-side enrichment (category derived heuristically when no
+// `_meta.<key>` exists, plus inferred provider id and a stored meta blob).
+export type VaultInventoryItem = {
+	readonly key: string;
+	readonly category: string;
+	readonly label?: string;
+	readonly providerId?: string;
+	readonly hasProfiles?: boolean;
+	readonly activeProfile?: string;
+	readonly profiles?: ReadonlyArray<{ id: string; label: string; createdAt?: number }>;
+	readonly lastModified?: number;
+	readonly lastUsed?: number;
+	readonly kind?: "secret" | "value" | "reference";
+	readonly provider: string | null;
+	readonly meta: Record<string, unknown> | null;
+};
+
+export type VaultKeyResult = {
+	readonly key: string;
+	readonly descriptor: VaultKeyDescriptor | null;
+	readonly value?: string;
 };
 
 export type SetVaultKeyBody = { value: string; sensitive?: boolean };
 
 // --- saved logins (1Password etc.) ---
+// Structural subset used by the browser-autofill UI — kept around even
+// though the canonical wire shape is `SavedLoginListEntry` below.
 export type SavedLoginEntry = {
 	source: "in-house" | "1password" | "bitwarden";
 	identifier: string;
@@ -91,17 +143,74 @@ export type SavedLoginEntry = {
 	label?: string;
 };
 
-export type SavedLoginListResult = {
-	entries: SavedLoginEntry[];
-	failures: { source: string; message: string }[];
+// Mirrors @elizaos/vault's UnifiedLoginListEntry — the actual wire shape
+// returned by `/api/saved-logins`.
+export type SavedLoginListEntry = {
+	readonly source: "in-house" | "1password" | "bitwarden";
+	readonly identifier: string;
+	readonly domain: string | null;
+	readonly username: string;
+	readonly title: string;
+	readonly updatedAt: number;
 };
 
+// Mirrors @elizaos/vault's UnifiedLoginListResult.
+export type SavedLoginsListResult = {
+	readonly logins: ReadonlyArray<SavedLoginListEntry>;
+	readonly failures: ReadonlyArray<{ source: string; message: string }>;
+};
+
+// Mirrors @elizaos/vault's UnifiedLoginReveal. Note: `password` may be
+// empty when the underlying 1Password item has no password field — the
+// server then falls back to `op item get` and returns metadata-only.
 export type RevealedLogin = {
-	source: "in-house" | "1password" | "bitwarden";
-	username?: string;
-	password: string;
-	totp?: string;
-	domain?: string;
+	readonly source: "in-house" | "1password" | "bitwarden";
+	readonly identifier?: string;
+	readonly username: string;
+	readonly password: string;
+	readonly totp?: string;
+	readonly domain: string | null;
+	readonly note?: string;
+};
+
+// --- backend install metadata (`/api/backends/install`) ---
+export type InstallMethod =
+	| { readonly kind: "brew"; readonly package: string; readonly cask: boolean }
+	| { readonly kind: "npm"; readonly package: string }
+	| { readonly kind: "manual"; readonly instructions: string; readonly url: string };
+
+export type InstallCommand = {
+	readonly command: string;
+	readonly args: ReadonlyArray<string>;
+};
+
+export type BackendInstallSpec = {
+	readonly id: string;
+	readonly methods: ReadonlyArray<InstallMethod>;
+	readonly commands: ReadonlyArray<InstallCommand | null>;
+};
+
+export type SupportedPlatform = "darwin" | "linux" | "win32";
+
+export type PackageManagerAvailability = {
+	readonly brew: boolean;
+	readonly npm: boolean;
+};
+
+export type BackendInstall = {
+	readonly platform: SupportedPlatform;
+	readonly packageManagers: PackageManagerAvailability;
+	readonly specs: ReadonlyArray<BackendInstallSpec>;
+};
+
+// --- backend signin / signout ---
+export type SignInBackendBody = {
+	readonly email?: string;
+	readonly masterPassword: string;
+	readonly secretKey?: string;
+	readonly signInAddress?: string;
+	readonly bitwardenClientId?: string;
+	readonly bitwardenClientSecret?: string;
 };
 
 export type BrowserCommandSource = "agent" | "ui" | "api";

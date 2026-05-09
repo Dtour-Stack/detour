@@ -19,8 +19,24 @@
 
 import type { ApiServer } from "../api/server";
 import type { WsServerMessage } from "../../../shared/index";
-import { vaultRequests } from "./handlers/vault";
+import { activityRequests } from "./handlers/activity";
+import { authRequests } from "./handlers/auth";
+import { browserRequests } from "./handlers/browser";
+import { channelsRequests } from "./handlers/channels";
+import { configRequests } from "./handlers/config";
+import { cronRequests } from "./handlers/cron";
+import { externalRequests } from "./handlers/external";
+import { gatewayRequests } from "./handlers/gateway";
+import { inboxRequests } from "./handlers/inbox";
+import { llamaRequests } from "./handlers/llama";
+import { osRequests } from "./handlers/os";
+import { ownerBindRequests } from "./handlers/owner-bind";
+import { pensieveRequests } from "./handlers/pensieve";
+import { portlessRequests } from "./handlers/portless";
 import { providersRequests } from "./handlers/providers";
+import { routingRequests } from "./handlers/routing";
+import { vaultRequests } from "./handlers/vault";
+import { windowRequests } from "./handlers/window";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
 type SendFn = (name: string, payload: unknown) => void;
@@ -58,6 +74,22 @@ export function buildRpcHandlers(deps: RpcDeps) {
 		requests: {
 			...vaultRequests(deps),
 			...providersRequests(deps),
+			...authRequests(deps),
+			...configRequests(deps),
+			...pensieveRequests(deps),
+			...activityRequests(deps),
+			...browserRequests(deps),
+			...llamaRequests(deps),
+			...windowRequests(deps),
+			...externalRequests(deps),
+			...osRequests(deps),
+			...routingRequests(deps),
+			...channelsRequests(deps),
+			...portlessRequests(deps),
+			...cronRequests(deps),
+			...ownerBindRequests(deps),
+			...inboxRequests(deps),
+			...gatewayRequests(deps),
 		},
 		messages: {},
 	};
@@ -81,6 +113,14 @@ function translateWsToRpc(msg: WsServerMessage): { name: string; payload: unknow
 			return { name: "providerChanged", payload: { activeProvider: msg.activeProvider } };
 		case "backend:changed":
 			return { name: "backendChanged", payload: { backendId: msg.backendId } };
+		case "auth:flow-update":
+			return { name: "authFlowUpdate", payload: { sessionId: msg.sessionId, state: msg.state } };
+		case "ui:preferences-changed":
+			return { name: "uiPreferencesChanged", payload: { preferences: msg.preferences } };
+		case "ui:open-browser":
+			return { name: "uiOpenBrowser", payload: {} };
+		case "browser:command":
+			return { name: "browserCommand", payload: { command: msg.command } };
 		default:
 			return null;
 	}

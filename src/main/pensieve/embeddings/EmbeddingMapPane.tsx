@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveEmbeddingMap, PensieveEmbeddingPoint } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 const PALETTE = [
 	"var(--accent)",
@@ -37,7 +38,7 @@ export function EmbeddingMapPane({ client }: { client: WebClient }) {
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		client.pensieveEmbeddingMap()
+		rpc.request.pensieveEmbeddingMap({})
 			.then(setData)
 			.catch((e) => setError(e instanceof Error ? e.message : String(e)));
 	}, [client]);

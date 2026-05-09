@@ -3,6 +3,8 @@ import type { ThemeChoice } from "../../shared/index";
 import { WebClient } from "../api/client";
 import { ChatView } from "./ChatView";
 import { SettingsView } from "../settings/SettingsView";
+import { rpc } from "../rpc";
+import { onProviderChanged } from "../rpc-listeners/providers";
 
 const ACCENT_SWATCHES = [
 	{ name: "Blue", value: "#0a84ff" },
@@ -53,8 +55,8 @@ export function App() {
 
 	useEffect(() => {
 		if (!connected) return;
-		client
-			.getUiPreferences()
+		rpc.request
+			.uiGetPreferences({})
 			.then((p) => {
 				const t = (p.theme ?? "system") as ThemeChoice;
 				setTheme(t);
@@ -66,12 +68,14 @@ export function App() {
 				/* keep defaults */
 			});
 		// Listen for tray menu / global-shortcut requests to open settings.
+		// (`ui:open-settings` is still WS — pending UI/window migration.)
 		const off = client.on((m) => {
 			if (m.kind === "ui:open-settings") setDrawerOpen(true);
-			else if (m.kind === "provider:changed") setActiveProvider(m.activeProvider);
 		});
+		// `provider:changed` migrated to typed RPC.
+		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		// Active provider for the header chip.
-		void client.listProviders().then((ps) => {
+		void rpc.request.providersList({}).then((ps) => {
 			setActiveProvider(ps.find((p) => p.active)?.id ?? null);
 		}).catch(() => {});
 		// Llama-server status: poll every 4s while connected. The header chip
@@ -79,7 +83,7 @@ export function App() {
 		// is loaded; gives the user visibility into first-launch progress
 		// without forcing them to open Settings → Local AI.
 		const refreshLlama = () => {
-			void client.getLlamaStatus().then((s) => {
+			void rpc.request.llamaStatus({}).then((s) => {
 				setLlamaReady(s.running && !s.lastError);
 				if (s.downloadProgress && s.downloadProgress.percent < 100) {
 					setLlamaProgress({
@@ -96,6 +100,7 @@ export function App() {
 		const llamaTimer = setInterval(refreshLlama, 4_000);
 		return () => {
 			off();
+			offProvider();
 			clearInterval(llamaTimer);
 		};
 	}, [client, connected]);
@@ -103,8 +108,8 @@ export function App() {
 	// Pin window while drawer is open so click-out / focus loss doesn't dismiss.
 	useEffect(() => {
 		if (!connected) return;
-		void client.pinWindow(drawerOpen);
-	}, [client, connected, drawerOpen]);
+		void rpc.request.windowPin({ on: drawerOpen });
+	}, [connected, drawerOpen]);
 
 	// Esc closes drawer; doesn't hide window.
 	useEffect(() => {
@@ -133,17 +138,17 @@ export function App() {
 	function changeTheme(next: ThemeChoice) {
 		setTheme(next);
 		applyTheme(next);
-		void client.setUiPreferences({ theme: next });
+		void rpc.request.uiSetPreferences({ theme: next });
 	}
 
 	function changeAccent(next: string) {
 		setAccent(next);
 		applyAccent(next);
-		void client.setUiPreferences({ accent: next });
+		void rpc.request.uiSetPreferences({ accent: next });
 	}
 
 	function closeWindow() {
-		void client.hideWindow();
+		void rpc.request.windowHide({});
 	}
 
 	if (!connected) {

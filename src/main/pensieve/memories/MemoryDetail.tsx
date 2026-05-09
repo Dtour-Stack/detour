@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PensieveMemoryDetail } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 export function MemoryDetail({
 	client,
@@ -24,8 +25,8 @@ export function MemoryDetail({
 	useEffect(() => {
 		let cancelled = false;
 		setDetail(null); setError(null); setEditing(false);
-		client
-			.pensieveMemory(memoryId)
+		rpc.request
+			.pensieveMemoryGet({ id: memoryId })
 			.then((d) => {
 				if (cancelled) return;
 				setDetail(d);
@@ -42,10 +43,10 @@ export function MemoryDetail({
 		setSaving(true);
 		try {
 			const tags = draftTags.split(",").map((s) => s.trim()).filter(Boolean);
-			await client.pensieveUpdateMemory(memoryId, { contentText: draftText, tags, path: draftPath });
+			await rpc.request.pensieveMemoryUpdate({ id: memoryId, patch: { contentText: draftText, tags, path: draftPath } });
 			setEditing(false);
 			onUpdate();
-			const fresh = await client.pensieveMemory(memoryId);
+			const fresh = await rpc.request.pensieveMemoryGet({ id: memoryId });
 			setDetail(fresh);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -57,7 +58,7 @@ export function MemoryDetail({
 	async function remove() {
 		if (!confirm("Delete this memory? It can't be recovered.")) return;
 		try {
-			await client.pensieveDeleteMemory(memoryId);
+			await rpc.request.pensieveMemoryDelete({ id: memoryId });
 			onDelete();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));

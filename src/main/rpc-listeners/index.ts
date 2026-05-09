@@ -11,6 +11,9 @@
  */
 
 import type { DetourRPC } from "../../shared/rpc";
+import { authMessages } from "./auth";
+import { browserMessages } from "./browser";
+import { configMessages } from "./config";
 import { providersMessages } from "./providers";
 import { vaultMessages } from "./vault";
 
@@ -27,6 +30,9 @@ type ViewMessageBag = {
 export function buildViewListeners(): ViewMessageBag {
 	return {
 		...providersMessages(),
+		...authMessages(),
 		...vaultMessages(),
+		...configMessages(),
+		...browserMessages(),
 	};
 }

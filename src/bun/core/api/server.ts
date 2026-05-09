@@ -378,6 +378,11 @@ function parseBrowserCommandInput(body: unknown): BrowserCommandInput | null {
 type BrowserControlGlobal = {
 	enqueue(command: BrowserCommandInput): BrowserCommand;
 	enqueueAndWait(command: BrowserCommandInput, timeoutMs?: number): Promise<BrowserCommandResult>;
+	// Added for the RPC migration: handlers in
+	// src/bun/core/rpc/handlers/browser.ts read/write the same queue
+	// the HTTP routes operate on, so both paths stay in sync.
+	list(opts: { after?: string; since?: number }): BrowserCommand[];
+	report(commandId: string, result: Omit<BrowserCommandResult, "time">): BrowserCommandResult;
 };
 
 type DebugEmbeddingBody = { text?: string; storeAs?: string };
@@ -479,7 +484,21 @@ export class ApiServer {
 		(globalThis as Record<symbol, BrowserControlGlobal>)[BROWSER_CONTROL_GLOBAL] = {
 			enqueue: (command) => this.enqueueBrowserCommand(command),
 			enqueueAndWait: (command, timeoutMs) => this.enqueueBrowserCommandAndWait(command, timeoutMs),
+			list: (opts) => this.listBrowserCommands(opts),
+			report: (commandId, result) => this.finishBrowserCommand(commandId, result),
 		};
+	}
+
+	private listBrowserCommands(opts: { after?: string; since?: number }): BrowserCommand[] {
+		const after = opts.after ?? "";
+		const since = opts.since ?? 0;
+		const afterIndex = after
+			? this.browserCommands.findIndex((command) => command.id === after)
+			: -1;
+		const commands = afterIndex >= 0
+			? this.browserCommands.slice(afterIndex + 1)
+			: this.browserCommands.filter((command) => !since || command.time >= since);
+		return commands.filter((command) => !this.browserResults.has(command.id));
 	}
 
 	private removeBrowserControlGlobal(): void {

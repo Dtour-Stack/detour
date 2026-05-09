@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse, ProviderId } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 const CODEX_MODELS = [
 	"gpt-5.5",
@@ -103,7 +104,7 @@ export function ModelsTab({ client }: { client: WebClient }) {
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 
 	useEffect(() => {
-		client.getModelConfig()
+		rpc.request.configGetModels({})
 			.then((c) => { setCfg(c); setCfgError(null); })
 			.catch((err) => setCfgError(err instanceof Error ? err.message : String(err)));
 		void refreshOpenRouterModels();
@@ -114,7 +115,7 @@ export function ModelsTab({ client }: { client: WebClient }) {
 		setLoadingCatalog(true);
 		setCatalogError(null);
 		try {
-			setCatalog(await client.listOpenRouterModels());
+			setCatalog(await rpc.request.providersOpenRouterModels({}));
 		} catch (err) {
 			setCatalogError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -125,7 +126,7 @@ export function ModelsTab({ client }: { client: WebClient }) {
 	async function save(next: ModelConfig) {
 		setSaving(true);
 		try {
-			await client.setModelConfig(next);
+			await rpc.request.configSetModels(next);
 			setCfg(next);
 			setSavedAt(Date.now());
 			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);
@@ -158,7 +159,7 @@ export function ModelsTab({ client }: { client: WebClient }) {
 					style={{ marginTop: 8 }}
 					onClick={() => {
 						setCfgError(null);
-						client.getModelConfig()
+						rpc.request.configGetModels({})
 							.then((c) => { setCfg(c); setCfgError(null); })
 							.catch((err) => setCfgError(err instanceof Error ? err.message : String(err)));
 					}}

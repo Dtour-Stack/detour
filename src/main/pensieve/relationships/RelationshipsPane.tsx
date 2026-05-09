@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PensieveEntitySummary, PensievePersonDetail } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 export function RelationshipsPane({ client }: { client: WebClient }) {
 	const [persons, setPersons] = useState<PensieveEntitySummary[]>([]);
@@ -8,7 +9,7 @@ export function RelationshipsPane({ client }: { client: WebClient }) {
 	const [selected, setSelected] = useState<string | null>(null);
 
 	useEffect(() => {
-		client.pensievePersons(200).then(setPersons).catch((e) => setError(e.message));
+		rpc.request.pensievePersonsList({ limit: 200 }).then(setPersons).catch((e) => setError(e.message));
 	}, [client]);
 
 	return (
@@ -58,7 +59,7 @@ function PersonDetail({ client, entityId }: { client: WebClient; entityId: strin
 
 	useEffect(() => {
 		setDetail(null); setError(null);
-		client.pensievePerson(entityId).then(setDetail).catch((e) => setError(e.message));
+		rpc.request.pensievePersonGet({ id: entityId }).then(setDetail).catch((e) => setError(e.message));
 	}, [client, entityId]);
 
 	if (error) return <div className="banner error">{error}</div>;

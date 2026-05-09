@@ -1,6 +1,8 @@
 import { resolveViewUrl } from "../../kernel/view-url";
 import type { Feature } from "../../kernel/registry";
 import type { WindowHandle } from "../../kernel/windows";
+import { setWindowControllerForRpc } from "../../core/rpc/window-controller-registry";
+import type { WindowCommand } from "../../core/api/server";
 
 const DEFAULT_WIDTH = 480;
 const DEFAULT_HEIGHT = 720;
@@ -14,8 +16,12 @@ export const chatFeature: Feature = {
 		let currentWidth = DEFAULT_WIDTH;
 		let currentHeight = DEFAULT_HEIGHT;
 
-		// Window control surface — invoked by API endpoints (/api/window/*)
-		deps.core.api.setWindowController((cmd) => {
+		// Window control surface — invoked by both legacy HTTP (/api/window/*)
+		// and typed RPC (windowHide / windowPin / windowResize). Both
+		// transports drive this single callback; HTTP goes through the
+		// ApiServer's setWindowController, RPC goes through the registry
+		// in src/bun/core/rpc/window-controller-registry.ts.
+		const handleWindowCommand = (cmd: WindowCommand) => {
 			if (cmd.kind === "hide") {
 				hide();
 			} else if (cmd.kind === "pin") {
@@ -31,7 +37,9 @@ export const chatFeature: Feature = {
 					}
 				}
 			}
-		});
+		};
+		deps.core.api.setWindowController(handleWindowCommand);
+		setWindowControllerForRpc(handleWindowCommand);
 
 		function ensureWindow(): WindowHandle {
 			if (chatWindow) return chatWindow;

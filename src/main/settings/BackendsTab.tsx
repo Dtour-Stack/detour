@@ -1,30 +1,30 @@
 import { useEffect, useState } from "react";
-import type { BackendStatus, OpDiagnostic } from "../../shared/index";
+import type { BackendInstall, BackendStatus, OpDiagnostic } from "../../shared/index";
 import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
+import { onBackendChanged } from "../rpc-listeners/vault";
 
-type InstallSpec = {
-	id: string;
-	methods: { kind: string; package?: string; cask?: boolean; url?: string; instructions?: string }[];
-	commands: ({ command: string; args: string[] } | null)[];
-};
+type InstallSpec = BackendInstall["specs"][number];
 
 type View = { kind: "list" } | { kind: "detail"; backendId: string };
 
 export function BackendsTab({ client }: { client: WebClient }) {
 	const [backends, setBackends] = useState<BackendStatus[]>([]);
 	const [enabled, setEnabled] = useState<string[]>([]);
-	const [install, setInstall] = useState<{ platform: string; specs: InstallSpec[] } | null>(null);
+	const [install, setInstall] = useState<BackendInstall | null>(null);
 	const [view, setView] = useState<View>({ kind: "list" });
 
 	async function refresh() {
-		// First migrated call: vaultListBackends now goes via electrobun
-		// typed RPC instead of HTTP fetch. The other two still use HTTP
-		// fetch via WebClient — they'll migrate as the schema grows.
+		// All three calls now go via electrobun typed RPC instead of HTTP
+		// fetch. The HTTP routes still exist (Phase 2 deletion) but no
+		// view code reaches them.
 		const [b, e, i] = await Promise.all([
 			rpc.request.vaultListBackends({}).catch(() => [] as BackendStatus[]),
-			client.getEnabledBackends().catch(() => [] as string[]),
-			client.getBackendInstall().catch(() => null),
+			rpc.request
+				.vaultGetEnabledBackends({})
+				.then((r) => r.enabled)
+				.catch(() => [] as string[]),
+			rpc.request.vaultGetInstall({}).catch(() => null),
 		]);
 		setBackends(b);
 		setEnabled(e);
@@ -33,8 +33,10 @@ export function BackendsTab({ client }: { client: WebClient }) {
 
 	useEffect(() => {
 		void refresh();
-		const off = client.on((m) => {
-			if (m.kind === "backend:changed") void refresh();
+		// `backend:changed` was a WS push; it now arrives over typed RPC
+		// via the WS→RPC bridge in src/bun/core/rpc/registry.ts.
+		const off = onBackendChanged(() => {
+			void refresh();
 		});
 		return off;
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -44,7 +46,9 @@ export function BackendsTab({ client }: { client: WebClient }) {
 		const next = on
 			? Array.from(new Set([...enabled, id]))
 			: enabled.filter((x) => x !== id);
-		await client.setEnabledBackends(["in-house", ...next.filter((x) => x !== "in-house")]);
+		await rpc.request.vaultSetEnabledBackends({
+			enabled: ["in-house", ...next.filter((x) => x !== "in-house")],
+		});
 		await refresh();
 	}
 
@@ -155,7 +159,7 @@ function BackendDetail({
 }: {
 	client: WebClient;
 	backend: BackendStatus;
-	install: { platform: string; specs: InstallSpec[] } | null;
+	install: BackendInstall | null;
 	onBack: () => void;
 	onChange: () => Promise<void>;
 }) {
@@ -167,7 +171,7 @@ function BackendDetail({
 		if (backend.id !== "1password") return;
 		setDiagLoading(true);
 		try {
-			const d = await client.diagnoseOnePassword();
+			const d = await rpc.request.vaultDiagnose1password({});
 			setDiag(d);
 			setDiagOpen(true);
 		} finally {
@@ -178,7 +182,7 @@ function BackendDetail({
 	async function signOut() {
 		if (backend.id !== "1password" && backend.id !== "bitwarden") return;
 		if (!confirm(`Sign out of ${backend.label}? Stored session will be cleared.`)) return;
-		await client.signOutBackend(backend.id);
+		await rpc.request.vaultSignoutBackend({ id: backend.id });
 		await onChange();
 	}
 
@@ -240,7 +244,7 @@ function InstallInstructions({
 	spec: InstallSpec | undefined;
 	onChange: () => Promise<void>;
 }) {
-	const commands = spec?.commands.filter((c): c is { command: string; args: string[] } => c != null) ?? [];
+	const commands = spec?.commands.filter((c): c is NonNullable<typeof c> => c != null) ?? [];
 	if (installed || commands.length === 0) return null;
 	return (
 		<div style={{ marginBottom: 16 }}>
@@ -373,14 +377,16 @@ function SigninForm({
 		setError(null);
 		try {
 			if (backend.id === "1password") {
-				await client.signInBackend("1password", {
+				await rpc.request.vaultSigninBackend({
+					id: "1password",
 					email,
 					secretKey,
 					signInAddress: signInAddress.trim() || undefined,
 					masterPassword,
 				});
 			} else if (backend.id === "bitwarden") {
-				await client.signInBackend("bitwarden", {
+				await rpc.request.vaultSigninBackend({
+					id: "bitwarden",
 					bitwardenClientId: bwClientId,
 					bitwardenClientSecret: bwClientSecret,
 					masterPassword,

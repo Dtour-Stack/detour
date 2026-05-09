@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ThemeChoice } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 const ACCENTS = [
 	{ name: "Blue", value: "#0a84ff" },
@@ -26,7 +27,7 @@ export function AppearanceTab({ client }: { client: WebClient }) {
 	const [accent, setAccent] = useState("#0a84ff");
 
 	useEffect(() => {
-		void client.getUiPreferences().then((p) => {
+		void rpc.request.uiGetPreferences({}).then((p) => {
 			setTheme((p.theme ?? "system") as ThemeChoice);
 			setAccent(p.accent ?? "#0a84ff");
 		});
@@ -35,12 +36,12 @@ export function AppearanceTab({ client }: { client: WebClient }) {
 	function changeTheme(t: ThemeChoice) {
 		setTheme(t);
 		applyTheme(t);
-		void client.setUiPreferences({ theme: t });
+		void rpc.request.uiSetPreferences({ theme: t });
 	}
 	function changeAccent(a: string) {
 		setAccent(a);
 		applyAccent(a);
-		void client.setUiPreferences({ accent: a });
+		void rpc.request.uiSetPreferences({ accent: a });
 	}
 
 	return (

@@ -19,7 +19,9 @@ import type {
 	ChannelStatus,
 	ChannelsSnapshot,
 } from "../../shared/index";
-import { WebClient, type DiscordCatchUpResult } from "../api/client";
+import type { ChannelsDiscordCatchUpResult } from "../../shared/rpc/channels";
+import { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
 const CHANNEL_ICONS: Record<string, string> = {
@@ -39,7 +41,7 @@ export function ChannelsView() {
 
 	const load = useCallback(async () => {
 		try {
-			const s = await client.channelsList();
+			const s = await rpc.request.channelsList({});
 			setSnap(s);
 			setError(null);
 		} catch (e) {
@@ -231,7 +233,7 @@ async function saveChannelKey({
 	setBusy(key);
 	setActionError(null);
 	try {
-		await client.channelSetCredential(key, value);
+		await rpc.request.channelsSetCredential({ key, value });
 		setDraft((d) => ({ ...d, [key]: "" }));
 		await onChanged();
 	} catch (e) {
@@ -258,7 +260,7 @@ async function clearChannelKey({
 	setBusy(key);
 	setActionError(null);
 	try {
-		await client.channelClearCredential(key);
+		await rpc.request.channelsClearCredential({ key });
 		await onChanged();
 	} catch (e) {
 		setActionError(e instanceof Error ? e.message : String(e));
@@ -281,7 +283,7 @@ async function reloadChannelPlugins({
 	setReloading(true);
 	setActionError(null);
 	try {
-		await client.channelsReload();
+		await rpc.request.channelsReload({});
 		pollChannelReload(onChanged, setReloading);
 	} catch (e) {
 		setActionError(e instanceof Error ? e.message : String(e));
@@ -309,7 +311,7 @@ async function saveChannelSetting({
 	setBusy(key);
 	setActionError(null);
 	try {
-		await client.channelSetCredential(key, value ? "true" : "false");
+		await rpc.request.channelsSetCredential({ key, value: value ? "true" : "false" });
 		await onChanged();
 		setReloading(true);
 		pollChannelReload(onChanged, setReloading);
@@ -358,7 +360,7 @@ async function toggleChannelEnabled({
 			if (!expanded) onToggleExpand();
 		} else if (channel.configured) {
 			if (!confirm(`Disable ${channel.label}? This will clear stored credentials.`)) return;
-			await Promise.all([...channel.requiredVaultKeys, ...channel.optionalVaultKeys].map((key) => client.channelClearCredential(key)));
+			await Promise.all([...channel.requiredVaultKeys, ...channel.optionalVaultKeys].map((key) => rpc.request.channelsClearCredential({ key })));
 			await onChanged();
 		} else if (!expanded) {
 			onToggleExpand();
@@ -370,13 +372,13 @@ async function toggleChannelEnabled({
 	}
 }
 
-async function toggleImessageChannel(channel: ChannelStatus, client: WebClient): Promise<void> {
+async function toggleImessageChannel(channel: ChannelStatus, _client: WebClient): Promise<void> {
 	if (channel.configured) {
 		if (!confirm("Disable iMessage bridge?")) return;
-		await client.channelClearCredential("IMESSAGE_ENABLED");
+		await rpc.request.channelsClearCredential({ key: "IMESSAGE_ENABLED" });
 		return;
 	}
-	await client.channelSetCredential("IMESSAGE_ENABLED", "true");
+	await rpc.request.channelsSetCredential({ key: "IMESSAGE_ENABLED", value: "true" });
 }
 
 function ChannelCardHeader({
@@ -713,7 +715,7 @@ function ChannelHistory({
 		setLoading(true);
 		setError(null);
 		try {
-			const r = await client.activityTrajectories({ source: sourceId, limit: 20 });
+			const r = await rpc.request.activityTrajectoriesList({ source: sourceId, limit: 20 });
 			setData(r);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -748,7 +750,7 @@ function ChannelHistory({
 	);
 }
 
-function summarizeCatchUp(result: DiscordCatchUpResult | undefined): string {
+function summarizeCatchUp(result: ChannelsDiscordCatchUpResult | undefined): string {
 	if (!result) return "missed reply scan finished";
 	const firstError = result.errorDetails?.[0];
 	const errorText = firstError ? ` · ${firstError.channelName ?? firstError.channelId}: ${firstError.error}` : "";
@@ -764,7 +766,7 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 
 	const load = useCallback(async () => {
 		try {
-			const r = await client.discordGuilds();
+			const r = await rpc.request.channelsDiscordGuilds({});
 			setGuilds(r.guilds);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -777,7 +779,7 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 		setBusy(channelId);
 		setResults((r) => ({ ...r, [channelId]: "scheduling…" }));
 		try {
-			await client.discordBackfill(channelId, limit, false);
+			await rpc.request.channelsDiscordBackfill({ channelId, limit, force: false });
 			setResults((r) => ({ ...r, [channelId]: `backfilling ${limit} msgs (running in background — check Activity > Trajectories for source=discord)` }));
 		} catch (e) {
 			setResults((r) => ({ ...r, [channelId]: `error: ${e instanceof Error ? e.message : String(e)}` }));
@@ -790,7 +792,7 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 		setBusy(`catchup:${channelId}`);
 		setResults((r) => ({ ...r, [channelId]: "scheduling missed replies…" }));
 		try {
-			const response = await client.discordCatchUp(channelId, Math.min(limit, 500), 24);
+			const response = await rpc.request.channelsDiscordCatchUp({ channelId, limit: Math.min(limit, 500), maxAgeHours: 24, wait: true });
 			setResults((r) => ({ ...r, [channelId]: summarizeCatchUp(response.result) }));
 		} catch (e) {
 			setResults((r) => ({ ...r, [channelId]: `error: ${e instanceof Error ? e.message : String(e)}` }));
@@ -867,18 +869,18 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 	);
 }
 
-function ImessageTccBanner({ client }: { client: WebClient }) {
+function ImessageTccBanner({ client: _client }: { client: WebClient }) {
 	const [granted, setGranted] = useState<boolean | null>(null);
 	const [opening, setOpening] = useState(false);
 
 	useEffect(() => {
-		client.listOsPermissions()
+		rpc.request.osListPermissions({})
 			.then((perms) => {
 				const fda = perms.find((p) => p.id === "full-disk-access");
 				setGranted(fda?.status === "granted");
 			})
 			.catch(() => setGranted(null));
-	}, [client]);
+	}, []);
 
 	if (granted === true) {
 		return (
@@ -889,7 +891,7 @@ function ImessageTccBanner({ client }: { client: WebClient }) {
 	}
 	const open = async () => {
 		setOpening(true);
-		try { await client.openOsPermissionPane("full-disk-access"); }
+		try { await rpc.request.osOpenPermissionPane({ id: "full-disk-access" }); }
 		finally { setOpening(false); }
 	};
 	return (
@@ -943,12 +945,12 @@ function OwnerPairingSection({
 
 	const refresh = useCallback(async () => {
 		try {
-			const status = await client.ownerBindStatus(connector);
+			const status = await rpc.request.ownerBindStatus({ connector });
 			setBound(status.owner);
 		} catch (e) {
 			setErr(e instanceof Error ? e.message : String(e));
 		}
-	}, [client, connector]);
+	}, [connector]);
 
 	useEffect(() => {
 		void refresh();
@@ -966,7 +968,7 @@ function OwnerPairingSection({
 		setBusy(true);
 		setErr(null);
 		try {
-			const r = await client.ownerBindGenerateCode(connector);
+			const r = await rpc.request.ownerBindGenerateCode({ connector });
 			setCode(r.code);
 			setExpiresAt(r.expiresAt);
 		} catch (e) {
@@ -974,14 +976,14 @@ function OwnerPairingSection({
 		} finally {
 			setBusy(false);
 		}
-	}, [client, connector]);
+	}, [connector]);
 
 	const unbind = useCallback(async () => {
 		if (!confirm(`Unbind ${connector} owner?`)) return;
 		setBusy(true);
 		setErr(null);
 		try {
-			await client.ownerBindUnbind(connector);
+			await rpc.request.ownerBindUnbind({ connector });
 			await refresh();
 			setCode(null);
 			setExpiresAt(null);

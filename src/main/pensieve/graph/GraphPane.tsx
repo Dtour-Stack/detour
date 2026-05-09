@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveGraphSnapshot, PensieveGraphNode, PensieveGraphEdge } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 const KIND_COLORS: Record<string, string> = {
 	memory: "var(--accent)",
@@ -25,7 +26,7 @@ export function GraphPane({ client }: { client: WebClient }) {
 	const [size, setSize] = useState({ w: 800, h: 600 });
 
 	useEffect(() => {
-		client.pensieveGraph().then(setSnap).catch((e) => setError(e.message));
+		rpc.request.pensieveGraph({}).then(setSnap).catch((e) => setError(e.message));
 	}, [client]);
 
 	useEffect(() => {

@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PensieveTemplateDetail, PensieveTemplateRenderResult } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 const VAR_REGEX = /\{\{\s*([a-zA-Z_][\w-]*)\s*\}\}/g;
 
@@ -59,7 +60,7 @@ export function TemplateEditor({
 		setError(null);
 		try {
 			const tags = ["template", ...tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)];
-			await client.pensieveUpdateTemplate(detail.id, { body, tags, path });
+			await rpc.request.pensieveTemplateUpdate({ id: detail.id, patch: { body, tags, path } });
 			await onSaved();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -72,7 +73,7 @@ export function TemplateEditor({
 		setPreviewLoading(true);
 		setError(null);
 		try {
-			const r = await client.pensieveRenderTemplate(detail.id);
+			const r = await rpc.request.pensieveTemplateRender({ id: detail.id });
 			setPreview(r);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -84,7 +85,7 @@ export function TemplateEditor({
 	const remove = async () => {
 		if (!confirm(`Delete template "${detail.name}"? This can't be undone.`)) return;
 		try {
-			await client.pensieveDeleteTemplate(detail.id);
+			await rpc.request.pensieveTemplateDelete({ id: detail.id });
 			await onDeleted();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));

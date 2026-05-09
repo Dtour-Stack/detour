@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
 const REGISTRIES: { key: keyof Pick<ActivityRuntimeSnapshot, "actions" | "providers" | "evaluators" | "services" | "plugins">; label: string }[] = [
@@ -23,8 +24,8 @@ function ItemRow({ item }: { item: ActivityRuntimeRegistryItem }) {
 	);
 }
 
-export function RuntimePane({ client }: { client: WebClient }) {
-	const fetcher = useCallback(() => client.activityRuntime(), [client]);
+export function RuntimePane({ client: _client }: { client: WebClient }) {
+	const fetcher = useCallback(() => rpc.request.activityRuntime({}), []);
 	const { data, error } = usePoller<ActivityRuntimeSnapshot>(fetcher, 5000);
 
 	if (error) return <div className="banner error">{error}</div>;

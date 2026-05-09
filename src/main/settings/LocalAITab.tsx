@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { LlamaServerStatus, WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 interface DebugProbe {
 	dim: number;
@@ -39,7 +40,7 @@ function fmtDuration(ms: number): string {
 	return `${m}m ${s % 60}s`;
 }
 
-export function LocalAITab({ client }: { client: WebClient }) {
+export function LocalAITab({ client: _client }: { client: WebClient }) {
 	const [status, setStatus] = useState<LlamaServerStatus | null>(null);
 	const [openaiKey, setOpenaiKey] = useState("");
 	const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
@@ -50,23 +51,23 @@ export function LocalAITab({ client }: { client: WebClient }) {
 
 	const loadStatus = useCallback(async () => {
 		try {
-			const s = await client.getLlamaStatus();
-			setStatus(s);
+			const s = await rpc.request.llamaStatus({});
+			setStatus(s as LlamaServerStatus);
 		} catch {
 			setStatus(null);
 		}
-	}, [client]);
+	}, []);
 
 	const checkOpenaiKey = useCallback(async () => {
 		try {
-			const inv = await client.listVaultInventory();
-			const arr = Array.isArray(inv) ? inv : (inv as { keys?: unknown[] }).keys;
-			const list = (arr ?? []) as Array<{ key?: string }>;
-			setHasOpenaiKey(list.some((e) => e.key === "OPENAI_EMBEDDING_API_KEY" || e.key === "OPENAI_API_KEY"));
+			const inv = await rpc.request.vaultInventory({});
+			setHasOpenaiKey(
+				inv.some((e) => e.key === "OPENAI_EMBEDDING_API_KEY" || e.key === "OPENAI_API_KEY"),
+			);
 		} catch {
 			/* noop */
 		}
-	}, [client]);
+	}, []);
 
 	useEffect(() => {
 		void loadStatus();

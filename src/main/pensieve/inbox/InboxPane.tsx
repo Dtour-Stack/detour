@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { InboxItem, WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 const STATUS_LABELS: Record<string, string> = {
 	pending: "Pending",
@@ -37,7 +38,7 @@ function formatTime(ts: number): string {
 	return d.toLocaleString();
 }
 
-export function InboxPane({ client }: { client: WebClient }) {
+export function InboxPane({ client: _client }: { client: WebClient }) {
 	const [items, setItems] = useState<InboxItem[]>([]);
 	const [total, setTotal] = useState(0);
 	const [loading, setLoading] = useState(true);
@@ -50,7 +51,7 @@ export function InboxPane({ client }: { client: WebClient }) {
 
 	const load = useCallback(async () => {
 		try {
-			const res = await client.listInbox({ limit: 100 });
+			const res = await rpc.request.inboxList({ limit: 100 });
 			setItems(res.items);
 			setTotal(res.total);
 			setError(null);
@@ -59,7 +60,7 @@ export function InboxPane({ client }: { client: WebClient }) {
 		} finally {
 			setLoading(false);
 		}
-	}, [client]);
+	}, []);
 
 	useEffect(() => {
 		void load();
@@ -71,7 +72,7 @@ export function InboxPane({ client }: { client: WebClient }) {
 		if (!draftTitle.trim()) return;
 		setPostBusy(true);
 		try {
-			await client.postInboxNotification({
+			await rpc.request.inboxPostNotification({
 				title: draftTitle.trim(),
 				body: draftBody.trim(),
 				prompt: true,
@@ -85,28 +86,28 @@ export function InboxPane({ client }: { client: WebClient }) {
 		} finally {
 			setPostBusy(false);
 		}
-	}, [client, draftTitle, draftBody, load]);
+	}, [draftTitle, draftBody, load]);
 
 	const updateStatus = useCallback(async (id: string, status: string) => {
 		try {
-			await client.updateInboxStatus(id, status);
+			await rpc.request.inboxUpdateStatus({ id, status: status as never });
 			void load();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		}
-	}, [client, load]);
+	}, [load]);
 
 	const act = useCallback(async (id: string) => {
 		setActingId(id);
 		try {
-			await client.actInboxItem(id);
+			await rpc.request.inboxAct({ id });
 			void load();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		} finally {
 			setActingId(null);
 		}
-	}, [client, load]);
+	}, [load]);
 
 	return (
 		<div className="settings-pane">

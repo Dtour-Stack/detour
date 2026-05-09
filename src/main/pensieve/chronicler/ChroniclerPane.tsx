@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { ChroniclerConfig, ChroniclerObservation, ChroniclerStatus } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 import { usePoller } from "../usePoller";
 
 interface ChroniclerData {
@@ -128,8 +129,8 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const fetcher = useCallback(async (): Promise<ChroniclerData> => {
 		const [status, recent] = await Promise.all([
-			client.pensieveChroniclerStatus(),
-			client.pensieveChroniclerRecent(20),
+			rpc.request.pensieveChroniclerStatus({}),
+			rpc.request.pensieveChroniclerRecent({ limit: 20 }),
 		]);
 		return { status, recent };
 	}, [client]);
@@ -142,7 +143,7 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 		setBusyCount((count) => count + 1);
 		setActionError(null);
 		try {
-			await client.pensieveSetChroniclerConfig(patch);
+			await rpc.request.pensieveChroniclerSetConfig(patch);
 			refresh();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
@@ -155,7 +156,7 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 		setBusyCount((count) => count + 1);
 		setActionError(null);
 		try {
-			await client.pensieveChroniclerSample();
+			await rpc.request.pensieveChroniclerSample({});
 			refresh();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));

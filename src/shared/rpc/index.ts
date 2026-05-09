@@ -19,14 +19,50 @@
 
 import type { RPCSchema } from "electrobun/bun";
 import type { VaultRequests, VaultMessages } from "./vault";
-import type { ProvidersMessages } from "./providers";
+import type { ProvidersRequests, ProvidersMessages } from "./providers";
+import type { AuthRequests, AuthMessages } from "./auth";
+import type { ConfigRequests, ConfigMessages } from "./config";
+import type { PensieveRequests } from "./pensieve";
+import type { ActivityRequests } from "./activity";
+import type { BrowserRequests, BrowserMessages } from "./browser";
+import type { LlamaRequests } from "./llama";
+import type { WindowRequests } from "./window";
+import type { ExternalRequests } from "./external";
+import type { OsRequests } from "./os";
+import type { RoutingRequests } from "./routing";
+import type { ChannelsRequests } from "./channels";
+import type { PortlessRequests } from "./portless";
+import type { CronRequests } from "./cron";
+import type { OwnerBindRequests } from "./owner-bind";
+import type { InboxRequests } from "./inbox";
+import type { GatewayRequests } from "./gateway";
 
 export type DetourBunRequests =
-	& VaultRequests;
+	& VaultRequests
+	& ProvidersRequests
+	& AuthRequests
+	& ConfigRequests
+	& PensieveRequests
+	& ActivityRequests
+	& BrowserRequests
+	& LlamaRequests
+	& WindowRequests
+	& ExternalRequests
+	& OsRequests
+	& RoutingRequests
+	& ChannelsRequests
+	& PortlessRequests
+	& CronRequests
+	& OwnerBindRequests
+	& InboxRequests
+	& GatewayRequests;
 
 export type DetourBunMessages =
 	& VaultMessages
-	& ProvidersMessages;
+	& ProvidersMessages
+	& AuthMessages
+	& ConfigMessages
+	& BrowserMessages;
 
 export type DetourRPC = {
 	bun: RPCSchema<{

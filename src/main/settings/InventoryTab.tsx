@@ -1,24 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WebClient } from "../api/client";
+import type { VaultInventoryItem, VaultStats } from "../../shared/index";
+import { rpc } from "../rpc";
 
-type Entry = {
-	key: string;
-	category: string;
-	label?: string;
-	hasProfiles?: boolean;
-	lastModified?: number;
-	kind?: string;
-	provider?: string | null;
-};
+type Entry = VaultInventoryItem;
 
-export function InventoryTab({ client }: { client: WebClient }) {
+export function InventoryTab({ client: _client }: { client: WebClient }) {
 	const [items, setItems] = useState<Entry[]>([]);
-	const [stats, setStats] = useState<{
-		total: number;
-		sensitive: number;
-		nonSensitive: number;
-		references: number;
-	} | null>(null);
+	const [stats, setStats] = useState<VaultStats | null>(null);
 	const [filter, setFilter] = useState("");
 	const [revealing, setRevealing] = useState<Record<string, string>>({});
 	const [adding, setAdding] = useState(false);
@@ -28,10 +17,10 @@ export function InventoryTab({ client }: { client: WebClient }) {
 
 	async function refresh() {
 		const [list, s] = await Promise.all([
-			client.listVaultInventory(),
-			client.vaultStats(),
+			rpc.request.vaultInventory({}),
+			rpc.request.vaultStats({}),
 		]);
-		setItems(list as Entry[]);
+		setItems(list);
 		setStats(s);
 	}
 
@@ -51,7 +40,7 @@ export function InventoryTab({ client }: { client: WebClient }) {
 	}, [items, filter]);
 
 	async function reveal(key: string) {
-		const r = await client.getVaultKey(key, true);
+		const r = await rpc.request.vaultGetKey({ key, reveal: true });
 		setRevealing((s) => ({ ...s, [key]: r.value ?? "" }));
 	}
 
@@ -68,13 +57,17 @@ export function InventoryTab({ client }: { client: WebClient }) {
 
 	async function remove(key: string) {
 		if (!confirm(`Remove "${key}" from vault?`)) return;
-		await client.removeVaultKey(key);
+		await rpc.request.vaultRemoveKey({ key });
 		await refresh();
 	}
 
 	async function addKey() {
 		if (!newKey.trim() || !newValue) return;
-		await client.setVaultKey(newKey.trim(), newValue, newSensitive);
+		await rpc.request.vaultSetKey({
+			key: newKey.trim(),
+			value: newValue,
+			sensitive: newSensitive,
+		});
 		setNewKey("");
 		setNewValue("");
 		setAdding(false);

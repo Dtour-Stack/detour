@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { rpc } from "../rpc";
 import type {
 	ActivityAutonomySnapshot,
 	ActivityAutonomyTask,
@@ -355,7 +356,7 @@ function XNumberInput({
 }
 
 function XAutonomySection({
-	client,
+	client: _client,
 	data,
 	onChanged,
 }: {
@@ -376,7 +377,7 @@ function XAutonomySection({
 		setSaving(true);
 		setError(null);
 		try {
-			await client.activitySetXAutonomy(update);
+			await rpc.request.activityAutonomySetX({ update });
 			if (resetDirty) setDirty(false);
 			onChanged();
 		} catch (e) {
@@ -384,7 +385,7 @@ function XAutonomySection({
 		} finally {
 			setSaving(false);
 		}
-	}, [client, onChanged]);
+	}, [onChanged]);
 
 	const saveDraft = useCallback(() => {
 		void apply({
@@ -486,7 +487,7 @@ function ImprovementSection({ data }: { data: ActivityAutonomySnapshot }) {
 }
 
 export function AutonomyPane({ client }: { client: WebClient }) {
-	const fetcher = useCallback(() => client.activityAutonomy(), [client]);
+	const fetcher = useCallback(() => rpc.request.activityAutonomy({}), []);
 	const { data, error, refresh } = usePoller<ActivityAutonomySnapshot>(fetcher, 3000);
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -500,20 +501,21 @@ export function AutonomyPane({ client }: { client: WebClient }) {
 		setBusy(true);
 		setActionError(null);
 		try {
-			await client.activitySetAutonomy(on);
+			if (on) await rpc.request.activityAutonomyEnable({});
+			else await rpc.request.activityAutonomyDisable({});
 			refresh();
 		} catch (e) {
 			setActionError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setBusy(false);
 		}
-	}, [client, refresh]);
+	}, [refresh]);
 
 	const applyInterval = useCallback(async (ms: number) => {
 		setBusy(true);
 		setActionError(null);
 		try {
-			await client.activitySetAutonomyInterval(ms);
+			await rpc.request.activityAutonomySetInterval({ intervalMs: ms });
 			setDraftInterval(ms);
 			refresh();
 		} catch (e) {
@@ -521,7 +523,7 @@ export function AutonomyPane({ client }: { client: WebClient }) {
 		} finally {
 			setBusy(false);
 		}
-	}, [client, refresh]);
+	}, [refresh]);
 
 	if (error) return <div className="banner error">{error}</div>;
 	if (!data) return <div className="empty">Loading autonomy state...</div>;

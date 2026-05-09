@@ -14,6 +14,7 @@ import type {
 	PensieveTemplateSummary,
 } from "../../../shared/index";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 import { TemplateEditor } from "./TemplateEditor";
 import { VariablesPanel } from "./VariablesPanel";
 
@@ -28,8 +29,8 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 	const loadList = useCallback(async () => {
 		try {
 			const [list, vlist] = await Promise.all([
-				client.pensieveTemplates(),
-				client.pensieveTemplateVars(),
+				rpc.request.pensieveTemplatesList({}),
+				rpc.request.pensieveTemplateVarsList({}),
 			]);
 			setItems(list);
 			setVars(vlist);
@@ -40,7 +41,7 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 
 	const loadDetail = useCallback(async (id: string) => {
 		try {
-			const d = await client.pensieveTemplate(id);
+			const d = await rpc.request.pensieveTemplateGet({ id });
 			setDetail(d);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -58,7 +59,7 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 		if (!name) return;
 		setCreating(true);
 		try {
-			const { id } = await client.pensieveCreateTemplate({
+			const { id } = await rpc.request.pensieveTemplateCreate({
 				name,
 				body: `# ${name}\n\nWrite your prompt here. Use {{variableName}} for substitutions.\n`,
 			});
@@ -72,14 +73,14 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 	}, [client, loadList]);
 
 	const handleSaveVar = useCallback(async (name: string, value: string) => {
-		await client.pensieveSetTemplateVar(name, value);
+		await rpc.request.pensieveTemplateVarSet({ name, value });
 		await loadList();
 		if (selected) await loadDetail(selected);
 	}, [client, loadList, loadDetail, selected]);
 
 	const handleDeleteVar = useCallback(async (name: string) => {
 		if (!confirm(`Delete prompt variable {{${name}}}?`)) return;
-		await client.pensieveDeleteTemplateVar(name);
+		await rpc.request.pensieveTemplateVarDelete({ name });
 		await loadList();
 		if (selected) await loadDetail(selected);
 	}, [client, loadList, loadDetail, selected]);

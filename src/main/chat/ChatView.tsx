@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderId } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
+import { onProviderChanged } from "../rpc-listeners/providers";
 
 type Bubble = {
 	id: string;
@@ -61,13 +63,14 @@ export function ChatView({
 	const slashOpen = Boolean(activeProvider && !pending && draft.startsWith("/") && slashMatches.length > 0);
 
 	useEffect(() => {
-		client
-			.listProviders()
-			.then((ps) => setActiveProvider(ps.find((p) => p.active)?.id ?? null));
+		void rpc.request
+			.providersList({})
+			.then((ps) => setActiveProvider(ps.find((p) => p.active)?.id ?? null))
+			.catch(() => {});
+		// Chat streaming (chat:delta/complete/error) still uses WS — out of
+		// scope for the providers+auth migration phase.
 		const off = client.on((msg) => {
-			if (msg.kind === "provider:changed") {
-				setActiveProvider(msg.activeProvider);
-			} else if (msg.kind === "chat:delta" && msg.convId === CONV_ID) {
+			if (msg.kind === "chat:delta" && msg.convId === CONV_ID) {
 				setBubbles((bs) =>
 					bs.map((b) =>
 						b.id === assistantId.current
@@ -94,7 +97,12 @@ export function ChatView({
 				setPending(false);
 			}
 		});
-		return off;
+		// `provider:changed` migrated to typed RPC.
+		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
+		return () => {
+			off();
+			offProvider();
+		};
 	}, [client]);
 
 	useEffect(() => {

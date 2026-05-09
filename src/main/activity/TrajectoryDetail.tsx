@@ -16,6 +16,7 @@ import type {
 	ActivityTrajectoryStepSummary,
 } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 type StageId = "input" | "should_respond" | "plan" | "actions" | "evaluators";
 type Trajectory = NonNullable<ActivityTrajectoryDetail["trajectory"]>;
@@ -81,7 +82,7 @@ function downloadJson(filename: string, data: unknown) {
 }
 
 export function TrajectoryDetail({
-	client,
+	client: _client,
 	trajectoryId,
 	onClose,
 }: {
@@ -98,8 +99,8 @@ export function TrajectoryDetail({
 		let cancelled = false;
 		setLoading(true);
 		setError(null);
-		client
-			.activityTrajectory(trajectoryId)
+		rpc.request
+			.activityTrajectoryGet({ id: trajectoryId })
 			.then((res) => {
 				if (cancelled) return;
 				setDetail(res);
@@ -113,7 +114,7 @@ export function TrajectoryDetail({
 		return () => {
 			cancelled = true;
 		};
-	}, [client, trajectoryId]);
+	}, [trajectoryId]);
 
 	const stageCounts = useMemo(() => {
 		const counts: Record<StageId, number> = {

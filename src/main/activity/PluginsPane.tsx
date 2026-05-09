@@ -11,10 +11,11 @@
 import { useCallback, useState } from "react";
 import type { ActivityPluginDetail, ActivityPluginsSnapshot } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
-export function PluginsPane({ client }: { client: WebClient }) {
-	const fetcher = useCallback(() => client.activityPlugins(), [client]);
+export function PluginsPane({ client: _client }: { client: WebClient }) {
+	const fetcher = useCallback(() => rpc.request.activityPluginsList({}), []);
 	const { data, error, refresh } = usePoller<ActivityPluginsSnapshot>(fetcher, 8000);
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -24,14 +25,14 @@ export function PluginsPane({ client }: { client: WebClient }) {
 		setBusy(true);
 		setActionError(null);
 		try {
-			await client.activityRebuildRuntime();
+			await rpc.request.activityPluginsRebuild({});
 			refresh();
 		} catch (e) {
 			setActionError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setBusy(false);
 		}
-	}, [client, refresh]);
+	}, [refresh]);
 
 	if (error) return <div className="banner error">{error}</div>;
 	if (!data) return <div className="empty">Loading plugins…</div>;

@@ -1,6 +1,8 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserCommand, SavedLoginEntry } from "../../shared/index";
 import { WebClient } from "../api/client";
+import { rpc } from "../rpc";
+import { onBrowserCommand } from "../rpc-listeners/browser";
 
 type ElectrobunWebviewElement = HTMLElement & {
 	webviewId?: number | null;
@@ -407,13 +409,10 @@ export function BrowserView() {
 		const key = `${command.source}:${command.identifier}`;
 		setLoginBusy(key);
 		try {
-			const revealed = await client.revealSavedLogin(command.source, command.identifier) as {
-				username?: string;
-				password?: string;
-				totp?: string;
-				domain?: string;
-				note?: string;
-			};
+			const revealed = await rpc.request.savedLoginsReveal({
+				source: command.source,
+				identifier: command.identifier,
+			});
 			if (!revealed.password && !revealed.username && !revealed.totp) {
 				throw new Error(revealed.note || "This saved login has no autofillable fields.");
 			}
@@ -431,8 +430,8 @@ export function BrowserView() {
 	}, [client, executeInTab]);
 
 	const reportCommandResult = useCallback((command: BrowserCommand, result: { ok: boolean; result?: unknown; error?: string; text?: string }) => {
-		void client.reportBrowserCommandResult(command.id, result).catch(() => {});
-	}, [client]);
+		void rpc.request.browserCommandReport({ commandId: command.id, result }).catch(() => {});
+	}, []);
 
 	const handleCommand = useCallback((command: BrowserCommand) => {
 		if (processedCommands.current.has(command.id)) return;
@@ -471,15 +470,13 @@ export function BrowserView() {
 			.then(async () => {
 				setConnected(true);
 				const since = Date.now() - 30_000;
-				const queued = await client.browserCommands({ since });
+				const queued = await rpc.request.browserCommandsList({ since });
 				for (const command of queued.commands) handleCommand(command);
 			})
 			.catch((err) => {
 				setStatusText(err instanceof Error ? err.message : String(err));
 			});
-		const off = client.on((message) => {
-			if (message.kind === "browser:command") handleCommand(message.command);
-		});
+		const off = onBrowserCommand((payload) => handleCommand(payload.command));
 		return off;
 	}, [client, handleCommand]);
 
@@ -527,16 +524,16 @@ export function BrowserView() {
 
 	useEffect(() => {
 		if (!loginsOpen || !activeTab) return;
-		client
-			.listSavedLogins()
+		rpc.request
+			.savedLoginsList({})
 			.then((result) => {
-				setLoginData(result as LoginResult);
+				setLoginData(result as unknown as LoginResult);
 				setLoginError(null);
 			})
 			.catch((err) => {
 				setLoginError(err instanceof Error ? err.message : String(err));
 			});
-	}, [client, loginsOpen, activeTab?.url]);
+	}, [loginsOpen, activeTab?.url]);
 
 	useEffect(() => () => {
 		for (const pending of pendingExecs.current.values()) {

@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { ActivityTrajectoryListResult } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 import { TrajectoryDetail } from "./TrajectoryDetail";
 
@@ -33,15 +34,15 @@ export function TrajectoriesPane({ client }: { client: WebClient }) {
 	const [status, setStatus] = useState<string>("");
 	const [exporting, setExporting] = useState(false);
 	const fetcher = useCallback(
-		() => client.activityTrajectories({ limit: 100, ...(status ? { status } : {}) }),
-		[client, status],
+		() => rpc.request.activityTrajectoriesList({ limit: 100, ...(status ? { status } : {}) }),
+		[status],
 	);
 	const { data, error } = usePoller<ActivityTrajectoryListResult>(fetcher, 5000, [status]);
 
 	const handleExportAll = useCallback(async () => {
 		setExporting(true);
 		try {
-			const payload = await client.activityExportTrajectories();
+			const payload = await rpc.request.activityTrajectoriesExport({});
 			downloadJson(`detour-trajectories-${Date.now()}.json`, payload);
 		} catch (e) {
 			console.error("export failed", e);
@@ -49,7 +50,7 @@ export function TrajectoriesPane({ client }: { client: WebClient }) {
 		} finally {
 			setExporting(false);
 		}
-	}, [client]);
+	}, []);
 
 	if (error) return <div className="banner error">{error}</div>;
 

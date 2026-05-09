@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import type { WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 const TYPE_OPTIONS = [
 	{ value: "custom", label: "Custom (note)" },
@@ -44,7 +45,7 @@ export function NewMemoryDialog({
 				.split(",")
 				.map((t) => t.trim())
 				.filter(Boolean);
-			const result = await client.pensieveCreateMemory({
+			const result = await rpc.request.pensieveMemoryCreate({
 				text,
 				path,
 				type,

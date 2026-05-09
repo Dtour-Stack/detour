@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import type { ProviderId, ProviderInfo } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
+import { onAuthFlowUpdate } from "../rpc-listeners/auth";
+import { onProviderChanged } from "../rpc-listeners/providers";
 
 type AccountSummary = {
 	id: string;
@@ -69,8 +72,8 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 
 	async function refresh() {
 		const [ps, as] = await Promise.all([
-			client.listProviders(),
-			client.listAllAccounts() as Promise<Record<string, AccountSummary[]>>,
+			rpc.request.providersList({}),
+			rpc.request.authListAccounts({}) as Promise<Record<string, AccountSummary[]>>,
 		]);
 		setProviders(ps);
 		setAccounts(as);
@@ -78,25 +81,33 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 
 	useEffect(() => {
 		void refresh();
-		const off = client.on((m) => {
-			if (m.kind === "auth:flow-update") {
-				setActiveFlow((f) =>
-					f && f.sessionId === m.sessionId ? { ...f, status: m.state.status, error: m.state.error } : f,
-				);
-				if (
-					m.state.status === "success" ||
-					m.state.status === "cancelled" ||
-					m.state.status === "error" ||
-					m.state.status === "timeout"
-				) {
-					void refresh();
-					if (m.state.status === "success") setActiveFlow(null);
-				}
-			} else if (m.kind === "provider:changed") {
+		// One mount-time subscription for OAuth flow transitions; filter by
+		// sessionId via functional setState. The bun-side `subscribeFlow`
+		// is registered before authStartFlow returns, so the first push
+		// can't fire before this listener is in place.
+		const offFlow = onAuthFlowUpdate((m) => {
+			setActiveFlow((f) =>
+				f && f.sessionId === m.sessionId
+					? { ...f, status: m.state.status, error: m.state.error }
+					: f,
+			);
+			if (
+				m.state.status === "success" ||
+				m.state.status === "cancelled" ||
+				m.state.status === "error" ||
+				m.state.status === "timeout"
+			) {
 				void refresh();
+				if (m.state.status === "success") setActiveFlow(null);
 			}
 		});
-		return off;
+		const offProvider = onProviderChanged(() => {
+			void refresh();
+		});
+		return () => {
+			offFlow();
+			offProvider();
+		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
@@ -105,7 +116,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 		if (!k) return;
 		try {
 			setError(null);
-			await client.setProviderKey(id, k);
+			await rpc.request.providersSetKey({ id, key: k });
 			setDrafts((d) => ({ ...d, [id]: "" }));
 			await refresh();
 		} catch (err) {
@@ -117,7 +128,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 		if (!confirm(`Remove ${id} API key?`)) return;
 		try {
 			setError(null);
-			await client.removeProviderKey(id);
+			await rpc.request.providersRemoveKey({ id });
 			await refresh();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -127,7 +138,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	async function activate(id: ProviderId) {
 		try {
 			setError(null);
-			await client.setActiveProvider(id);
+			await rpc.request.providersSetActive({ id });
 			await refresh();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -137,7 +148,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	async function startOAuth(provider: "anthropic-subscription" | "openai-codex", label: string) {
 		try {
 			setError(null);
-			const handle = await client.startAuthFlow(provider, label);
+			const handle = await rpc.request.authStartFlow({ provider, label });
 			setActiveFlow({
 				sessionId: handle.sessionId,
 				provider,
@@ -146,7 +157,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 				status: "pending",
 			});
 			setCode("");
-			try { await client.openExternal(handle.authUrl); }
+			try { await rpc.request.externalOpen({ url: handle.authUrl }); }
 			catch (err) { setError(`Couldn't open browser: ${err instanceof Error ? err.message : String(err)}. Authorize at: ${handle.authUrl}`); }
 		} catch (err) {
 			setError(`OAuth start failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -157,7 +168,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 		if (!activeFlow) return;
 		try {
 			setError(null);
-			await client.submitFlowCode(activeFlow.sessionId, code.trim());
+			await rpc.request.authSubmitFlowCode({ sessionId: activeFlow.sessionId, code: code.trim() });
 		} catch (err) {
 			setError(`Submit code failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -166,7 +177,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	async function cancelFlow() {
 		if (!activeFlow) return;
 		try {
-			await client.cancelFlow(activeFlow.sessionId);
+			await rpc.request.authCancelFlow({ sessionId: activeFlow.sessionId });
 			setActiveFlow(null);
 		} catch (err) {
 			setError(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -176,7 +187,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 	async function removeAccount(provider: string, accountId: string) {
 		if (!confirm(`Remove ${provider} account?`)) return;
 		try {
-			await client.deleteAccount(provider, accountId);
+			await rpc.request.authDeleteAccount({ provider, accountId });
 			await refresh();
 		} catch (err) {
 			setError(`Remove failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -206,7 +217,7 @@ export function ProvidersTab({ client }: { client: WebClient }) {
 								<button
 									type="button"
 									className="btn ghost small"
-									onClick={() => client.openExternal(activeFlow.authUrl)}
+									onClick={() => rpc.request.externalOpen({ url: activeFlow.authUrl })}
 								>
 									Re-open
 								</button>

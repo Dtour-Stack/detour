@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AgentConfig, AgentVaultMode } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
 	{ id: "off", label: "Off", help: "Agent has no vault access at all." },
@@ -16,7 +17,7 @@ export function AgentPermissionsTab({ client }: { client: WebClient }) {
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 
 	useEffect(() => {
-		void client.getAgentConfig().then((c) => {
+		void rpc.request.configGetAgent({}).then((c) => {
 			setCfg(c);
 			setAllowedDraft(c.allowedPrefixes.join(", "));
 			setDeniedDraft(c.deniedPrefixes.join(", "));
@@ -26,7 +27,7 @@ export function AgentPermissionsTab({ client }: { client: WebClient }) {
 	async function save(next: AgentConfig) {
 		setSaving(true);
 		try {
-			await client.setAgentConfig(next);
+			await rpc.request.configSetAgent(next);
 			setCfg(next);
 			setSavedAt(Date.now());
 			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);

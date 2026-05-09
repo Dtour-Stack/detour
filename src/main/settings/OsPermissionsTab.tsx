@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { OsPermissionInfo, OsPermissionStatus } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 const STATUS_TONE: Record<OsPermissionStatus, string> = {
 	granted: "ok",
@@ -16,14 +17,14 @@ const STATUS_LABEL: Record<OsPermissionStatus, string> = {
 	"not-applicable": "N/A",
 };
 
-export function OsPermissionsTab({ client }: { client: WebClient }) {
+export function OsPermissionsTab({ client: _client }: { client: WebClient }) {
 	const [perms, setPerms] = useState<OsPermissionInfo[] | null>(null);
 	const [refreshing, setRefreshing] = useState(false);
 
 	async function refresh() {
 		setRefreshing(true);
 		try {
-			setPerms(await client.listOsPermissions());
+			setPerms(await rpc.request.osListPermissions({}));
 		} finally {
 			setRefreshing(false);
 		}
@@ -35,7 +36,7 @@ export function OsPermissionsTab({ client }: { client: WebClient }) {
 	}, []);
 
 	async function openPane(id: OsPermissionInfo["id"]) {
-		await client.openOsPermissionPane(id).catch(() => {});
+		await rpc.request.osOpenPermissionPane({ id }).catch(() => {});
 	}
 
 	if (!perms) return <div className="hint">Probing OS permissions…</div>;

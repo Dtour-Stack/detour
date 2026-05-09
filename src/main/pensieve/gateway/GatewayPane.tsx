@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { GatewayIdentityCandidate, GatewayMessage, WebClient } from "../../api/client";
+import { rpc } from "../../rpc";
 
 const CHANNEL_COLORS: Record<string, string> = {
 	discord: "#5865F2",
@@ -35,7 +36,7 @@ function formatTime(ts: number): string {
 	return d.toLocaleString();
 }
 
-export function GatewayPane({ client }: { client: WebClient }) {
+export function GatewayPane({ client: _client }: { client: WebClient }) {
 	const [messages, setMessages] = useState<GatewayMessage[]>([]);
 	const [identities, setIdentities] = useState<GatewayIdentityCandidate[]>([]);
 	const [filter, setFilter] = useState<{ channel?: string; direction?: string; q?: string }>({});
@@ -44,16 +45,16 @@ export function GatewayPane({ client }: { client: WebClient }) {
 	const load = useCallback(async () => {
 		try {
 			const [feed, ids] = await Promise.all([
-				client.listGatewayFeed({ ...filter, limit: 200 }),
-				client.listGatewayIdentities(),
+				rpc.request.gatewayFeed({ ...filter, limit: 200 } as never),
+				rpc.request.gatewayIdentities({}),
 			]);
-			setMessages(feed.messages);
-			setIdentities(ids.identities);
+			setMessages(feed.messages as unknown as GatewayMessage[]);
+			setIdentities(ids.identities as unknown as GatewayIdentityCandidate[]);
 			setError(null);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		}
-	}, [client, filter]);
+	}, [filter]);
 
 	useEffect(() => {
 		void load();
