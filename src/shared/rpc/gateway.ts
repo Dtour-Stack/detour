@@ -7,11 +7,11 @@
  *   GET /api/gateway/identities                     → gatewayIdentities
  *     → { identities }
  *
- * The feed filter is narrowed to channel / direction / q / limit to match
- * the existing WebClient surface (other HTTP query params like roomId /
- * entityId / since aren't used by any current call site). The `all=1`
- * variant of identities isn't exposed via WebClient either, so the RPC
- * stays on the default `identityCandidates()` (merge-candidate) view.
+ * The feed filter is narrowed to channel / direction / q / limit (the
+ * bun-side service also supports roomId / entityId / since, but no
+ * current call site uses them). Identities returns merge-candidates
+ * only — the service's `allIdentities()` map view isn't exposed because
+ * no current view consumes it.
  */
 
 import type {

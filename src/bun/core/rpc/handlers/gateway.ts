@@ -5,9 +5,9 @@
  *   - gatewayFeed       → ChannelGatewayService.list({ channel?, direction?, q?, limit? })
  *   - gatewayIdentities → ChannelGatewayService.identityCandidates()
  *
- * The HTTP route also supports `all=1` to switch identities to the full
- * map (allIdentities), but no current WebClient call site exercises it,
- * so the RPC sticks to merge-candidates — the only view the UI uses.
+ * The bun-side service also exposes `allIdentities()` (the full map)
+ * but no current view exercises it, so the RPC sticks to
+ * merge-candidates — the only view the UI uses.
  */
 
 import type {

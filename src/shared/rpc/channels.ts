@@ -1,11 +1,10 @@
 import type { ChannelsSnapshot } from "../index";
 
 /**
- * Discord catch-up result wire shape. Mirrors the HTTP `/api/channels/
- * discord/catch-up` response when `wait` is truthy. `errorDetails` is
- * optional because — although the bun-side `DiscordCatchUpResult`
- * always carries it — the legacy WebClient typing leaves it optional and
- * call sites tolerate undefined.
+ * Discord catch-up result wire shape. Returned by
+ * `channelsDiscordCatchUp` when `wait` is truthy. `errorDetails` is
+ * optional because the bun-side `DiscordCatchUpResult` always carries
+ * it but call sites tolerate undefined.
  */
 export type ChannelsDiscordCatchUpResult = {
 	channelsScanned: number;

@@ -1,7 +1,6 @@
 /**
  * View-side typed RPC singleton — canonical IPC per
- * .claude/rules/electrobun.md. Replaces the legacy WebClient (HTTP +
- * WebSocket) entirely. All view↔bun traffic now flows through
+ * .claude/rules/electrobun.md. All view↔bun traffic flows through
  * electrobun's native postMessage bridge:
  *
  *   - rpc.request.<name>(...)  view → bun (awaitable)
@@ -42,8 +41,7 @@ installWebviewLogForwarder();
  * and console warnings inside chat / settings / pensieve windows are
  * invisible until the user manually opens DevTools.
  *
- * Pre-RPC migration this went over WebSocket via WebClient.send. Now
- * uses typed RPC `view.rpc.send.logWebview` — same shape, no WS.
+ * Forwarding goes over typed RPC via `view.rpc.send.logWebview`.
  */
 let webviewLogForwarderInstalled = false;
 let lastServerTraceId: string | undefined;

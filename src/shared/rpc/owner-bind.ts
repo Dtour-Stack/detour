@@ -9,9 +9,10 @@
  *   DELETE /api/owner-bind/<connector> → ownerBindUnbind
  *     → { ok }
  *
- * Connector enum mirrors the HTTP server: telegram | discord | wechat |
- * matrix. The current WebClient only narrows to telegram | discord but the
- * server accepts the full set, so the RPC schema does too.
+ * Connector enum mirrors the bun-side service: telegram | discord |
+ * wechat | matrix. Current call sites only invoke telegram | discord
+ * but the schema exposes the full set so future surfaces don't need a
+ * second migration.
  */
 
 import type { OwnerConnector } from "../../bun/core/owner-bind";

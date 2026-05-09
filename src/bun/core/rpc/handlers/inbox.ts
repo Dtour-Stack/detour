@@ -6,9 +6,9 @@
  *   - inboxUpdateStatus      → InboxService.updateStatus() [throws on miss]
  *   - inboxAct               → InboxService.act()          [throws on miss]
  *
- * `inboxPostNotification` always sets `kind: "notification"` to match the
- * existing WebClient wire (the HTTP route accepts arbitrary kinds, but no
- * call site uses anything other than notification).
+ * `inboxPostNotification` always sets `kind: "notification"` (the
+ * bun-side InboxService accepts arbitrary kinds, but no call site uses
+ * anything other than notification).
  */
 
 import type { InboxItem, InboxStatus } from "../../inbox";

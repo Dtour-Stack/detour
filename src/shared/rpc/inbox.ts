@@ -13,8 +13,8 @@
  * handler throwing — RPC has no status codes.
  *
  * The list filter is intentionally narrowed to status / kind / limit to
- * match the existing WebClient surface (other HTTP query params like
- * source/channel/since aren't used by any current call site).
+ * match the call sites' needs (the bun-side service supports more —
+ * source/channel/since — but no current view exercises them).
  */
 
 import type { InboxItem, InboxKind, InboxStatus } from "../../bun/core/inbox";

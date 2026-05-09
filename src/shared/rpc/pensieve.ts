@@ -2,9 +2,8 @@
  * Pensieve RPC schema — knowledge surface (templates, memories, knowledge,
  * embeddings, chronicler, relationships, graph).
  *
- * Wire shapes mirror the WebClient methods in `src/main/api/client.ts`
- * (NOT the raw HTTP envelope — HTTP wraps mutations in `{ ok: true, ... }`,
- * but WebClient strips that, and call sites consume the WebClient shape).
+ * Wire shapes return the unwrapped service result (no `{ ok: true, ... }`
+ * envelope — handlers throw on failure, the RPC layer surfaces it).
  *
  * UUID-branded ids (memory id, entity id, relationship source/target) cross
  * the wire as plain `string`; handlers cast via `as never` when calling
