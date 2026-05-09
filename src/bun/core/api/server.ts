@@ -791,10 +791,20 @@ export class ApiServer {
 	}
 
 	private async tryStart(port: number): Promise<{ port: number }> {
+		// CORS: webviews load from `views://main/...`, the API is at
+		// `http://127.0.0.1:<port>` — different origins, so POST with a JSON
+		// body triggers a preflight. The server is bound to 127.0.0.1 only,
+		// so allow * is safe for local-only access.
+		const corsHeaders: Record<string, string> = {
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+			"access-control-allow-headers": "content-type, authorization",
+			"access-control-max-age": "86400",
+		};
 		const json = (data: unknown, status = 200) =>
 			new Response(JSON.stringify(data), {
 				status,
-				headers: { "content-type": "application/json" },
+				headers: { "content-type": "application/json", ...corsHeaders },
 			});
 		const ok = () => json({ ok: true });
 		const error = (message: string, status = 400) =>
@@ -809,6 +819,12 @@ export class ApiServer {
 			// max Bun allows.
 			idleTimeout: 255,
 			fetch: async (req, server) => {
+				// CORS preflight — browsers send OPTIONS before any non-simple
+				// cross-origin request (POST application/json from a views://
+				// page). Respond with the allow-* headers and skip routing.
+				if (req.method === "OPTIONS") {
+					return new Response(null, { status: 204, headers: corsHeaders });
+				}
 				return this.handleHttpRequest(req, server, { json, ok, error });
 			},
 			websocket: {
