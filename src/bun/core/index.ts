@@ -14,6 +14,7 @@ import { InboxService } from "./inbox";
 import { OwnerBindService } from "./owner-bind";
 import { newTraceId, traceScope } from "./trace";
 import { LlamaServerService } from "./llama/server-service";
+import { PortlessService } from "./portless";
 import { PensieveService } from "./pensieve";
 import { RuntimeService } from "./runtime";
 import { VaultService } from "./vault";
@@ -30,6 +31,7 @@ export type CoreHandle = {
 	runtime: RuntimeService;
 	auth: AuthService;
 	api: ApiServer;
+	portless: PortlessService;
 	stop: () => void;
 };
 
@@ -159,6 +161,14 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		console.warn("[carrots] carrots dir not found — skipping carrot load");
 	}
 	runtime.setExtraPlugins(extraPlugins);
+
+	// Portless — local-dev reverse proxy giving each app a stable
+	// `<name>.localhost` URL instead of port-numbered URLs. v0 is HTTP-only
+	// on a non-privileged port (no sudo, no certs). Persistent route
+	// registry shared with the `portless` CLI via the standard state dir.
+	const portless = new PortlessService();
+	try { portless.start(); }
+	catch (err) { console.warn("[portless] start failed:", err instanceof Error ? err.message : err); }
 	// Local llama-server for embeddings (and later, optional chat fallback).
 	// Lazy-spawned on first ensureRunning() call, with model auto-download.
 	// We DO eagerly start it in the background so the first embedding call
@@ -226,7 +236,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
 		}
 	});
-	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity, channels, gateway, inbox, llama, cron, ownerBind);
+	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity, channels, gateway, inbox, llama, cron, ownerBind, portless);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
@@ -248,6 +258,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		runtime,
 		auth,
 		api,
+		portless,
 		stop: () => {
 			discordObservations.stop();
 			improvement.stop();
@@ -257,6 +268,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			api.stop();
 			llama.stop();
 			carrotManager.stopAll();
+			portless.stop();
 		},
 	};
 	return handle;

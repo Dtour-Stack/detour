@@ -1,10 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "../chat/App";
-import { PensieveView } from "../pensieve/PensieveView";
-import { ActivityView } from "../activity/ActivityView";
-import { ChannelsView } from "../channels/ChannelsView";
-import { BrowserView } from "../browser/BrowserView";
+import { App } from "./chat/App";
+import { PensieveView } from "./pensieve/PensieveView";
+import { ActivityView } from "./activity/ActivityView";
+import { ChannelsView } from "./channels/ChannelsView";
+import { BrowserView } from "./browser/BrowserView";
+import { PortlessView } from "./portless/PortlessView";
 import "./index.css";
 
 // Hash-routing: the same Vite bundle serves four windows.
@@ -19,6 +20,7 @@ const root =
 	hash === "#activity" ? <ActivityView /> :
 	hash === "#channels" ? <ChannelsView /> :
 	hash === "#browser" ? <BrowserView /> :
+	hash === "#portless" ? <PortlessView /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);

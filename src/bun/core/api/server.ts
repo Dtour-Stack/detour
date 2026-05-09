@@ -560,6 +560,7 @@ export class ApiServer {
 		private readonly llama: LlamaServerService,
 		private readonly cron: CronService,
 		private readonly ownerBind: OwnerBindService,
+		private readonly portless: import("../portless").PortlessService,
 	) {}
 
 	private async updateChroniclerConfig(ctx: ApiRequestContext): Promise<Response> {
@@ -888,6 +889,35 @@ export class ApiServer {
 				return json({ ok: true, version: VERSION });
 			}
 			return null;
+		},
+		// Portless — local-dev reverse proxy management.
+		async (ctx) => {
+			const { req, path, json, error } = ctx;
+			if (!path.startsWith("/api/portless")) return null;
+			if (req.method === "GET" && path === "/api/portless/status") {
+				return json(this.portless.snapshot());
+			}
+			if (req.method === "POST" && path === "/api/portless/routes") {
+				const body = (await req.json().catch(() => ({}))) as { hostname?: string; port?: number; force?: boolean };
+				if (!body.hostname || typeof body.port !== "number") return error("hostname and port required", 400);
+				try {
+					const result = this.portless.addRoute(body.hostname, body.port, { force: body.force });
+					return json({ ok: true, ...result, snapshot: this.portless.snapshot() });
+				} catch (err) {
+					return error(err instanceof Error ? err.message : String(err), 409);
+				}
+			}
+			if (req.method === "DELETE" && path.startsWith("/api/portless/routes/")) {
+				const hostname = decodeURIComponent(path.slice("/api/portless/routes/".length));
+				if (!hostname) return error("hostname required", 400);
+				this.portless.removeRoute(hostname);
+				return json({ ok: true, snapshot: this.portless.snapshot() });
+			}
+			if (req.method === "POST" && path === "/api/portless/prune") {
+				const removed = this.portless.pruneStale();
+				return json({ ok: true, removed, snapshot: this.portless.snapshot() });
+			}
+			return error("not found", 404);
 		},
 		// Debug: invoke an eliza action by name directly through the built
 		// runtime, bypassing the LLM action selector. Used to validate the

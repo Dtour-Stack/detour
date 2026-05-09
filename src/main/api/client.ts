@@ -45,7 +45,7 @@ import type {
 	WindowConfig,
 	WsClientMessage,
 	WsServerMessage,
-} from "../../../shared/index";
+} from "../../shared/index";
 
 type Listener = (msg: WsServerMessage) => void;
 
@@ -58,6 +58,22 @@ export type DiscordCatchUpResult = {
 	errors: number;
 	errorDetails?: Array<{ channelId: string; channelName?: string; error: string }>;
 };
+
+export interface PortlessRoute {
+	hostname: string;
+	port: number;
+	pid: number;
+	tailscaleUrl?: string;
+	tailscaleHttpsPort?: number;
+	tailscaleFunnel?: boolean;
+}
+
+export interface PortlessSnapshot {
+	running: boolean;
+	proxyPort: number;
+	tld: string;
+	routes: PortlessRoute[];
+}
 
 export class WebClient {
 	private ws: WebSocket | null = null;
@@ -571,6 +587,20 @@ export class WebClient {
 	// --- Local llama-server status ---
 	getLlamaStatus(): Promise<LlamaServerStatus> {
 		return this.json("GET", "/api/llama/status");
+	}
+
+	// Portless ────────────────────────────────────────────────────────────
+	async portlessStatus(): Promise<PortlessSnapshot> {
+		return this.json<PortlessSnapshot>("GET", "/api/portless/status");
+	}
+	async portlessAddRoute(hostname: string, port: number, force = false): Promise<{ ok: boolean; killedPid?: number; snapshot: PortlessSnapshot }> {
+		return this.json("POST", "/api/portless/routes", { hostname, port, force });
+	}
+	async portlessRemoveRoute(hostname: string): Promise<{ ok: boolean; snapshot: PortlessSnapshot }> {
+		return this.json("DELETE", `/api/portless/routes/${encodeURIComponent(hostname)}`);
+	}
+	async portlessPrune(): Promise<{ ok: boolean; removed: PortlessRoute[]; snapshot: PortlessSnapshot }> {
+		return this.json("POST", "/api/portless/prune");
 	}
 
 	private async json<T = unknown>(
