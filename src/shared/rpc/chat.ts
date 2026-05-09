@@ -12,9 +12,26 @@
  * the request promise stays open until the turn completes (or errors).
  */
 
+export type ChatFeedbackRating = 1 | -1;
+
 export type ChatRequests = {
 	chatSend: {
 		params: { convId: string; text: string };
+		response: { ok: true };
+	};
+	// Thumbs feedback on an agent reply. `traceId` is the assistant
+	// turn's trajectory id (same id the chat handler passes through
+	// traceScope, surfaced back to the view via chatDelta /
+	// chatComplete). Writes a feedback memory tagged with the trace id
+	// so the activity tab can render thumbs alongside the existing
+	// trajectory entries without changing the upstream eliza schema.
+	chatRateMessage: {
+		params: {
+			traceId: string;
+			convId: string;
+			rating: ChatFeedbackRating;
+			text?: string;
+		};
 		response: { ok: true };
 	};
 };

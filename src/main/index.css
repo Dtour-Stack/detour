@@ -291,6 +291,10 @@ body {
 .sub-nav-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
 
 .settings-main {
+	/* Sidebar is `position: absolute` so it's removed from grid flow —
+	 * without an explicit `grid-column: 2`, this would auto-place into
+	 * the first track (the 14px gutter) and clip the entire view. */
+	grid-column: 2;
 	overflow-y: auto;
 	padding: 16px 20px;
 }
@@ -2321,4 +2325,213 @@ label { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 
 	margin-top: 6px;
 	border-radius: var(--radius-md);
 	background: var(--bg-elevated);
+}
+
+/* ─── Chat hub: main + channel rail layout ───────────────────────────
+ *
+ * The chat window's body now hosts two layered surfaces:
+ *   .hub-main: full-bleed agent chat OR per-channel feed (mutually
+ *     exclusive — `activeView` toggles between them).
+ *   .hub-rail: thin (56px) right-side rail with one round icon per
+ *     active channel + a gear at the bottom for channel settings.
+ * The Settings drawer (.drawer) still slides in over both when toggled,
+ * matching the pre-merge popup behavior.
+ */
+.hub-shell {
+	width: 100vw;
+	height: 100vh;
+}
+
+.hub-body {
+	display: grid;
+	grid-template-columns: 1fr 56px;
+	min-height: 0;
+}
+
+.hub-main {
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+
+/* The agent chat itself fills the hub-main area (was a popup body). */
+.hub-main .chat-shell {
+	flex: 1;
+	min-height: 0;
+}
+
+.hub-rail {
+	background: var(--bg-elevated);
+	border-left: 1px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 12px 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+.hub-rail-divider {
+	width: 24px;
+	height: 1px;
+	background: var(--border);
+	margin: 4px 0;
+}
+
+.hub-rail-btn {
+	width: 40px;
+	height: 40px;
+	border-radius: 50%;
+	border: 1px solid var(--border);
+	background: var(--bg-card);
+	color: var(--fg);
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 16px;
+	font-weight: 500;
+	transition:
+		transform 120ms ease,
+		border-color 120ms ease,
+		background 120ms ease,
+		box-shadow 120ms ease;
+	position: relative;
+}
+.hub-rail-btn:hover {
+	transform: translateY(-1px);
+	border-color: var(--accent);
+}
+.hub-rail-btn.active {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+	color: var(--accent);
+	box-shadow: 0 0 0 2px var(--accent-soft);
+}
+/* Tone dot on the rail icon — bottom-right corner. */
+.hub-rail-btn::after {
+	content: "";
+	position: absolute;
+	right: 1px;
+	bottom: 1px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	border: 2px solid var(--bg-elevated);
+	background: var(--fg-subtle);
+}
+.hub-rail-btn[data-tone="ok"]::after { background: var(--ok); }
+.hub-rail-btn[data-tone="info"]::after { background: var(--info); }
+.hub-rail-btn[data-tone="warn"]::after { background: var(--warn); }
+.hub-rail-btn[data-tone="err"]::after { background: var(--error); }
+.hub-rail-btn[data-tone="muted"]::after { display: none; }
+
+.hub-rail-glyph {
+	font-size: 14px;
+	line-height: 1;
+}
+
+/* ─── Per-channel feed inside the hub ──────────────────────────────── */
+.hub-channel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+}
+.hub-channel-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 14px 16px 10px;
+	border-bottom: 1px solid var(--border);
+	background: var(--bg-elevated);
+}
+.hub-channel-header h2 {
+	margin: 0 0 2px;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--fg);
+}
+.hub-channel-list {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	list-style: none;
+	margin: 0;
+	padding: 8px 14px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.hub-channel-row {
+	display: grid;
+	grid-template-columns: 24px 1fr;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: var(--radius-sm);
+	font-size: 13px;
+	background: transparent;
+}
+.hub-channel-row:hover { background: var(--bg-elevated); }
+.hub-channel-row.dir-out { background: var(--accent-soft); }
+.hub-channel-dir {
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 12px;
+	color: var(--fg-muted);
+	text-align: center;
+}
+.hub-channel-meta {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	font-size: 11px;
+	color: var(--fg-muted);
+}
+.hub-channel-handle { color: var(--accent); font-weight: 500; }
+.hub-channel-text {
+	white-space: pre-wrap;
+	color: var(--fg);
+}
+
+/* ─── Thumbs feedback on agent bubbles ─────────────────────────────── */
+.bubble-feedback {
+	display: flex;
+	gap: 4px;
+	margin-top: 6px;
+	opacity: 0.55;
+	transition: opacity 120ms ease;
+}
+.bubble:hover .bubble-feedback,
+.bubble-feedback:focus-within { opacity: 1; }
+
+.bubble-feedback-btn {
+	width: 26px;
+	height: 26px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: transparent;
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+	transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.bubble-feedback-btn:hover {
+	background: var(--bg-elevated);
+	border-color: var(--border);
+	transform: scale(1.05);
+}
+.bubble-feedback-btn.active.up {
+	background: rgba(48, 209, 88, 0.18);
+	border-color: var(--ok);
+}
+.bubble-feedback-btn.active.down {
+	background: rgba(255, 59, 48, 0.18);
+	border-color: var(--error);
 }

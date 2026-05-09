@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { ThemeChoice } from "../../shared/index";
+import type { ChannelStatus, ThemeChoice } from "../../shared/index";
 import { ChatView } from "./ChatView";
+import { ChannelRail, type HubView } from "./ChannelRail";
+import { ChannelView } from "./ChannelView";
 import { SettingsView } from "../settings/SettingsView";
 import { rpc } from "../rpc";
 import { onUiOpenSettings } from "../rpc-listeners/chat";
@@ -43,6 +45,25 @@ export function App() {
 	const [activeProvider, setActiveProvider] = useState<string | null>(null);
 	const [llamaReady, setLlamaReady] = useState<boolean | null>(null);
 	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
+	const [activeView, setActiveView] = useState<HubView>("chat");
+	const [channels, setChannels] = useState<ChannelStatus[]>([]);
+
+	// Channel rail data — refreshed on a 6s cadence so the icon tone
+	// (online/error/etc) tracks the live channel state.
+	useEffect(() => {
+		let cancelled = false;
+		const refresh = () => {
+			void rpc.request.channelsList({}).then((s) => {
+				if (!cancelled) setChannels(s.channels);
+			}).catch(() => {});
+		};
+		refresh();
+		const t = setInterval(refresh, 6000);
+		return () => {
+			cancelled = true;
+			clearInterval(t);
+		};
+	}, []);
 
 	useEffect(() => {
 		rpc.request
@@ -134,8 +155,10 @@ export function App() {
 		void rpc.request.windowHide({});
 	}
 
+	const activeChannel = channels.find((c) => c.id === activeView);
+
 	return (
-		<div className="popup-shell">
+		<div className="popup-shell hub-shell">
 			<header className="popup-header electrobun-webkit-app-region-drag">
 				<div className="popup-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
 					<span>Detour</span>
@@ -266,8 +289,20 @@ export function App() {
 					</button>
 				</div>
 			</header>
-			<main className="popup-body">
-				<ChatView onOpenSettings={() => setDrawerOpen(true)} />
+			<main className="popup-body hub-body">
+				<div className="hub-main">
+					{activeView === "chat" || !activeChannel ? (
+						<ChatView onOpenSettings={() => setDrawerOpen(true)} />
+					) : (
+						<ChannelView channel={activeChannel} />
+					)}
+				</div>
+				<ChannelRail
+					channels={channels}
+					activeView={activeView}
+					onSelectView={setActiveView}
+					onOpenChannelSettings={() => setDrawerOpen(true)}
+				/>
 				{drawerOpen && (
 					<div className="drawer">
 						<div className="drawer-header electrobun-webkit-app-region-drag">

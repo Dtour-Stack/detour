@@ -51,5 +51,39 @@ export function chatRequests(deps: RpcDeps) {
 			});
 			return { ok: true };
 		},
+
+		/**
+		 * Thumbs feedback on an agent reply. Writes a Pensieve memory
+		 * tagged `feedback` + `chat-rate` with the trace id, conv id,
+		 * rating, and (optionally) the assistant text snippet that was
+		 * being rated. The activity tab can later join this against the
+		 * trajectory log via traceId for a "human-feedback signal" view.
+		 */
+		chatRateMessage: async (params: {
+			traceId: string;
+			convId: string;
+			rating: 1 | -1;
+			text?: string;
+		}): Promise<{ ok: true }> => {
+			const { traceId, convId, rating, text } = params;
+			try {
+				const ratingLabel = rating > 0 ? "thumbs-up" : "thumbs-down";
+				await deps.pensieve.memories.create({
+					text: text
+						? `[${ratingLabel}] ${text.slice(0, 500)}`
+						: `[${ratingLabel}] (no snippet)`,
+					type: "feedback",
+					path: `feedback/chat/${traceId}`,
+					tags: ["feedback", "chat-rate", ratingLabel],
+					extraMetadata: { traceId, convId, rating },
+				});
+			} catch (err) {
+				console.warn(
+					"[chat.rate] failed to record feedback:",
+					err instanceof Error ? err.message : err,
+				);
+			}
+			return { ok: true };
+		},
 	};
 }

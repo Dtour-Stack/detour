@@ -5,7 +5,12 @@ import { broadcaster } from "../../core/rpc/registry";
 import { setWindowControllerForRpc } from "../../core/rpc/window-controller-registry";
 import type { WindowCommand } from "../../core/api/server";
 
-const DEFAULT_WIDTH = 480;
+// Centered medium-sized chat hub. Was 480x720 tray popup pre-channels-
+// merge; now a regular framed window that hosts the agent chat plus a
+// right-side rail of channel feeds (Discord / Telegram / iMessage /
+// GitHub / in-app). Draggable, resizable, settings drawer still slides
+// in from the right.
+const DEFAULT_WIDTH = 960;
 const DEFAULT_HEIGHT = 720;
 
 export const chatFeature: Feature = {
@@ -13,18 +18,20 @@ export const chatFeature: Feature = {
 	init(deps) {
 		let chatWindow: WindowHandle | null = null;
 		let isShown = false;
-		let pinned = false;
 		let currentWidth = DEFAULT_WIDTH;
 		let currentHeight = DEFAULT_HEIGHT;
 
 		// Window control surface — invoked by typed RPC (windowHide /
 		// windowPin / windowResize) via the registry in
 		// src/bun/core/rpc/window-controller-registry.ts.
+		// `pin` is a no-op now that the window is regular-framed (no
+		// hide-on-blur to suppress); kept for back-compat with the
+		// existing settings-drawer toggle code.
 		const handleWindowCommand = (cmd: WindowCommand) => {
 			if (cmd.kind === "hide") {
 				hide();
 			} else if (cmd.kind === "pin") {
-				pinned = cmd.on;
+				/* no-op — window stays open until user closes it. */
 			} else if (cmd.kind === "resize") {
 				currentWidth = cmd.width;
 				currentHeight = cmd.height;
@@ -44,22 +51,17 @@ export const chatFeature: Feature = {
 			// RPC handlers are mounted globally by WindowFactory via the
 			// registry — no per-window handler block here. See
 			// src/bun/core/rpc/registry.ts and docs/rpc-migration.md.
-			const handle = deps.windows.createPopup({
+			const handle = deps.windows.createWindow({
 				viewKey: "chat",
+				title: "Detour",
 				width: currentWidth,
 				height: currentHeight,
+				centered: true,
 				url: resolveViewUrl(),
-				hideOnBlur: false,
-				alwaysOnTop: true,
 			});
 			handle.onClose(() => {
 				chatWindow = null;
 				isShown = false;
-				pinned = false;
-			});
-			// Honor pin state on blur — only hide when not pinned (settings drawer open).
-			handle.onBlur(() => {
-				if (!pinned) hide();
 			});
 			chatWindow = handle;
 			return handle;
@@ -67,12 +69,6 @@ export const chatFeature: Feature = {
 
 		function show() {
 			const handle = ensureWindow();
-			deps.windows.positionUnderTrayBounds(
-				handle,
-				deps.tray.getBounds(),
-				currentWidth,
-				currentHeight,
-			);
 			handle.show();
 			handle.focus();
 			isShown = true;

@@ -10,6 +10,11 @@ type Bubble = {
 	text: string;
 	thinking?: boolean;
 	media?: { kind: "video"; url: string; contentType?: string };
+	// `traceId` is the assistant turn's trajectory id (set on first
+	// chatDelta after the bubble is created). When present, the
+	// bubble renders thumbs feedback buttons.
+	traceId?: string;
+	rating?: 1 | -1;
 };
 
 const CONV_ID = "web-default";
@@ -72,7 +77,14 @@ export function ChatView({
 			setBubbles((bs) =>
 				bs.map((b) =>
 					b.id === assistantId.current
-						? { ...b, thinking: false, text: b.thinking ? msg.delta : b.text + msg.delta }
+						? {
+							...b,
+							thinking: false,
+							text: b.thinking ? msg.delta : b.text + msg.delta,
+							// Stamp the trace id on the first delta so the
+							// thumbs buttons have a target id to rate.
+							...(b.traceId || !msg.traceId ? {} : { traceId: msg.traceId }),
+						}
 						: b,
 				),
 			);
@@ -81,8 +93,13 @@ export function ChatView({
 			if (msg.convId !== CONV_ID) return;
 			setBubbles((bs) =>
 				bs.map((b) =>
-					b.id === assistantId.current && b.thinking
-						? { ...b, thinking: false, text: "(no response)" }
+					b.id === assistantId.current
+						? {
+							...b,
+							thinking: false,
+							text: b.thinking ? "(no response)" : b.text,
+							...(b.traceId || !msg.traceId ? {} : { traceId: msg.traceId }),
+						}
 						: b,
 				),
 			);
@@ -154,6 +171,26 @@ export function ChatView({
 			assistantId.current = null;
 			setPending(false);
 		});
+	}
+
+	function rateBubble(bubbleId: string, rating: 1 | -1) {
+		const bubble = bubbles.find((b) => b.id === bubbleId);
+		if (!bubble?.traceId) return;
+		const next = bubble.rating === rating ? undefined : rating;
+		// Optimistic UI; flip back if the RPC rejects.
+		setBubbles((bs) => bs.map((b) => (b.id === bubbleId ? { ...b, rating: next } : b)));
+		if (next === undefined) return; // un-rating is local-only for now
+		void rpc.request
+			.chatRateMessage({
+				traceId: bubble.traceId,
+				convId: CONV_ID,
+				rating: next,
+				text: bubble.text,
+			})
+			.catch((err) => {
+				console.warn("chatRateMessage failed:", err);
+				setBubbles((bs) => bs.map((b) => (b.id === bubbleId ? { ...b, rating: bubble.rating } : b)));
+			});
 	}
 
 	function runVideoCommand(prompt: string) {
@@ -229,6 +266,12 @@ export function ChatView({
 								playsInline
 							/>
 						)}
+						{b.role === "assistant" && b.traceId && !b.thinking && (
+							<FeedbackButtons
+								rating={b.rating}
+								onRate={(rating) => rateBubble(b.id, rating)}
+							/>
+						)}
 					</div>
 				))}
 				<div ref={bottomRef} />
@@ -287,6 +330,37 @@ export function ChatView({
 					}}
 				/>
 			</div>
+		</div>
+	);
+}
+
+function FeedbackButtons({
+	rating,
+	onRate,
+}: {
+	rating?: 1 | -1;
+	onRate: (rating: 1 | -1) => void;
+}) {
+	return (
+		<div className="bubble-feedback" role="group" aria-label="Rate this reply">
+			<button
+				type="button"
+				className={`bubble-feedback-btn${rating === 1 ? " active up" : ""}`}
+				onClick={() => onRate(1)}
+				title="Good response"
+				aria-label="Thumbs up"
+			>
+				👍
+			</button>
+			<button
+				type="button"
+				className={`bubble-feedback-btn${rating === -1 ? " active down" : ""}`}
+				onClick={() => onRate(-1)}
+				title="Bad response"
+				aria-label="Thumbs down"
+			>
+				👎
+			</button>
 		</div>
 	);
 }
