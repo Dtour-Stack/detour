@@ -22,9 +22,19 @@ const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callbac
 
 // OpenRouter PKCE flow constants —
 // https://openrouter.ai/docs/guides/overview/auth/oauth
+//
+// OpenRouter's docs recommend `http://localhost:3000` as the callback
+// for local-first apps; ephemeral 127.0.0.1 ports trip a 409 "Failed to
+// create or update app while creating auth code" on their side because
+// each unique callback URL gets registered as a distinct "app" tied to
+// the user's account. Sticking to a stable localhost:3000 callback
+// matches what their docs explicitly bless. If 3000 is in use, we fall
+// through to a small set of stable alternatives before erroring.
 const OPENROUTER_AUTH_URL = "https://openrouter.ai/auth";
 const OPENROUTER_TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
 const OPENROUTER_CALLBACK_PATH = "/openrouter-callback";
+// 4848 is reserved for Detour's portless reverse proxy — skip.
+const OPENROUTER_PREFERRED_PORTS = [3000, 5454, 6464, 7373];
 const OPENROUTER_FLOW_TIMEOUT_MS = 5 * 60_000;
 
 const OPENROUTER_SUCCESS_HTML = `<!doctype html>
@@ -228,17 +238,44 @@ export function authRequests(deps: RpcDeps) {
 				}
 			});
 
-			await new Promise<void>((resolve, reject) => {
-				server.once("error", reject);
-				server.listen(0, "127.0.0.1", () => resolve());
-			});
-			const address = server.address();
-			if (!address || typeof address === "string") {
-				server.close();
-				throw new Error("Failed to bind OpenRouter callback listener");
+			let boundPort: number | null = null;
+			let lastErr: Error | null = null;
+			for (const candidate of OPENROUTER_PREFERRED_PORTS) {
+				try {
+					await new Promise<void>((resolve, reject) => {
+						const onError = (err: Error) => {
+							server.removeListener("error", onError);
+							reject(err);
+						};
+						server.once("error", onError);
+						server.listen(candidate, "127.0.0.1", () => {
+							server.removeListener("error", onError);
+							resolve();
+						});
+					});
+					boundPort = candidate;
+					break;
+				} catch (err) {
+					lastErr = err instanceof Error ? err : new Error(String(err));
+					// EADDRINUSE → try next port. Anything else → bubble.
+					if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") {
+						server.close();
+						throw lastErr;
+					}
+				}
 			}
-			const port = address.port;
-			const callbackUrl = `http://127.0.0.1:${port}${OPENROUTER_CALLBACK_PATH}`;
+			if (boundPort === null) {
+				server.close();
+				throw new Error(
+					`Couldn't bind any of the recommended OpenRouter callback ports (${OPENROUTER_PREFERRED_PORTS.join(", ")}). Last error: ${lastErr?.message ?? "unknown"}`,
+				);
+			}
+			// Use `localhost` (not `127.0.0.1`) in the callback URL — OpenRouter's
+			// docs explicitly recommend `http://localhost:3000` for local-first
+			// apps, and they normalize the host as part of their "app" registry
+			// dedupe. Going through 127.0.0.1 produces a 409 "Failed to create
+			// or update app".
+			const callbackUrl = `http://localhost:${boundPort}${OPENROUTER_CALLBACK_PATH}`;
 			const authUrl =
 				`${OPENROUTER_AUTH_URL}?callback_url=${encodeURIComponent(callbackUrl)}` +
 				`&code_challenge=${encodeURIComponent(challenge)}` +
