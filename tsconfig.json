@@ -29,17 +29,16 @@
 			"@detour/plugin-pensieve-tools": ["./src/bun/plugins/pensieve-tools/index.ts"],
 			"@detour/plugin-vault-tools": ["./src/bun/plugins/vault-tools/index.ts"],
 			"@detour/plugin-vault-tools/*": ["./src/bun/plugins/vault-tools/*"],
-			"@detour/plugin-x-tweets": ["./src/bun/plugins/x-tweets/index.ts"],
-			"@detour/cli": ["./cli/src/index.ts"]
+			"@detour/plugin-x-tweets": ["./src/bun/plugins/x-tweets/index.ts"]
 		}
 	},
-	"include": ["src", "cli/src", "electrobun.config.ts"],
+	"include": ["src", "electrobun.config.ts"],
 	"exclude": [
 		"node_modules",
 		"build",
 		"packages",
 		"eliza",
 		"docs",
-		"src/views/_shared/public"
+		"src/main/public"
 	]
 }

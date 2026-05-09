@@ -11,7 +11,6 @@
     "build:canary": "electrobun build --env=canary",
     "build:stable": "electrobun build --env=stable",
     "typecheck": "tsc --noEmit",
-    "cli": "bun cli/bin/detour.ts",
     "build:eliza": "bun run --cwd eliza/packages/shared build:i18n && bun run --cwd eliza/packages/core build && bun run --cwd eliza/packages/shared build:dist && bun run --cwd eliza/packages/vault build && bun run --cwd eliza/plugins/plugin-sql build && bun run --cwd eliza/plugins/plugin-anthropic build && bun run --cwd eliza/plugins/plugin-openai build && bun run --cwd eliza/plugins/plugin-imessage build && bun run --cwd eliza/plugins/plugin-discord build && (cd eliza/plugins/plugin-github && bunx tsup src/index.ts src/register-routes.ts --format esm --no-dts --clean) && (cd eliza/plugins/plugin-telegram && bunx tsup --no-dts)"
   },
   "dependencies": {

@@ -28,8 +28,8 @@
  * setting/env var (must be a hf:// reference).
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -96,14 +96,11 @@ function parseHfModelRef(modelRef: string): HfModelRef {
 
 function resolveBundledBinaryDir(): string {
 	// In the bundled .app: bun/index.js + bun/llama/llama-server.
-	// In dev (running source via Bun): packages/tray/build-assets/llama, but
-	// only when prepare:llama has run. We pick whichever exists.
+	// In dev (running source via Bun): <repo-root>/build-assets/llama.
 	const candidates: string[] = [];
 	const here = dirname(new URL(import.meta.url).pathname);
-	candidates.push(join(here, "..", "..", "..", "tray", "build-assets", "llama"));
-	candidates.push(join(here, "..", "..", "..", "..", "tray", "build-assets", "llama"));
-	candidates.push(join(here, "llama"));
-	candidates.push(join(here, "..", "llama"));
+	// <repo>/src/bun/core/llama → <repo>/build-assets/llama
+	candidates.push(join(here, "..", "..", "..", "..", "build-assets", "llama"));
 	// When running as `Detour-dev.app`, process.execPath points to the bundled
 	// bun, and the binary lives next to it under Resources/app/bun/llama/.
 	if (process.execPath) {
@@ -116,7 +113,7 @@ function resolveBundledBinaryDir(): string {
 		}
 	}
 	throw new Error(
-		`llama-server binary not found. Checked:\n${candidates.join("\n")}\nRun \`bun run prepare:llama\` in packages/tray to download it.`,
+		`llama-server binary not found. Checked:\n${candidates.join("\n")}`,
 	);
 }
 
@@ -158,6 +155,10 @@ export class LlamaServerService {
 
 	private async start(): Promise<{ url: string; modelPath: string } | null> {
 		try {
+			// Reap any orphaned llama-server from a prior run (parent SIGKILL'd
+			// or crashed before stop() ran). pidfile-based — safe across PID
+			// reuse via comm-name verification.
+			this.reapOrphan();
 			const binaryDir = this.config.binaryDir ?? resolveBundledBinaryDir();
 			const modelsDir = this.config.modelsDir ?? join(resolveStateDir(), "llama", "models");
 			mkdirSync(modelsDir, { recursive: true });
@@ -184,6 +185,16 @@ export class LlamaServerService {
 			this.port = port;
 			this.startedAt = Date.now();
 			this.lastError = null;
+			if (child.pid !== undefined) {
+				this.writePidFile(child.pid);
+				// Watchdog: a detached shell process that polls our pid and
+				// SIGKILLs llama when we die. The electrobun launcher masks
+				// SIGTERM/SIGINT before they reach Bun's process listeners,
+				// so JS-side cleanup hooks can't be relied on. The watchdog
+				// runs in its own process group so it survives bun's death
+				// and reliably reaps llama within ~1s.
+				this.spawnWatchdog(process.pid, child.pid);
+			}
 
 			// Bubble useful errors but don't spam the parent's stdout.
 			let stderrTail = "";
@@ -197,6 +208,7 @@ export class LlamaServerService {
 				this.process = null;
 				this.port = null;
 				this.startedAt = null;
+				this.removePidFile();
 			});
 			child.on("error", (err) => {
 				this.lastError = err.message;
@@ -217,9 +229,69 @@ export class LlamaServerService {
 	}
 
 	stop(): void {
-		this.process?.kill("SIGTERM");
+		const child = this.process;
 		this.process = null;
 		this.port = null;
+		this.removePidFile();
+		// SIGKILL — synchronous from our side and unignorable. The exit handler
+		// in src/bun/index.ts has microseconds before process.exit() fires; a
+		// graceful SIGTERM the child might miss isn't worth the orphan risk.
+		try { child?.kill("SIGKILL"); } catch { /* already dead */ }
+	}
+
+	private pidFilePath(): string {
+		return join(resolveStateDir(), "llama", "server.pid");
+	}
+
+	private writePidFile(pid: number): void {
+		try {
+			const path = this.pidFilePath();
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, String(pid), "utf8");
+		} catch { /* best-effort */ }
+	}
+
+	private removePidFile(): void {
+		try { unlinkSync(this.pidFilePath()); } catch { /* missing or already gone */ }
+	}
+
+	private spawnWatchdog(parentPid: number, childPid: number): void {
+		try {
+			// Poll once a second; when parent dies, SIGKILL llama and exit.
+			const cmd = `while kill -0 ${parentPid} 2>/dev/null; do sleep 1; done; kill -9 ${childPid} 2>/dev/null`;
+			spawn("sh", ["-c", cmd], {
+				detached: true,
+				stdio: "ignore",
+			}).unref();
+		} catch { /* best-effort */ }
+	}
+
+	private reapOrphan(): void {
+		const path = this.pidFilePath();
+		if (!existsSync(path)) return;
+		try {
+			const raw = readFileSync(path, "utf8").trim();
+			const pid = Number.parseInt(raw, 10);
+			if (!Number.isFinite(pid) || pid <= 1) {
+				unlinkSync(path);
+				return;
+			}
+			// Verify the pid is actually a llama-server (avoid PID-reuse killing
+			// an unrelated process). Skip on win32 where `ps` isn't available.
+			if (process.platform !== "win32") {
+				const probe = spawnSync("ps", ["-p", String(pid), "-o", "comm="], { encoding: "utf8" });
+				const comm = probe.stdout?.trim() ?? "";
+				if (!comm.includes("llama-server")) {
+					unlinkSync(path);
+					return;
+				}
+			}
+			try {
+				process.kill(pid, "SIGKILL");
+				console.log(`[llama-server] reaped orphaned pid=${pid} from previous run`);
+			} catch { /* already dead */ }
+			unlinkSync(path);
+		} catch { /* best-effort */ }
 	}
 
 	private async pickPort(): Promise<number> {
