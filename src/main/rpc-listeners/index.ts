@@ -13,6 +13,7 @@
 import type { DetourRPC } from "../../shared/rpc";
 import { authMessages } from "./auth";
 import { browserMessages } from "./browser";
+import { chatMessages } from "./chat";
 import { configMessages } from "./config";
 import { providersMessages } from "./providers";
 import { vaultMessages } from "./vault";
@@ -34,5 +35,6 @@ export function buildViewListeners(): ViewMessageBag {
 		...vaultMessages(),
 		...configMessages(),
 		...browserMessages(),
+		...chatMessages(),
 	};
 }

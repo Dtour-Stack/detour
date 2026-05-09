@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { ProviderId, ProviderInfo } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { onAuthFlowUpdate } from "../rpc-listeners/auth";
 import { onProviderChanged } from "../rpc-listeners/providers";
@@ -62,7 +61,7 @@ function fmtExpires(expires?: number) {
 	return `expires in ${mins}m`;
 }
 
-export function ProvidersTab({ client }: { client: WebClient }) {
+export function ProvidersTab() {
 	const [providers, setProviders] = useState<ProviderInfo[]>([]);
 	const [accounts, setAccounts] = useState<Record<string, AccountSummary[]>>({});
 	const [drafts, setDrafts] = useState<Record<string, string>>({});

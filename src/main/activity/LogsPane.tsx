@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActivityLogEntry } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
@@ -13,7 +12,7 @@ const LEVEL_COLORS: Record<string, string> = {
 	fatal: "var(--error)",
 };
 
-export function LogsPane({ client: _client }: { client: WebClient }) {
+export function LogsPane() {
 	const [level, setLevel] = useState("info");
 	const [q, setQ] = useState("");
 	const fetcher = useCallback(

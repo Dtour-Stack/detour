@@ -112,18 +112,8 @@ export type RegularWindowOptions = {
 
 export class WindowFactory {
 	constructor(
-		private readonly apiBase: string,
 		private readonly rpcDeps: RpcDeps,
 	) {}
-
-	private preload(): string {
-		// Runs in the page context BEFORE any of the page's scripts. Sets
-		// the API base URL the React app needs to talk to bun's HTTP/WS
-		// server — `location.host` under views:// is the view name, not
-		// the API host, so we have to inject this explicitly. Goes away
-		// in Phase 2 after the HTTP/WS server is removed.
-		return `window.__detourApiBase = ${JSON.stringify(this.apiBase)};`;
-	}
 
 	private buildRpc(): DefinedRPC {
 		return BrowserView.defineRPC<DetourRPC>({
@@ -153,7 +143,6 @@ export class WindowFactory {
 			title: "",
 			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
-			preload: this.preload(),
 			viewsRoot: null,
 			renderer: "native",
 			rpc,
@@ -186,7 +175,6 @@ export class WindowFactory {
 			title: opts.title,
 			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
-			preload: this.preload(),
 			viewsRoot: null,
 			renderer: "native",
 			rpc,

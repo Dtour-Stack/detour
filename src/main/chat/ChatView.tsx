@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderId } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
+import { onChatComplete, onChatDelta, onChatError } from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
 
 type Bubble = {
@@ -38,10 +38,8 @@ function uid() {
 }
 
 export function ChatView({
-	client,
 	onOpenSettings,
 }: {
-	client: WebClient;
 	onOpenSettings: () => void;
 }) {
 	const [bubbles, setBubbles] = useState<Bubble[]>([]);
@@ -67,43 +65,45 @@ export function ChatView({
 			.providersList({})
 			.then((ps) => setActiveProvider(ps.find((p) => p.active)?.id ?? null))
 			.catch(() => {});
-		// Chat streaming (chat:delta/complete/error) still uses WS — out of
-		// scope for the providers+auth migration phase.
-		const off = client.on((msg) => {
-			if (msg.kind === "chat:delta" && msg.convId === CONV_ID) {
-				setBubbles((bs) =>
-					bs.map((b) =>
-						b.id === assistantId.current
-							? { ...b, thinking: false, text: b.thinking ? msg.delta : b.text + msg.delta }
-							: b,
-					),
-				);
-			} else if (msg.kind === "chat:complete" && msg.convId === CONV_ID) {
-				setBubbles((bs) =>
-					bs.map((b) =>
-						b.id === assistantId.current && b.thinking
-							? { ...b, thinking: false, text: "(no response)" }
-							: b,
-					),
-				);
-				assistantId.current = null;
-				setPending(false);
-			} else if (msg.kind === "chat:error" && msg.convId === CONV_ID) {
-				setBubbles((bs) => [
-					...bs.filter((b) => b.id !== assistantId.current),
-					{ id: uid(), role: "error", text: msg.message },
-				]);
-				assistantId.current = null;
-				setPending(false);
-			}
+		const offDelta = onChatDelta((msg) => {
+			if (msg.convId !== CONV_ID) return;
+			setBubbles((bs) =>
+				bs.map((b) =>
+					b.id === assistantId.current
+						? { ...b, thinking: false, text: b.thinking ? msg.delta : b.text + msg.delta }
+						: b,
+				),
+			);
 		});
-		// `provider:changed` migrated to typed RPC.
+		const offComplete = onChatComplete((msg) => {
+			if (msg.convId !== CONV_ID) return;
+			setBubbles((bs) =>
+				bs.map((b) =>
+					b.id === assistantId.current && b.thinking
+						? { ...b, thinking: false, text: "(no response)" }
+						: b,
+				),
+			);
+			assistantId.current = null;
+			setPending(false);
+		});
+		const offError = onChatError((msg) => {
+			if (msg.convId !== CONV_ID) return;
+			setBubbles((bs) => [
+				...bs.filter((b) => b.id !== assistantId.current),
+				{ id: uid(), role: "error", text: msg.message },
+			]);
+			assistantId.current = null;
+			setPending(false);
+		});
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		return () => {
-			off();
+			offDelta();
+			offComplete();
+			offError();
 			offProvider();
 		};
-	}, [client]);
+	}, []);
 
 	useEffect(() => {
 		bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -125,7 +125,14 @@ export function ChatView({
 			{ id: aId, role: "assistant", text: "", thinking: true },
 		]);
 		setPending(true);
-		client.send({ kind: "chat:send", convId: CONV_ID, text: text.trim() });
+		void rpc.request.chatSend({ convId: CONV_ID, text: text.trim() }).catch((err) => {
+			setBubbles((bs) => [
+				...bs.filter((b) => b.id !== assistantId.current),
+				{ id: uid(), role: "error", text: err instanceof Error ? err.message : String(err) },
+			]);
+			assistantId.current = null;
+			setPending(false);
+		});
 	}
 
 	function insertSlash(command: SlashCommand) {

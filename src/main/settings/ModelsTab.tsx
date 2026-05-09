@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse, ProviderId } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
 const CODEX_MODELS = [
@@ -94,7 +93,7 @@ function ensureModel(models: OpenRouterModelInfo[], id: string): OpenRouterModel
 	];
 }
 
-export function ModelsTab({ client }: { client: WebClient }) {
+export function ModelsTab() {
 	const [cfg, setCfg] = useState<ModelConfig | null>(null);
 	const [cfgError, setCfgError] = useState<string | null>(null);
 	const [catalog, setCatalog] = useState<OpenRouterModelsResponse | null>(null);
@@ -109,7 +108,7 @@ export function ModelsTab({ client }: { client: WebClient }) {
 			.catch((err) => setCfgError(err instanceof Error ? err.message : String(err)));
 		void refreshOpenRouterModels();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [client]);
+	}, []);
 
 	async function refreshOpenRouterModels() {
 		setLoadingCatalog(true);

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { AgentConfig, AgentVaultMode } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
 const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
@@ -9,7 +8,7 @@ const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
 	{ id: "read-write", label: "Read + write", help: "Agent can also save / overwrite / delete entries." },
 ];
 
-export function AgentPermissionsTab({ client }: { client: WebClient }) {
+export function AgentPermissionsTab() {
 	const [cfg, setCfg] = useState<AgentConfig | null>(null);
 	const [allowedDraft, setAllowedDraft] = useState("");
 	const [deniedDraft, setDeniedDraft] = useState("");
@@ -22,7 +21,7 @@ export function AgentPermissionsTab({ client }: { client: WebClient }) {
 			setAllowedDraft(c.allowedPrefixes.join(", "));
 			setDeniedDraft(c.deniedPrefixes.join(", "));
 		});
-	}, [client]);
+	}, []);
 
 	async function save(next: AgentConfig) {
 		setSaving(true);

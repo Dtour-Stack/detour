@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { InboxItem, WebClient } from "../../api/client";
+import type { InboxItem } from "../../../bun/core/inbox";
 import { rpc } from "../../rpc";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -38,7 +38,7 @@ function formatTime(ts: number): string {
 	return d.toLocaleString();
 }
 
-export function InboxPane({ client: _client }: { client: WebClient }) {
+export function InboxPane() {
 	const [items, setItems] = useState<InboxItem[]>([]);
 	const [total, setTotal] = useState(0);
 	const [loading, setLoading] = useState(true);

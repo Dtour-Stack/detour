@@ -1,4 +1,5 @@
 import { Utils } from "electrobun/bun";
+import { registerWindow } from "../../core/rpc/registry";
 import type { Feature } from "../../kernel/registry";
 
 export const notificationsFeature: Feature = {
@@ -13,17 +14,19 @@ export const notificationsFeature: Feature = {
 		});
 
 		// Auto-notify on agent errors so the user sees them when the popup is hidden.
-		// Listens via in-process ApiServer.listen() — no WS round-trip.
-		deps.core.api.listen((msg) => {
-			if (msg.kind === "chat:error") {
-				try {
-					Utils.showNotification({
-						title: "Detour error",
-						body: msg.message,
-					});
-				} catch {
-					// best effort
-				}
+		// Hooks into the typed-RPC broadcaster: every `chatError` push fans out to
+		// every registered window send fn, including this in-process faux-send,
+		// which lets us surface the error as a system notification.
+		registerWindow((name, payload) => {
+			if (name !== "chatError") return;
+			const message = (payload as { message?: string } | null)?.message ?? "";
+			try {
+				Utils.showNotification({
+					title: "Detour error",
+					body: message,
+				});
+			} catch {
+				// best effort
 			}
 		});
 	},

@@ -16,8 +16,7 @@ export function createKernel(opts: {
 	core: CoreHandle;
 }): KernelDeps {
 	const events = new EventBus<KernelEvents>();
-	const apiBase = `http://127.0.0.1:${opts.core.port}`;
-	const windows = new WindowFactory(apiBase, opts.core.rpcDeps);
+	const windows = new WindowFactory(opts.core.rpcDeps);
 	const tray = new TrayController({ title: opts.trayTitle });
 
 	// Bridge typed-RPC broadcasts onto the kernel event bus. The browser

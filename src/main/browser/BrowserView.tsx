@@ -1,6 +1,5 @@
-import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserCommand, SavedLoginEntry } from "../../shared/index";
-import { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { onBrowserCommand } from "../rpc-listeners/browser";
 
@@ -242,9 +241,7 @@ function useElectrobunWebviewScript(): "loading" | "ready" | "unavailable" {
 }
 
 export function BrowserView() {
-	const client = useMemo(() => new WebClient(), []);
 	const scriptStatus = useElectrobunWebviewScript();
-	const [connected, setConnected] = useState(false);
 	const [stageReady, setStageReady] = useState(false);
 	const [tabs, setTabs] = useState<BrowserTab[]>(() => {
 		const id = makeId();
@@ -427,7 +424,7 @@ export function BrowserView() {
 		} finally {
 			setLoginBusy(null);
 		}
-	}, [client, executeInTab]);
+	}, [executeInTab]);
 
 	const reportCommandResult = useCallback((command: BrowserCommand, result: { ok: boolean; result?: unknown; error?: string; text?: string }) => {
 		void rpc.request.browserCommandReport({ commandId: command.id, result }).catch(() => {});
@@ -465,12 +462,12 @@ export function BrowserView() {
 	}, [addTab, executeInTab, fillLogin, navigateTab, reportCommandResult]);
 
 	useEffect(() => {
-		client
-			.connect()
-			.then(async () => {
-				setConnected(true);
-				const since = Date.now() - 30_000;
-				const queued = await rpc.request.browserCommandsList({ since });
+		// Replay any browser commands queued in the last 30s — covers the
+		// case where bun enqueued a command before this view mounted.
+		const since = Date.now() - 30_000;
+		rpc.request
+			.browserCommandsList({ since })
+			.then((queued) => {
 				for (const command of queued.commands) handleCommand(command);
 			})
 			.catch((err) => {
@@ -478,7 +475,7 @@ export function BrowserView() {
 			});
 		const off = onBrowserCommand((payload) => handleCommand(payload.command));
 		return off;
-	}, [client, handleCommand]);
+	}, [handleCommand]);
 
 	useEffect(() => {
 		const view = webviews.current.get(activeTabId);
@@ -747,7 +744,6 @@ export function BrowserView() {
 				)}
 			</main>
 			<footer className="agent-browser-status">
-				<span>{connected ? "connected" : "connecting"}</span>
 				<span>{statusText}</span>
 				<span>partition: {PARTITION}</span>
 			</footer>

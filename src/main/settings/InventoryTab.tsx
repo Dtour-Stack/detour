@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { WebClient } from "../api/client";
 import type { VaultInventoryItem, VaultStats } from "../../shared/index";
 import { rpc } from "../rpc";
 
 type Entry = VaultInventoryItem;
 
-export function InventoryTab({ client: _client }: { client: WebClient }) {
+export function InventoryTab() {
 	const [items, setItems] = useState<Entry[]>([]);
 	const [stats, setStats] = useState<VaultStats | null>(null);
 	const [filter, setFilter] = useState("");

@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import type { ThemeChoice, UiPreferences } from "../shared/index";
-import { WebClient } from "./api/client";
 import { rpc } from "./rpc";
 import { onUiPreferencesChanged } from "./rpc-listeners/config";
 
@@ -34,7 +33,7 @@ function applyPrefs(p: Partial<UiPreferences>): void {
  * Server broadcasts `uiPreferencesChanged` (typed RPC) whenever any window
  * saves new preferences, so other open windows update live without a reload.
  */
-export function useDetourTheme(_client: WebClient): void {
+export function useDetourTheme(): void {
 	useEffect(() => {
 		let cancelled = false;
 		rpc.request
@@ -51,5 +50,5 @@ export function useDetourTheme(_client: WebClient): void {
 			cancelled = true;
 			off();
 		};
-	}, [_client]);
+	}, []);
 }

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveGraphSnapshot, PensieveGraphNode, PensieveGraphEdge } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
 const KIND_COLORS: Record<string, string> = {
@@ -18,7 +17,7 @@ interface PositionedNode extends PensieveGraphNode {
  * we run a few iterations of Fruchterman-Reingold ourselves. Good enough for
  * up to ~500 nodes; beyond that the user should filter.
  */
-export function GraphPane({ client }: { client: WebClient }) {
+export function GraphPane() {
 	const [snap, setSnap] = useState<PensieveGraphSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [hovered, setHovered] = useState<string | null>(null);
@@ -27,7 +26,7 @@ export function GraphPane({ client }: { client: WebClient }) {
 
 	useEffect(() => {
 		rpc.request.pensieveGraph({}).then(setSnap).catch((e) => setError(e.message));
-	}, [client]);
+	}, []);
 
 	useEffect(() => {
 		if (!containerRef.current) return;

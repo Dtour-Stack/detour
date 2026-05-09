@@ -259,24 +259,23 @@ export type BrowserCommandResult = {
 	time: number;
 };
 
-export type WsClientMessage =
-	| { kind: "chat:send"; convId: string; text: string }
-	| {
-			kind: "log:webview";
-			level: "trace" | "debug" | "info" | "warn" | "error";
-			msg: string;
-			source?: string;
-			traceId?: string;
-			extras?: Record<string, unknown>;
-	  }
-	| { kind: "ping" };
-
-export type WsServerMessage =
-	| { kind: "chat:delta"; convId: string; delta: string; traceId?: string }
-	| { kind: "chat:complete"; convId: string; traceId?: string }
-	| { kind: "chat:error"; convId: string; message: string; traceId?: string }
-	| { kind: "ui:open-settings" }
-	| { kind: "pong" };
+// LlamaServerStatus — wire shape returned by `LlamaServerService.status()`.
+// Mirrored as `LlamaServerStatusWire` in src/shared/rpc/llama.ts; this name
+// is preserved here so view-side imports (e.g. LocalAITab.tsx) keep their
+// existing import path stable post-WebClient.
+export type LlamaServerStatus = {
+	readonly running: boolean;
+	readonly url: string | null;
+	readonly modelPath: string | null;
+	readonly pid: number | null;
+	readonly startedAt: number | null;
+	readonly lastError: string | null;
+	readonly downloadProgress?: {
+		downloadedBytes: number;
+		totalBytes: number;
+		percent: number;
+	} | null;
+};
 
 export type ThemeChoice = "system" | "light" | "dark";
 export type UiPreferences = {

@@ -1,6 +1,7 @@
 import { resolveViewUrl } from "../../kernel/view-url";
 import type { Feature } from "../../kernel/registry";
 import type { WindowHandle } from "../../kernel/windows";
+import { broadcaster } from "../../core/rpc/registry";
 import { setWindowControllerForRpc } from "../../core/rpc/window-controller-registry";
 import type { WindowCommand } from "../../core/api/server";
 
@@ -16,11 +17,9 @@ export const chatFeature: Feature = {
 		let currentWidth = DEFAULT_WIDTH;
 		let currentHeight = DEFAULT_HEIGHT;
 
-		// Window control surface — invoked by both legacy HTTP (/api/window/*)
-		// and typed RPC (windowHide / windowPin / windowResize). Both
-		// transports drive this single callback; HTTP goes through the
-		// ApiServer's setWindowController, RPC goes through the registry
-		// in src/bun/core/rpc/window-controller-registry.ts.
+		// Window control surface — invoked by typed RPC (windowHide /
+		// windowPin / windowResize) via the registry in
+		// src/bun/core/rpc/window-controller-registry.ts.
 		const handleWindowCommand = (cmd: WindowCommand) => {
 			if (cmd.kind === "hide") {
 				hide();
@@ -38,7 +37,6 @@ export const chatFeature: Feature = {
 				}
 			}
 		};
-		deps.core.api.setWindowController(handleWindowCommand);
 		setWindowControllerForRpc(handleWindowCommand);
 
 		function ensureWindow(): WindowHandle {
@@ -102,9 +100,11 @@ export const chatFeature: Feature = {
 		// Settings menu now opens the drawer inside the chat window.
 		deps.events.on("ui:open-settings", () => {
 			show();
-			// Best-effort: tell the React app to open its settings drawer.
-			// Done via a custom WS message that the React app listens for.
-			deps.core.api.publish({ kind: "ui:open-settings" });
+			// Tell the React app (in every open window) to open its settings
+			// drawer. Fans out via the typed-RPC broadcaster — the chat
+			// window subscribes through `onUiOpenSettings` in
+			// src/main/rpc-listeners/chat.ts.
+			broadcaster.broadcast("uiOpenSettings", {});
 		});
 	},
 };

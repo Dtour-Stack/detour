@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ThemeChoice } from "../../shared/index";
-import { WebClient } from "../api/client";
 import { ChatView } from "./ChatView";
 import { SettingsView } from "../settings/SettingsView";
 import { rpc } from "../rpc";
+import { onUiOpenSettings } from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
 
 const ACCENT_SWATCHES = [
@@ -35,8 +35,6 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 export function App() {
-	const client = useMemo(() => new WebClient(), []);
-	const [connected, setConnected] = useState(false);
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [theme, setTheme] = useState<ThemeChoice>("system");
 	const [accent, setAccent] = useState("#0a84ff");
@@ -47,14 +45,6 @@ export function App() {
 	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
 
 	useEffect(() => {
-		client
-			.connect()
-			.then(() => setConnected(true))
-			.catch((err) => console.error("connect failed:", err));
-	}, [client]);
-
-	useEffect(() => {
-		if (!connected) return;
 		rpc.request
 			.uiGetPreferences({})
 			.then((p) => {
@@ -67,21 +57,15 @@ export function App() {
 			.catch(() => {
 				/* keep defaults */
 			});
-		// Listen for tray menu / global-shortcut requests to open settings.
-		// (`ui:open-settings` is still WS — pending UI/window migration.)
-		const off = client.on((m) => {
-			if (m.kind === "ui:open-settings") setDrawerOpen(true);
-		});
-		// `provider:changed` migrated to typed RPC.
+		const offSettings = onUiOpenSettings(() => setDrawerOpen(true));
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		// Active provider for the header chip.
 		void rpc.request.providersList({}).then((ps) => {
 			setActiveProvider(ps.find((p) => p.active)?.id ?? null);
 		}).catch(() => {});
-		// Llama-server status: poll every 4s while connected. The header chip
-		// flips from "downloading" → "ready" once the bundled embedding model
-		// is loaded; gives the user visibility into first-launch progress
-		// without forcing them to open Settings → Local AI.
+		// Llama-server status: poll every 4s. The header chip flips from
+		// "downloading" → "ready" once the bundled embedding model is
+		// loaded.
 		const refreshLlama = () => {
 			void rpc.request.llamaStatus({}).then((s) => {
 				setLlamaReady(s.running && !s.lastError);
@@ -99,17 +83,16 @@ export function App() {
 		refreshLlama();
 		const llamaTimer = setInterval(refreshLlama, 4_000);
 		return () => {
-			off();
+			offSettings();
 			offProvider();
 			clearInterval(llamaTimer);
 		};
-	}, [client, connected]);
+	}, []);
 
 	// Pin window while drawer is open so click-out / focus loss doesn't dismiss.
 	useEffect(() => {
-		if (!connected) return;
 		void rpc.request.windowPin({ on: drawerOpen });
-	}, [connected, drawerOpen]);
+	}, [drawerOpen]);
 
 	// Esc closes drawer; doesn't hide window.
 	useEffect(() => {
@@ -149,12 +132,6 @@ export function App() {
 
 	function closeWindow() {
 		void rpc.request.windowHide({});
-	}
-
-	if (!connected) {
-		return (
-			<div style={{ padding: 40, color: "var(--fg-muted)" }}>Connecting…</div>
-		);
 	}
 
 	return (
@@ -290,7 +267,7 @@ export function App() {
 				</div>
 			</header>
 			<main className="popup-body">
-				<ChatView client={client} onOpenSettings={() => setDrawerOpen(true)} />
+				<ChatView onOpenSettings={() => setDrawerOpen(true)} />
 				{drawerOpen && (
 					<div className="drawer">
 						<div className="drawer-header electrobun-webkit-app-region-drag">
@@ -309,7 +286,7 @@ export function App() {
 							</button>
 						</div>
 						<div className="drawer-body">
-							<SettingsView client={client} />
+							<SettingsView />
 						</div>
 					</div>
 				)}

@@ -6,7 +6,6 @@ import type {
 	ActivityXAutonomyHandled,
 	ActivityXAutonomyUpdate,
 } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { usePoller } from "./usePoller";
 
 const PRESETS = [5_000, 15_000, 30_000, 60_000, 300_000];
@@ -356,11 +355,9 @@ function XNumberInput({
 }
 
 function XAutonomySection({
-	client: _client,
 	data,
 	onChanged,
 }: {
-	client: WebClient;
 	data: ActivityAutonomySnapshot;
 	onChanged: () => void;
 }) {
@@ -486,7 +483,7 @@ function ImprovementSection({ data }: { data: ActivityAutonomySnapshot }) {
 	);
 }
 
-export function AutonomyPane({ client }: { client: WebClient }) {
+export function AutonomyPane() {
 	const fetcher = useCallback(() => rpc.request.activityAutonomy({}), []);
 	const { data, error, refresh } = usePoller<ActivityAutonomySnapshot>(fetcher, 3000);
 	const [busy, setBusy] = useState(false);
@@ -549,7 +546,7 @@ export function AutonomyPane({ client }: { client: WebClient }) {
 					onDraft={setDraftInterval}
 				/>
 				<WorkersSection tasks={data.tasks} />
-				<XAutonomySection client={client} data={data} onChanged={refresh} />
+				<XAutonomySection data={data} onChanged={refresh} />
 				<ImprovementSection data={data} />
 			</div>
 		</div>

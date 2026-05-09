@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import type { ActivityTrajectoryListResult } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 import { TrajectoryDetail } from "./TrajectoryDetail";
@@ -29,7 +28,7 @@ function downloadJson(filename: string, data: unknown) {
 	URL.revokeObjectURL(url);
 }
 
-export function TrajectoriesPane({ client }: { client: WebClient }) {
+export function TrajectoriesPane() {
 	const [selected, setSelected] = useState<string | null>(null);
 	const [status, setStatus] = useState<string>("");
 	const [exporting, setExporting] = useState(false);
@@ -106,7 +105,6 @@ export function TrajectoriesPane({ client }: { client: WebClient }) {
 			<div className="pensieve-split-detail">
 				{selected ? (
 					<TrajectoryDetail
-						client={client}
 						trajectoryId={selected}
 						onClose={() => setSelected(null)}
 					/>

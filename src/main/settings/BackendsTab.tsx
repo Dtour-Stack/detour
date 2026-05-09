@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { BackendInstall, BackendStatus, OpDiagnostic } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { onBackendChanged } from "../rpc-listeners/vault";
 
@@ -8,7 +7,7 @@ type InstallSpec = BackendInstall["specs"][number];
 
 type View = { kind: "list" } | { kind: "detail"; backendId: string };
 
-export function BackendsTab({ client }: { client: WebClient }) {
+export function BackendsTab() {
 	const [backends, setBackends] = useState<BackendStatus[]>([]);
 	const [enabled, setEnabled] = useState<string[]>([]);
 	const [install, setInstall] = useState<BackendInstall | null>(null);
@@ -68,7 +67,6 @@ export function BackendsTab({ client }: { client: WebClient }) {
 		}
 		return (
 			<BackendDetail
-				client={client}
 				backend={backend}
 				install={install}
 				onBack={() => setView({ kind: "list" })}
@@ -151,13 +149,11 @@ export function BackendsTab({ client }: { client: WebClient }) {
 }
 
 function BackendDetail({
-	client,
 	backend,
 	install,
 	onBack,
 	onChange,
 }: {
-	client: WebClient;
 	backend: BackendStatus;
 	install: BackendInstall | null;
 	onBack: () => void;
@@ -223,7 +219,7 @@ function BackendDetail({
 
 				{/* Sign-in form */}
 				{installed && !signedIn && (
-					<SigninForm backend={backend} client={client} onDone={onChange} />
+					<SigninForm backend={backend} onDone={onChange} />
 				)}
 
 				{/* Sign-out */}
@@ -347,11 +343,9 @@ function DiagRow({ label, value }: { label: string; value: string }) {
 
 function SigninForm({
 	backend,
-	client,
 	onDone,
 }: {
 	backend: BackendStatus;
-	client: WebClient;
 	onDone: () => Promise<void>;
 }) {
 	const [email, setEmail] = useState("");

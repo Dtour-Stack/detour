@@ -14,10 +14,9 @@ import type {
 	ActivityDbTable,
 	ActivityDbTableDetail,
 } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
-export function DbPane({ client: _client }: { client: WebClient }) {
+export function DbPane() {
 	const [tables, setTables] = useState<ActivityDbTable[] | null>(null);
 	const [available, setAvailable] = useState<boolean>(true);
 	const [error, setError] = useState<string | null>(null);

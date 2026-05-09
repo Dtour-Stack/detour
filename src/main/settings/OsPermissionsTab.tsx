@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { OsPermissionInfo, OsPermissionStatus } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
 const STATUS_TONE: Record<OsPermissionStatus, string> = {
@@ -17,7 +16,7 @@ const STATUS_LABEL: Record<OsPermissionStatus, string> = {
 	"not-applicable": "N/A",
 };
 
-export function OsPermissionsTab({ client: _client }: { client: WebClient }) {
+export function OsPermissionsTab() {
 	const [perms, setPerms] = useState<OsPermissionInfo[] | null>(null);
 	const [refreshing, setRefreshing] = useState(false);
 

@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PortlessSnapshot } from "../../shared/index";
-import { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
-const client = new WebClient();
-
 export function PortlessView() {
-	useDetourTheme(client);
+	useDetourTheme();
 	const [snapshot, setSnapshot] = useState<PortlessSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [hostname, setHostname] = useState("");

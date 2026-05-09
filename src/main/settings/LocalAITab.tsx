@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { LlamaServerStatus, WebClient } from "../api/client";
+import type { LlamaServerStatus } from "../../shared/index";
 import { rpc } from "../rpc";
 
 interface DebugProbe {
@@ -40,7 +40,7 @@ function fmtDuration(ms: number): string {
 	return `${m}m ${s % 60}s`;
 }
 
-export function LocalAITab({ client: _client }: { client: WebClient }) {
+export function LocalAITab() {
 	const [status, setStatus] = useState<LlamaServerStatus | null>(null);
 	const [openaiKey, setOpenaiKey] = useState("");
 	const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
@@ -80,15 +80,11 @@ export function LocalAITab({ client: _client }: { client: WebClient }) {
 		setBusy("test");
 		setProbeError(null);
 		try {
-			const res = await fetch("/api/debug/embedding", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ text: "the quick brown fox jumps over the lazy dog" }),
+			const body = await rpc.request.debugEmbedding({
+				text: "the quick brown fox jumps over the lazy dog",
 			});
-			if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-			const body = await res.json() as DebugProbe & { modelErr?: string | null };
 			if (body.modelErr) throw new Error(body.modelErr);
-			setProbe(body);
+			setProbe(body as DebugProbe);
 		} catch (err) {
 			setProbeError(err instanceof Error ? err.message : String(err));
 		} finally {

@@ -9,7 +9,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveEmbeddingMap, PensieveEmbeddingPoint } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
 const PALETTE = [
@@ -30,7 +29,7 @@ function topFolder(path: string): string {
 	return segs[0] ?? "uncategorized";
 }
 
-export function EmbeddingMapPane({ client }: { client: WebClient }) {
+export function EmbeddingMapPane() {
 	const [data, setData] = useState<PensieveEmbeddingMap | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [hovered, setHovered] = useState<PensieveEmbeddingPoint | null>(null);
@@ -41,7 +40,7 @@ export function EmbeddingMapPane({ client }: { client: WebClient }) {
 		rpc.request.pensieveEmbeddingMap({})
 			.then(setData)
 			.catch((e) => setError(e instanceof Error ? e.message : String(e)));
-	}, [client]);
+	}, []);
 
 	useEffect(() => {
 		if (!containerRef.current) return;

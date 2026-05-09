@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { WebClient } from "../api/client";
 import type { RevealedLogin, SavedLoginsListResult } from "../../shared/index";
 import { rpc } from "../rpc";
 import { onBackendChanged } from "../rpc-listeners/vault";
@@ -28,7 +27,7 @@ function displayUsername(l: Login): string {
 	return l.username;
 }
 
-export function SavedLoginsTab({ client: _client }: { client: WebClient }) {
+export function SavedLoginsTab() {
 	const [data, setData] = useState<Result | null>(null);
 	const [revealing, setRevealing] = useState<Record<string, RevealResult>>({});
 	const [filter, setFilter] = useState("");

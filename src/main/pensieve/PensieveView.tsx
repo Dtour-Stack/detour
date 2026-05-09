@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { WebClient } from "../api/client";
+import { useEffect, useState } from "react";
 import { useDetourTheme } from "../useDetourTheme";
 import { MemoriesPane } from "./memories/MemoriesPane";
 import { RelationshipsPane } from "./relationships/RelationshipsPane";
@@ -46,9 +45,7 @@ const KNOWLEDGE_SECTIONS: { id: Section; label: string }[] = [
  * main content area for the active pane.
  */
 export function PensieveView() {
-	const client = useMemo(() => new WebClient(), []);
-	useDetourTheme(client);
-	const [connected, setConnected] = useState(false);
+	useDetourTheme();
 	const [section, setSection] = useState<Section>(() => {
 		try {
 			return (localStorage.getItem("pensieve.section") as Section) ?? "inbox";
@@ -56,10 +53,6 @@ export function PensieveView() {
 			return "inbox";
 		}
 	});
-
-	useEffect(() => {
-		client.connect().then(() => setConnected(true)).catch(() => setConnected(true));
-	}, [client]);
 
 	useEffect(() => {
 		try { localStorage.setItem("pensieve.section", section); } catch { /* ignore */ }
@@ -100,21 +93,18 @@ export function PensieveView() {
 					</div>
 				</div>
 				<div style={{ flex: 1 }} />
-				<div className="window-status">
-					{connected ? "● connected" : "○ connecting…"}
-				</div>
 			</aside>
 			<main className="settings-main settings-main-flush">
-				{section === "inbox" && <InboxPane client={client} />}
-				{section === "gateway" && <GatewayPane client={client} />}
-				{section === "chronicler" && <ChroniclerPane client={client} />}
-				{section === "notes" && <MemoriesPane client={client} scope="notes" />}
-				{section === "knowledge" && <MemoriesPane client={client} scope="knowledge" />}
-				{section === "memories" && <MemoriesPane client={client} />}
-				{section === "templates" && <TemplatesPane client={client} />}
-				{section === "relationships" && <RelationshipsPane client={client} />}
-				{section === "graph" && <GraphPane client={client} />}
-				{section === "embeddings" && <EmbeddingMapPane client={client} />}
+				{section === "inbox" && <InboxPane />}
+				{section === "gateway" && <GatewayPane />}
+				{section === "chronicler" && <ChroniclerPane />}
+				{section === "notes" && <MemoriesPane scope="notes" />}
+				{section === "knowledge" && <MemoriesPane scope="knowledge" />}
+				{section === "memories" && <MemoriesPane />}
+				{section === "templates" && <TemplatesPane />}
+				{section === "relationships" && <RelationshipsPane />}
+				{section === "graph" && <GraphPane />}
+				{section === "embeddings" && <EmbeddingMapPane />}
 			</main>
 		</div>
 	);

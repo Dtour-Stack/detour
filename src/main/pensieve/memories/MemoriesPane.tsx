@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PensieveMemorySummary, PensieveMemoryTree, PensieveMemoryTreeNode } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 import { KnowledgeUploadDropzone } from "./KnowledgeUploadDropzone";
 import { MemoryDetail } from "./MemoryDetail";
@@ -29,7 +28,7 @@ const ALL_TYPES = [
  */
 export type MemoriesScope = "all" | "notes" | "knowledge";
 
-export function MemoriesPane({ client, scope = "all" }: { client: WebClient; scope?: MemoriesScope }) {
+export function MemoriesPane({ scope = "all" }: { scope?: MemoriesScope }) {
 	const config = useMemo(() => scopeConfig(scope), [scope]);
 
 	const [items, setItems] = useState<PensieveMemorySummary[]>([]);
@@ -50,7 +49,7 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 		} catch (e) {
 			console.warn(`[${scope}] tree load failed`, e);
 		}
-	}, [client, config.rootPath, scope]);
+	}, [config.rootPath, scope]);
 
 	const load = useCallback(async () => {
 		setLoading(true);
@@ -81,7 +80,7 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 		} finally {
 			setLoading(false);
 		}
-	}, [client, type, q, searchMode, pathFilter, config.rootPath, config.allowedTypes]);
+	}, [type, q, searchMode, pathFilter, config.rootPath, config.allowedTypes]);
 
 	useEffect(() => { void loadTree(); }, [loadTree]);
 	useEffect(() => {
@@ -147,7 +146,6 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 					</div>
 					{scope === "knowledge" && (
 						<KnowledgeUploadDropzone
-							client={client}
 							onIngested={() => { void load(); void loadTree(); }}
 						/>
 					)}
@@ -178,7 +176,6 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 				<div className="pensieve-tri-detail">
 					{selected ? (
 						<MemoryDetail
-							client={client}
 							memoryId={selected}
 							onDelete={() => { setSelected(null); load(); loadTree(); }}
 							onUpdate={() => { load(); loadTree(); }}
@@ -190,7 +187,6 @@ export function MemoriesPane({ client, scope = "all" }: { client: WebClient; sco
 			</div>
 			{newOpen && (
 				<NewMemoryDialog
-					client={client}
 					initialPath={pathFilter && pathFilter !== "/" ? pathFilter : config.newDefaultPath}
 					initialType={config.newDefaultType}
 					onClose={() => setNewOpen(false)}

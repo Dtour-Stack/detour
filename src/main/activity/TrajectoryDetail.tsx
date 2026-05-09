@@ -15,7 +15,6 @@ import type {
 	ActivityTrajectoryDetail,
 	ActivityTrajectoryStepSummary,
 } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
 type StageId = "input" | "should_respond" | "plan" | "actions" | "evaluators";
@@ -82,11 +81,9 @@ function downloadJson(filename: string, data: unknown) {
 }
 
 export function TrajectoryDetail({
-	client: _client,
 	trajectoryId,
 	onClose,
 }: {
-	client: WebClient;
 	trajectoryId: string;
 	onClose: () => void;
 }) {

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { AgentCharacterConfig, AgentCharacterMessageExample } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
 function lines(value: string[]): string {
@@ -181,7 +180,7 @@ function ExamplesFields({ draft, set }: { draft: Record<string, string>; set: Dr
 	);
 }
 
-export function AgentCharacterTab({ client }: { client: WebClient }) {
+export function AgentCharacterTab() {
 	const [cfg, setCfg] = useState<AgentCharacterConfig | null>(null);
 	const [draft, setDraft] = useState<Record<string, string>>({});
 	const [saving, setSaving] = useState(false);
@@ -193,7 +192,7 @@ export function AgentCharacterTab({ client }: { client: WebClient }) {
 			setCfg(character);
 			setDraft(draftFromCharacter(character));
 		});
-	}, [client]);
+	}, []);
 
 	async function save() {
 		if (!cfg) return;

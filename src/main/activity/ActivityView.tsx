@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { WebClient } from "../api/client";
+import { useEffect, useState } from "react";
 import { useDetourTheme } from "../useDetourTheme";
 import { TrajectoriesPane } from "./TrajectoriesPane";
 import { LogsPane } from "./LogsPane";
@@ -30,9 +29,7 @@ const TABS: { id: Tab; label: string }[] = [
  * main content area for the active pane.
  */
 export function ActivityView() {
-	const client = useMemo(() => new WebClient(), []);
-	useDetourTheme(client);
-	const [connected, setConnected] = useState(false);
+	useDetourTheme();
 	const [tab, setTab] = useState<Tab>(() => {
 		try {
 			return (localStorage.getItem("activity.tab") as Tab) ?? "trajectories";
@@ -40,10 +37,6 @@ export function ActivityView() {
 			return "trajectories";
 		}
 	});
-
-	useEffect(() => {
-		client.connect().then(() => setConnected(true)).catch(() => setConnected(true));
-	}, [client]);
 
 	useEffect(() => {
 		try { localStorage.setItem("activity.tab", tab); } catch { /* ignore */ }
@@ -69,18 +62,15 @@ export function ActivityView() {
 					</div>
 				</div>
 				<div style={{ flex: 1 }} />
-				<div className="window-status">
-					{connected ? "● connected" : "○ connecting…"}
-				</div>
 			</aside>
 			<main className="settings-main settings-main-flush">
-				{tab === "trajectories" && <TrajectoriesPane client={client} />}
-				{tab === "logs" && <LogsPane client={client} />}
-				{tab === "tasks" && <TasksPane client={client} />}
-				{tab === "autonomy" && <AutonomyPane client={client} />}
-				{tab === "plugins" && <PluginsPane client={client} />}
-				{tab === "db" && <DbPane client={client} />}
-				{tab === "runtime" && <RuntimePane client={client} />}
+				{tab === "trajectories" && <TrajectoriesPane />}
+				{tab === "logs" && <LogsPane />}
+				{tab === "tasks" && <TasksPane />}
+				{tab === "autonomy" && <AutonomyPane />}
+				{tab === "plugins" && <PluginsPane />}
+				{tab === "db" && <DbPane />}
+				{tab === "runtime" && <RuntimePane />}
 			</main>
 		</div>
 	);

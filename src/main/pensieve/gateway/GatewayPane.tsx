@@ -8,7 +8,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { GatewayIdentityCandidate, GatewayMessage, WebClient } from "../../api/client";
+import type {
+	GatewayMessage,
+	IdentityCandidate as GatewayIdentityCandidate,
+} from "../../../bun/core/channels/gateway";
 import { rpc } from "../../rpc";
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -36,7 +39,7 @@ function formatTime(ts: number): string {
 	return d.toLocaleString();
 }
 
-export function GatewayPane({ client: _client }: { client: WebClient }) {
+export function GatewayPane() {
 	const [messages, setMessages] = useState<GatewayMessage[]>([]);
 	const [identities, setIdentities] = useState<GatewayIdentityCandidate[]>([]);
 	const [filter, setFilter] = useState<{ channel?: string; direction?: string; q?: string }>({});

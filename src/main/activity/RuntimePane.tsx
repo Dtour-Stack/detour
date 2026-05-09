@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
@@ -24,7 +23,7 @@ function ItemRow({ item }: { item: ActivityRuntimeRegistryItem }) {
 	);
 }
 
-export function RuntimePane({ client: _client }: { client: WebClient }) {
+export function RuntimePane() {
 	const fetcher = useCallback(() => rpc.request.activityRuntime({}), []);
 	const { data, error } = usePoller<ActivityRuntimeSnapshot>(fetcher, 5000);
 

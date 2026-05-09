@@ -36,6 +36,9 @@ import type { CronRequests } from "./cron";
 import type { OwnerBindRequests } from "./owner-bind";
 import type { InboxRequests } from "./inbox";
 import type { GatewayRequests } from "./gateway";
+import type { ChatRequests, ChatMessages } from "./chat";
+import type { LogWebviewMessages } from "./log";
+import type { DebugRequests } from "./debug";
 
 export type DetourBunRequests =
 	& VaultRequests
@@ -55,14 +58,25 @@ export type DetourBunRequests =
 	& CronRequests
 	& OwnerBindRequests
 	& InboxRequests
-	& GatewayRequests;
+	& GatewayRequests
+	& ChatRequests
+	& DebugRequests;
 
+// All `messages` (both bun→view and view→bun) live in DetourBunMessages.
+// Electrobun's runtime dispatch is purely string-keyed, and the typing
+// for `view.rpc.send.<name>(...)` plus `bun.handlers.messages.<name>`
+// both reference `Schema["bun"]["messages"]`. View-side `handlers.messages`
+// types against `webview.messages` which we keep permissive (empty
+// `Record<never, never>`) so view-side listeners for bun-pushed messages
+// register without a redundant declaration.
 export type DetourBunMessages =
 	& VaultMessages
 	& ProvidersMessages
 	& AuthMessages
 	& ConfigMessages
-	& BrowserMessages;
+	& BrowserMessages
+	& ChatMessages
+	& LogWebviewMessages;
 
 export type DetourRPC = {
 	bun: RPCSchema<{

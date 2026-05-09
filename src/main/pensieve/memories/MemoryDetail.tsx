@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 import type { PensieveMemoryDetail } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
 export function MemoryDetail({
-	client,
 	memoryId,
 	onDelete,
 	onUpdate,
 }: {
-	client: WebClient;
 	memoryId: string;
 	onDelete: () => void;
 	onUpdate: () => void;
@@ -36,7 +33,7 @@ export function MemoryDetail({
 			})
 			.catch((e) => { if (!cancelled) setError(e.message); });
 		return () => { cancelled = true; };
-	}, [client, memoryId]);
+	}, [memoryId]);
 
 	async function save() {
 		if (!detail) return;

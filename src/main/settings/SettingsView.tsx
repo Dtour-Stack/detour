@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { WebClient } from "../api/client";
 import { ProvidersTab } from "./ProvidersTab";
 import { InventoryTab } from "./InventoryTab";
 import { SavedLoginsTab } from "./SavedLoginsTab";
@@ -34,37 +33,37 @@ const VAULT_TABS: { id: VaultTab; label: string }[] = [
 	{ id: "backends", label: "Backends" },
 ];
 
-function ConfigContent({ client, tab }: { client: WebClient; tab: ConfigTab }) {
+function ConfigContent({ tab }: { tab: ConfigTab }) {
 	switch (tab) {
 		case "appearance":
-			return <AppearanceTab client={client} />;
+			return <AppearanceTab />;
 		case "providers":
-			return <ProvidersTab client={client} />;
+			return <ProvidersTab />;
 		case "models":
-			return <ModelsTab client={client} />;
+			return <ModelsTab />;
 		case "local-ai":
-			return <LocalAITab client={client} />;
+			return <LocalAITab />;
 		case "character":
-			return <AgentCharacterTab client={client} />;
+			return <AgentCharacterTab />;
 		case "agent":
-			return <AgentPermissionsTab client={client} />;
+			return <AgentPermissionsTab />;
 		case "os":
-			return <OsPermissionsTab client={client} />;
+			return <OsPermissionsTab />;
 		case "window":
-			return <WindowTab client={client} />;
+			return <WindowTab />;
 		default:
 			return <div className="empty">Unknown configuration tab.</div>;
 	}
 }
 
-function VaultContent({ client, tab }: { client: WebClient; tab: VaultTab }) {
+function VaultContent({ tab }: { tab: VaultTab }) {
 	switch (tab) {
 		case "inventory":
-			return <InventoryTab client={client} />;
+			return <InventoryTab />;
 		case "saved-logins":
-			return <SavedLoginsTab client={client} />;
+			return <SavedLoginsTab />;
 		case "backends":
-			return <BackendsTab client={client} />;
+			return <BackendsTab />;
 		default:
 			return <div className="empty">Unknown vault tab.</div>;
 	}
@@ -108,7 +107,7 @@ function SidebarSection<T extends string>({
 	);
 }
 
-export function SettingsView({ client }: { client: WebClient }) {
+export function SettingsView() {
 	const [section, setSection] = useState<Section>("configuration");
 	const [configTab, setConfigTab] = useState<ConfigTab>("appearance");
 	const [vaultTab, setVaultTab] = useState<VaultTab>("inventory");
@@ -135,7 +134,7 @@ export function SettingsView({ client }: { client: WebClient }) {
 			</aside>
 
 			<main className="settings-main">
-				{section === "configuration" ? <ConfigContent client={client} tab={configTab} /> : <VaultContent client={client} tab={vaultTab} />}
+				{section === "configuration" ? <ConfigContent tab={configTab} /> : <VaultContent tab={vaultTab} />}
 			</main>
 		</div>
 	);

@@ -359,8 +359,6 @@ export type {
 	ProviderInfo,
 	BackendId,
 	BackendStatus,
-	WsClientMessage,
-	WsServerMessage,
 	SetProviderKeyBody,
 	SetActiveProviderBody,
 	SetEnabledBackendsBody,

@@ -6,7 +6,6 @@
  */
 
 import { useState } from "react";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
 const TYPE_OPTIONS = [
@@ -17,13 +16,11 @@ const TYPE_OPTIONS = [
 ];
 
 export function NewMemoryDialog({
-	client,
 	initialPath,
 	initialType,
 	onClose,
 	onCreated,
 }: {
-	client: WebClient;
 	initialPath: string;
 	initialType?: string;
 	onClose: () => void;

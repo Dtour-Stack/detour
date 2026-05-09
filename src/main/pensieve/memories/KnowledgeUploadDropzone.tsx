@@ -8,7 +8,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
 interface UploadStatus {
@@ -39,10 +38,8 @@ async function readAsText(file: File): Promise<string> {
 }
 
 export function KnowledgeUploadDropzone({
-	client,
 	onIngested,
 }: {
-	client: WebClient;
 	onIngested: () => void;
 }) {
 	const [available, setAvailable] = useState<boolean | null>(null);
@@ -54,7 +51,7 @@ export function KnowledgeUploadDropzone({
 		rpc.request.pensieveKnowledgeStatus({})
 			.then((s) => setAvailable(s.available))
 			.catch(() => setAvailable(false));
-	}, [client]);
+	}, []);
 
 	const ingest = useCallback(async (files: FileList | File[]) => {
 		const arr = Array.from(files);
@@ -86,7 +83,7 @@ export function KnowledgeUploadDropzone({
 				));
 			}
 		}
-	}, [client, onIngested]);
+	}, [onIngested]);
 
 	if (available === false) {
 		return (

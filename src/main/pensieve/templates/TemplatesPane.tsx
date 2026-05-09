@@ -13,12 +13,11 @@ import type {
 	PensieveTemplateDetail,
 	PensieveTemplateSummary,
 } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 import { TemplateEditor } from "./TemplateEditor";
 import { VariablesPanel } from "./VariablesPanel";
 
-export function TemplatesPane({ client }: { client: WebClient }) {
+export function TemplatesPane() {
 	const [items, setItems] = useState<PensieveTemplateSummary[]>([]);
 	const [vars, setVars] = useState<PensievePromptVariable[]>([]);
 	const [selected, setSelected] = useState<string | null>(null);
@@ -37,7 +36,7 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [client]);
+	}, []);
 
 	const loadDetail = useCallback(async (id: string) => {
 		try {
@@ -46,7 +45,7 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [client]);
+	}, []);
 
 	useEffect(() => { void loadList(); }, [loadList]);
 	useEffect(() => {
@@ -70,20 +69,20 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 		} finally {
 			setCreating(false);
 		}
-	}, [client, loadList]);
+	}, [loadList]);
 
 	const handleSaveVar = useCallback(async (name: string, value: string) => {
 		await rpc.request.pensieveTemplateVarSet({ name, value });
 		await loadList();
 		if (selected) await loadDetail(selected);
-	}, [client, loadList, loadDetail, selected]);
+	}, [loadList, loadDetail, selected]);
 
 	const handleDeleteVar = useCallback(async (name: string) => {
 		if (!confirm(`Delete prompt variable {{${name}}}?`)) return;
 		await rpc.request.pensieveTemplateVarDelete({ name });
 		await loadList();
 		if (selected) await loadDetail(selected);
-	}, [client, loadList, loadDetail, selected]);
+	}, [loadList, loadDetail, selected]);
 
 	const detailVars = useMemo(() => {
 		if (!detail) return [];
@@ -137,7 +136,6 @@ export function TemplatesPane({ client }: { client: WebClient }) {
 					</div>
 				) : (
 					<TemplateEditor
-						client={client}
 						detail={detail}
 						onSaved={async () => { await loadList(); if (selected) await loadDetail(selected); }}
 						onDeleted={async () => { setSelected(null); setDetail(null); await loadList(); }}

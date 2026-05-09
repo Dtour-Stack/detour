@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { ThemeChoice } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
 const ACCENTS = [
@@ -22,7 +21,7 @@ function applyAccent(a: string) {
 	document.documentElement.style.setProperty("--accent", a);
 }
 
-export function AppearanceTab({ client }: { client: WebClient }) {
+export function AppearanceTab() {
 	const [theme, setTheme] = useState<ThemeChoice>("system");
 	const [accent, setAccent] = useState("#0a84ff");
 
@@ -31,7 +30,7 @@ export function AppearanceTab({ client }: { client: WebClient }) {
 			setTheme((p.theme ?? "system") as ThemeChoice);
 			setAccent(p.accent ?? "#0a84ff");
 		});
-	}, [client]);
+	}, []);
 
 	function changeTheme(t: ThemeChoice) {
 		setTheme(t);

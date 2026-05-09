@@ -1,25 +1,17 @@
-import type { Server, ServerWebSocket } from "bun";
 import type { Memory, UUID } from "@elizaos/core";
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RuntimeService } from "../runtime";
 import type { ActivityService } from "../activity";
-import { newTraceId, traceScope } from "../trace";
 import { broadcaster } from "../rpc/registry";
 import type {
-	WsClientMessage,
-	WsServerMessage,
 	BrowserCommand,
 	BrowserCommandInput,
 	BrowserCommandResult,
 } from "../../../shared/index";
 
 const VERSION = "0.0.1";
-
-type WsData = { id: string };
-
-type Listener = (msg: WsServerMessage) => void;
 
 type ApiResponseHelpers = {
 	json(data: unknown, status?: number): Response;
@@ -113,29 +105,27 @@ export type WindowCommand =
 export type WindowController = (cmd: WindowCommand) => void;
 
 /**
- * ApiServer — the slim HTTP/WS surface that survives Phase 3 of the
- * HTTP→RPC migration (see docs/rpc-migration.md). All feature routes have
- * moved to typed RPC; what's left here is:
+ * ApiServer — the slim HTTP surface that survives Phase 4 of the
+ * HTTP/WS→RPC migration (see docs/rpc-migration.md). All feature traffic
+ * (chat streaming, log forwarding, every former HTTP route) now flows
+ * through electrobun's typed RPC bridge. What's left here is:
  *
  *   - GET /api/health — basic liveness ping
  *   - POST /api/debug/action — dev-only, gated to Detour-dev.app builds
  *   - POST /api/debug/embedding — embedding-pipeline diagnostic; called via
  *     raw fetch from the LocalAI debug tab
- *   - WS /ws — chat streaming (chat:send → chat:delta/complete/error) and
- *     webview log forwarding (log:webview)
  *   - The browser-command queue (BROWSER_CONTROL_GLOBAL) — backs the RPC
  *     handlers in src/bun/core/rpc/handlers/browser.ts and the agent-side
  *     enqueue in src/bun/plugins/vault-tools/index.ts. Pushes go through
  *     the typed RPC `broadcaster` (`uiOpenBrowser` / `browserCommand`).
  *
- * Everything else now flows through electrobun's typed RPC bridge.
+ * Window control (pin/hide/resize) lives in the RPC-only window-controller
+ * registry in src/bun/core/rpc/window-controller-registry.ts.
  */
 export class ApiServer {
-	private server: Server<WsData> | null = null;
+	private server: ReturnType<typeof Bun.serve> | null = null;
 	private port = 0;
-	private subscribers = new Map<string, ServerWebSocket<WsData>>();
 	private lockFile = join(homedir(), ".detour", "runtime.json");
-	private windowController: WindowController | null = null;
 	private browserCommands: BrowserCommand[] = [];
 	private browserResults = new Map<string, BrowserCommandResult>();
 	private browserWaiters = new Map<string, {
@@ -229,10 +219,6 @@ export class ApiServer {
 		return complete;
 	}
 
-	setWindowController(fn: WindowController | null): void {
-		this.windowController = fn;
-	}
-
 	private async debugEmbedding(ctx: ApiRequestContext): Promise<Response> {
 		const body = (await ctx.req.json().catch(() => ({}))) as DebugEmbeddingBody;
 		const text = body.text ?? "hello world";
@@ -294,85 +280,17 @@ export class ApiServer {
 		const error = (message: string, status = 400) =>
 			json({ ok: false, error: message }, status);
 
-		this.server = Bun.serve<WsData, never>({
+		this.server = Bun.serve({
 			port,
 			hostname: "127.0.0.1",
-			// Bun.serve defaults to a 10-second idleTimeout which kills the
-			// chat WebSocket the moment there's a pause in traffic and emits
-			// "request timed out after 10 seconds" to stderr. 255 is the
-			// max Bun allows.
-			idleTimeout: 255,
-			fetch: async (req, server) => {
+			fetch: async (req): Promise<Response> => {
 				// CORS preflight — browsers send OPTIONS before any non-simple
 				// cross-origin request.
 				if (req.method === "OPTIONS") {
 					return new Response(null, { status: 204, headers: corsHeaders });
 				}
-				return this.handleHttpRequest(req, server, { json, ok, error });
-			},
-			websocket: {
-				open: (ws) => {
-					this.subscribers.set(ws.data.id, ws);
-				},
-				close: (ws) => {
-					this.subscribers.delete(ws.data.id);
-				},
-				message: async (ws, raw) => {
-					let msg: WsClientMessage;
-					try {
-						msg = JSON.parse(raw.toString()) as WsClientMessage;
-					} catch {
-						return;
-					}
-					if (msg.kind === "ping") {
-						this.send(ws, { kind: "pong" });
-						return;
-					}
-					if (msg.kind === "log:webview") {
-						this.activity.logs.captureWebviewLog({
-							level: msg.level,
-							msg: msg.msg,
-							...(msg.source ? { source: msg.source } : {}),
-							...(msg.traceId ? { traceId: msg.traceId } : {}),
-							...(msg.extras ? { extras: msg.extras } : {}),
-						});
-						return;
-					}
-					if (msg.kind === "chat:send") {
-						const { convId, text } = msg;
-						// One trace id per chat send. Stamps every log line emitted
-						// during the eliza pipeline (via AsyncLocalStorage) and
-						// every chat:* WS message back to the webview, so the
-						// React side can correlate its own console output with
-						// server-side logs for the same turn.
-						const traceId = newTraceId();
-						let completeFired = false;
-						let idleTimer: ReturnType<typeof setTimeout> | null = null;
-						const fireComplete = () => {
-							if (completeFired) return;
-							completeFired = true;
-							if (idleTimer) clearTimeout(idleTimer);
-							this.broadcast({ kind: "chat:complete", convId, traceId });
-						};
-						const armIdle = () => {
-							if (idleTimer) clearTimeout(idleTimer);
-							idleTimer = setTimeout(fireComplete, 1500);
-						};
-						await traceScope(traceId, async () => {
-							try {
-								await this.runtime.sendMessage(text, (delta) => {
-									this.broadcast({ kind: "chat:delta", convId, delta, traceId });
-									armIdle();
-								});
-								fireComplete();
-							} catch (err) {
-								if (idleTimer) clearTimeout(idleTimer);
-								const message = err instanceof Error ? err.message : String(err);
-								this.broadcast({ kind: "chat:error", convId, message, traceId });
-							}
-						});
-					}
-				},
+				const response = await this.handleHttpRequest(req, { json, ok, error });
+				return response ?? error("not found", 404);
 			},
 		});
 
@@ -447,17 +365,10 @@ export class ApiServer {
 
 	private async handleHttpRequest(
 		req: Request,
-		server: Server<WsData>,
 		responses: ApiResponseHelpers,
 	): Promise<Response | undefined> {
 		const url = new URL(req.url);
 		const path = url.pathname;
-
-		if (path === "/ws") {
-			const id = crypto.randomUUID();
-			if (server.upgrade(req, { data: { id } })) return;
-			return responses.error("upgrade failed", 426);
-		}
 
 		const ctx: ApiRequestContext = { req, url, path, ...responses };
 		try {
@@ -478,40 +389,11 @@ export class ApiServer {
 		this.removeLockfile();
 		this.server?.stop(true);
 		this.server = null;
-		for (const ws of this.subscribers.values()) ws.close();
-		this.subscribers.clear();
 		for (const [id, waiter] of this.browserWaiters.entries()) {
 			clearTimeout(waiter.timer);
 			waiter.resolve({ ok: false, error: `Browser command ${id} canceled because API server stopped.`, time: Date.now() });
 		}
 		this.browserWaiters.clear();
-	}
-
-	listen(handler: Listener): () => void {
-		// Local listener for in-process use (e.g. the notifications feature
-		// surfacing `chat:error` as a system notification). Chat streaming
-		// is the only WS server-push path left, so listeners only see
-		// chat:* / pong / ui:open-settings.
-		const wrapper = (msg: WsServerMessage) => handler(msg);
-		this.localListeners.add(wrapper);
-		return () => this.localListeners.delete(wrapper);
-	}
-
-	private localListeners = new Set<Listener>();
-
-	private send(ws: ServerWebSocket<WsData>, msg: WsServerMessage) {
-		ws.send(JSON.stringify(msg));
-	}
-
-	/** Public broadcast — used by features outside the API server (e.g. tray to push `ui:open-settings`). */
-	publish(msg: WsServerMessage): void {
-		this.broadcast(msg);
-	}
-
-	private broadcast(msg: WsServerMessage) {
-		const payload = JSON.stringify(msg);
-		for (const ws of this.subscribers.values()) ws.send(payload);
-		for (const fn of this.localListeners) fn(msg);
 	}
 
 	private writeLockfile() {

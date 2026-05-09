@@ -16,8 +16,10 @@ import { activityRequests } from "./handlers/activity";
 import { authRequests } from "./handlers/auth";
 import { browserRequests } from "./handlers/browser";
 import { channelsRequests } from "./handlers/channels";
+import { chatRequests } from "./handlers/chat";
 import { configRequests } from "./handlers/config";
 import { cronRequests } from "./handlers/cron";
+import { debugRequests } from "./handlers/debug";
 import { externalRequests } from "./handlers/external";
 import { gatewayRequests } from "./handlers/gateway";
 import { inboxRequests } from "./handlers/inbox";
@@ -29,6 +31,7 @@ import { portlessRequests } from "./handlers/portless";
 import { providersRequests } from "./handlers/providers";
 import { routingRequests } from "./handlers/routing";
 import { vaultRequests } from "./handlers/vault";
+import { viewMessages } from "./handlers/log";
 import { windowRequests } from "./handlers/window";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
@@ -83,8 +86,15 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...ownerBindRequests(deps),
 			...inboxRequests(deps),
 			...gatewayRequests(deps),
+			...chatRequests(deps),
+			...debugRequests(deps),
 		},
-		messages: {},
+		// View→bun fire-and-forget messages (the webview side of the
+		// schema). logWebview routes console/error forwarding into
+		// ActivityLogService.
+		messages: {
+			...viewMessages(deps),
+		},
 	};
 }
 

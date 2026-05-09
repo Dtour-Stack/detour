@@ -1,18 +1,14 @@
 /**
  * View-side typed RPC singleton — canonical IPC per
- * .claude/rules/electrobun.md.
+ * .claude/rules/electrobun.md. Replaces the legacy WebClient (HTTP +
+ * WebSocket) entirely. All view↔bun traffic now flows through
+ * electrobun's native postMessage bridge:
  *
- * Use this instead of WebClient HTTP fetch for migrated methods. Each
- * `rpc.request.*` round-trips through electrobun's native postMessage
- * bridge (no HTTP/CORS/network in the loop) to the bun main process,
- * which dispatches to handlers composed in
- * src/bun/core/rpc/registry.ts.
- *
- * As HTTP endpoints migrate, methods land in src/shared/rpc/<group>.ts
- * and the corresponding `client.foo()` call sites switch to
- * `rpc.request.foo()`. Server-push messages (replacing WS) listen via
- * the per-feature subscribers exported from
- * src/main/rpc-listeners/<group>.ts.
+ *   - rpc.request.<name>(...)  view → bun (awaitable)
+ *   - rpc.send.<name>(...)     view → bun (fire-and-forget)
+ *   - bun → view broadcasts arrive at handlers in
+ *     `src/main/rpc-listeners/<group>.ts` (composed via
+ *     `buildViewListeners` below).
  */
 
 import Electrobun, { Electroview } from "electrobun/view";
@@ -23,8 +19,10 @@ const rpcDef = Electroview.defineRPC<DetourRPC>({
 	maxRequestTime: 30_000,
 	handlers: {
 		// View side has no incoming requests — bun never asks the view to
-		// answer anything in this app. All view→bun traffic is `request`,
-		// all bun→view traffic is `messages`.
+		// answer anything in this app. All view→bun traffic is `request`
+		// (awaitable) or `send` (fire-and-forget). All bun→view traffic
+		// arrives via the messages bag, dispatched into per-feature
+		// subscribers in src/main/rpc-listeners/.
 		requests: {},
 		messages: buildViewListeners(),
 	},
@@ -34,3 +32,94 @@ const electroview = new Electrobun.Electroview({ rpc: rpcDef });
 
 export const rpc = rpcDef;
 export const view = electroview;
+
+installWebviewLogForwarder();
+
+/**
+ * Forward webview console output (and unhandled errors) to the bun-side
+ * ActivityLogService so they show up alongside main-process logs in
+ * Activity > Logs and the persisted JSONL file. Without this, JS errors
+ * and console warnings inside chat / settings / pensieve windows are
+ * invisible until the user manually opens DevTools.
+ *
+ * Pre-RPC migration this went over WebSocket via WebClient.send. Now
+ * uses typed RPC `view.rpc.send.logWebview` — same shape, no WS.
+ */
+let webviewLogForwarderInstalled = false;
+let lastServerTraceId: string | undefined;
+
+function installWebviewLogForwarder(): void {
+	if (webviewLogForwarderInstalled) return;
+	webviewLogForwarderInstalled = true;
+
+	const view =
+		typeof location !== "undefined"
+			? (location.hash || "").replace(/^#/, "") || "chat"
+			: "webview";
+
+	// Pick up the trace id from any inbound chat:* message so subsequent
+	// console.log calls during the same turn carry it. The chat-streaming
+	// listeners below dispatch via the rpc-listeners/chat module; this
+	// just shadows the trace id from those payloads.
+	import("./rpc-listeners/chat").then(({ onChatComplete, onChatDelta, onChatError }) => {
+		const stamp = (p: { traceId?: string }) => {
+			if (typeof p.traceId === "string") lastServerTraceId = p.traceId;
+		};
+		onChatDelta(stamp);
+		onChatComplete(stamp);
+		onChatError(stamp);
+	}).catch(() => {});
+
+	const send = (
+		level: "trace" | "debug" | "info" | "warn" | "error",
+		args: unknown[],
+	) => {
+		try {
+			const msg = args
+				.map((a) =>
+					typeof a === "string"
+						? a
+						: a instanceof Error
+						? `${a.name}: ${a.message}`
+						: (() => {
+								try {
+									return JSON.stringify(a);
+								} catch {
+									return String(a);
+								}
+						  })(),
+				)
+				.join(" ");
+			(rpcDef as unknown as { send: { logWebview: (p: unknown) => void } }).send.logWebview({
+				level,
+				msg,
+				source: `webview:${view}`,
+				...(lastServerTraceId ? { traceId: lastServerTraceId } : {}),
+			});
+		} catch {
+			/* ignore — never let logging break the page */
+		}
+	};
+
+	for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+		const orig = console[level];
+		console[level] = (...args: unknown[]) => {
+			const lvl = level === "log" ? "info" : level;
+			send(lvl, args);
+			return orig.apply(console, args);
+		};
+	}
+
+	if (typeof window !== "undefined") {
+		window.addEventListener("error", (ev) => {
+			send("error", [`${ev.message} @ ${ev.filename}:${ev.lineno}:${ev.colno}`]);
+		});
+		window.addEventListener("unhandledrejection", (ev) => {
+			const r = ev.reason;
+			send("error", [
+				"unhandledrejection:",
+				r instanceof Error ? `${r.name}: ${r.message}` : r,
+			]);
+		});
+	}
+}

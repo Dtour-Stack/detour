@@ -11,7 +11,7 @@
  * "message history" is just /api/activity/trajectories?source=<channel>.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type {
 	ActivityTrajectoryListItem,
@@ -20,7 +20,6 @@ import type {
 	ChannelsSnapshot,
 } from "../../shared/index";
 import type { ChannelsDiscordCatchUpResult } from "../../shared/rpc/channels";
-import { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
@@ -32,9 +31,7 @@ const CHANNEL_ICONS: Record<string, string> = {
 };
 
 export function ChannelsView() {
-	const client = useMemo(() => new WebClient(), []);
-	useDetourTheme(client);
-	const [connected, setConnected] = useState(false);
+	useDetourTheme();
 	const [snap, setSnap] = useState<ChannelsSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -47,14 +44,13 @@ export function ChannelsView() {
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [client]);
+	}, []);
 
 	useEffect(() => {
-		client.connect().then(() => setConnected(true)).catch(() => setConnected(true));
 		void load();
 		const t = setInterval(load, 8000);
 		return () => clearInterval(t);
-	}, [client, load]);
+	}, [load]);
 
 	return (
 		<div className="settings-shell">
@@ -82,7 +78,6 @@ export function ChannelsView() {
 					</div>
 				</div>
 				<div style={{ flex: 1 }} />
-				<div className="window-status">{connected ? "● connected" : "○ connecting…"}</div>
 			</aside>
 			<main className="settings-main settings-main-flush">
 				<div className="channels-stack">
@@ -90,7 +85,6 @@ export function ChannelsView() {
 					{snap?.channels.map((c) => (
 						<ChannelCard
 							key={c.id}
-							client={client}
 							channel={c}
 							expanded={expandedId === c.id}
 							onToggleExpand={() => setExpandedId((cur) => cur === c.id ? null : c.id)}
@@ -129,19 +123,17 @@ function statusLabel(c: ChannelStatus): string {
 }
 
 function ChannelCard({
-	client,
 	channel,
 	expanded,
 	onToggleExpand,
 	onChanged,
 }: {
-	client: WebClient;
 	channel: ChannelStatus;
 	expanded: boolean;
 	onToggleExpand: () => void;
 	onChanged: () => Promise<void> | void;
 }) {
-	const actions = useChannelCardActions({ channel, client, expanded, onChanged, onToggleExpand });
+	const actions = useChannelCardActions({ channel, expanded, onChanged, onToggleExpand });
 
 	const allKeys = [...channel.requiredVaultKeys, ...channel.optionalVaultKeys];
 	const isEnabled = channel.configured;
@@ -158,7 +150,6 @@ function ChannelCard({
 			/>
 			{expanded && (
 				<ChannelCardBody
-					client={client}
 					channel={channel}
 					actionError={actions.actionError}
 					allKeys={allKeys}
@@ -178,13 +169,11 @@ function ChannelCard({
 
 function useChannelCardActions({
 	channel,
-	client,
 	expanded,
 	onChanged,
 	onToggleExpand,
 }: {
 	channel: ChannelStatus;
-	client: WebClient;
 	expanded: boolean;
 	onChanged: () => Promise<void> | void;
 	onToggleExpand: () => void;
@@ -194,26 +183,25 @@ function useChannelCardActions({
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [reloading, setReloading] = useState(false);
 	const setKey = useCallback((key: string) => {
-		void saveChannelKey({ key, client, draft, onChanged, setActionError, setBusy, setDraft });
-	}, [client, draft, onChanged]);
+		void saveChannelKey({ key, draft, onChanged, setActionError, setBusy, setDraft });
+	}, [draft, onChanged]);
 	const clearKey = useCallback((key: string) => {
-		void clearChannelKey({ key, client, onChanged, setActionError, setBusy });
-	}, [client, onChanged]);
+		void clearChannelKey({ key, onChanged, setActionError, setBusy });
+	}, [onChanged]);
 	const reload = useCallback(() => {
-		void reloadChannelPlugins({ client, onChanged, setActionError, setReloading });
-	}, [client, onChanged]);
+		void reloadChannelPlugins({ onChanged, setActionError, setReloading });
+	}, [onChanged]);
 	const setSetting = useCallback((key: string, value: boolean) => {
-		void saveChannelSetting({ key, value, client, onChanged, setActionError, setBusy, setReloading });
-	}, [client, onChanged]);
+		void saveChannelSetting({ key, value, onChanged, setActionError, setBusy, setReloading });
+	}, [onChanged]);
 	const toggleEnabled = useCallback(() => {
-		void toggleChannelEnabled({ channel, client, expanded, onChanged, onToggleExpand, setActionError, setBusy });
-	}, [channel, client, expanded, onChanged, onToggleExpand]);
+		void toggleChannelEnabled({ channel, expanded, onChanged, onToggleExpand, setActionError, setBusy });
+	}, [channel, expanded, onChanged, onToggleExpand]);
 	return { actionError, busy, clearKey, draft, reload, reloading, setDraft, setKey, setSetting, toggleEnabled };
 }
 
 async function saveChannelKey({
 	key,
-	client,
 	draft,
 	onChanged,
 	setActionError,
@@ -221,7 +209,6 @@ async function saveChannelKey({
 	setDraft,
 }: {
 	key: string;
-	client: WebClient;
 	draft: Record<string, string>;
 	onChanged: () => Promise<void> | void;
 	setActionError: (value: string | null) => void;
@@ -245,13 +232,11 @@ async function saveChannelKey({
 
 async function clearChannelKey({
 	key,
-	client,
 	onChanged,
 	setActionError,
 	setBusy,
 }: {
 	key: string;
-	client: WebClient;
 	onChanged: () => Promise<void> | void;
 	setActionError: (value: string | null) => void;
 	setBusy: (value: string | null) => void;
@@ -270,12 +255,10 @@ async function clearChannelKey({
 }
 
 async function reloadChannelPlugins({
-	client,
 	onChanged,
 	setActionError,
 	setReloading,
 }: {
-	client: WebClient;
 	onChanged: () => Promise<void> | void;
 	setActionError: (value: string | null) => void;
 	setReloading: (value: boolean) => void;
@@ -294,7 +277,6 @@ async function reloadChannelPlugins({
 async function saveChannelSetting({
 	key,
 	value,
-	client,
 	onChanged,
 	setActionError,
 	setBusy,
@@ -302,7 +284,6 @@ async function saveChannelSetting({
 }: {
 	key: string;
 	value: boolean;
-	client: WebClient;
 	onChanged: () => Promise<void> | void;
 	setActionError: (value: string | null) => void;
 	setBusy: (value: string | null) => void;
@@ -336,7 +317,6 @@ function pollChannelReload(onChanged: () => Promise<void> | void, setReloading: 
 
 async function toggleChannelEnabled({
 	channel,
-	client,
 	expanded,
 	onChanged,
 	onToggleExpand,
@@ -344,7 +324,6 @@ async function toggleChannelEnabled({
 	setBusy,
 }: {
 	channel: ChannelStatus;
-	client: WebClient;
 	expanded: boolean;
 	onChanged: () => Promise<void> | void;
 	onToggleExpand: () => void;
@@ -355,7 +334,7 @@ async function toggleChannelEnabled({
 	setActionError(null);
 	try {
 		if (channel.id === "imessage") {
-			await toggleImessageChannel(channel, client);
+			await toggleImessageChannel(channel);
 			await onChanged();
 			if (!expanded) onToggleExpand();
 		} else if (channel.configured) {
@@ -372,7 +351,7 @@ async function toggleChannelEnabled({
 	}
 }
 
-async function toggleImessageChannel(channel: ChannelStatus, _client: WebClient): Promise<void> {
+async function toggleImessageChannel(channel: ChannelStatus): Promise<void> {
 	if (channel.configured) {
 		if (!confirm("Disable iMessage bridge?")) return;
 		await rpc.request.channelsClearCredential({ key: "IMESSAGE_ENABLED" });
@@ -437,7 +416,6 @@ function ChannelCardHeader({
 }
 
 function ChannelCardBody({
-	client,
 	channel,
 	actionError,
 	allKeys,
@@ -450,7 +428,6 @@ function ChannelCardBody({
 	onSetKey,
 	onSetSetting,
 }: {
-	client: WebClient;
 	channel: ChannelStatus;
 	actionError: string | null;
 	allKeys: string[];
@@ -466,11 +443,11 @@ function ChannelCardBody({
 	return (
 		<div className="channel-card-body">
 			<ChannelAlerts channel={channel} actionError={actionError} />
-			{channel.id === "imessage" && channel.pluginLoaded && <ImessageTccBanner client={client} />}
+			{channel.id === "imessage" && channel.pluginLoaded && <ImessageTccBanner />}
 			{(channel.id === "telegram" || channel.id === "discord") && channel.liveStatus === "online" && (
-				<OwnerPairingSection client={client} connector={channel.id} />
+				<OwnerPairingSection connector={channel.id} />
 			)}
-			{channel.id === "discord" && channel.liveStatus === "online" && <DiscordBackfillSection client={client} />}
+			{channel.id === "discord" && channel.liveStatus === "online" && <DiscordBackfillSection />}
 			<ReplySettingsSection channel={channel} busy={busy} onSetSetting={onSetSetting} />
 			<CredentialsSection
 				allKeys={allKeys}
@@ -484,7 +461,7 @@ function ChannelCardBody({
 			<ChannelStatusSection channel={channel} reloading={reloading} onReload={onReload} />
 			<section className="channel-card-section">
 				<h4 className="channel-card-section-title">Recent activity (from trajectories)</h4>
-				<ChannelHistory client={client} sourceId={channel.id} pluginLoaded={channel.pluginLoaded} />
+				<ChannelHistory sourceId={channel.id} pluginLoaded={channel.pluginLoaded} />
 			</section>
 		</div>
 	);
@@ -699,11 +676,9 @@ function ChannelStatusSection({
 }
 
 function ChannelHistory({
-	client,
 	sourceId,
 	pluginLoaded,
 }: {
-	client: WebClient;
 	sourceId: string;
 	pluginLoaded: boolean;
 }) {
@@ -722,7 +697,7 @@ function ChannelHistory({
 		} finally {
 			setLoading(false);
 		}
-	}, [client, sourceId]);
+	}, [sourceId]);
 
 	useEffect(() => {
 		void load();
@@ -757,7 +732,7 @@ function summarizeCatchUp(result: ChannelsDiscordCatchUpResult | undefined): str
 	return `${result.replied} replied · ${result.addressed} addressed · ${result.alreadyAnswered} already answered · ${result.errors} errors${errorText}`;
 }
 
-function DiscordBackfillSection({ client }: { client: WebClient }) {
+function DiscordBackfillSection() {
 	const [guilds, setGuilds] = useState<Array<{ id: string; name: string; channels: Array<{ id: string; name: string; type: number }> }> | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
@@ -771,7 +746,7 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [client]);
+	}, []);
 
 	useEffect(() => { void load(); }, [load]);
 
@@ -869,7 +844,7 @@ function DiscordBackfillSection({ client }: { client: WebClient }) {
 	);
 }
 
-function ImessageTccBanner({ client: _client }: { client: WebClient }) {
+function ImessageTccBanner() {
 	const [granted, setGranted] = useState<boolean | null>(null);
 	const [opening, setOpening] = useState(false);
 
@@ -930,10 +905,8 @@ function ChannelHistoryRow({ item }: { item: ActivityTrajectoryListItem }) {
  * Unbind button.
  */
 function OwnerPairingSection({
-	client,
 	connector,
 }: {
-	client: WebClient;
 	connector: "telegram" | "discord";
 }) {
 	const [bound, setBound] = useState<{ externalId: string; displayHandle: string } | null>(null);
@@ -992,7 +965,7 @@ function OwnerPairingSection({
 		} finally {
 			setBusy(false);
 		}
-	}, [client, connector, refresh]);
+	}, [connector, refresh]);
 
 	const slashCmd = connector === "telegram" ? "/eliza_pair" : "/eliza-pair";
 	const where = connector === "telegram"

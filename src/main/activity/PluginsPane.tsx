@@ -10,11 +10,10 @@
 
 import { useCallback, useState } from "react";
 import type { ActivityPluginDetail, ActivityPluginsSnapshot } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
-export function PluginsPane({ client: _client }: { client: WebClient }) {
+export function PluginsPane() {
 	const fetcher = useCallback(() => rpc.request.activityPluginsList({}), []);
 	const { data, error, refresh } = usePoller<ActivityPluginsSnapshot>(fetcher, 8000);
 	const [busy, setBusy] = useState(false);

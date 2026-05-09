@@ -8,18 +8,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PensieveTemplateDetail, PensieveTemplateRenderResult } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
 const VAR_REGEX = /\{\{\s*([a-zA-Z_][\w-]*)\s*\}\}/g;
 
 export function TemplateEditor({
-	client,
 	detail,
 	onSaved,
 	onDeleted,
 }: {
-	client: WebClient;
 	detail: PensieveTemplateDetail;
 	onSaved: () => Promise<void> | void;
 	onDeleted: () => Promise<void> | void;

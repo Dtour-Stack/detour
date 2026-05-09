@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
 import type { PensieveEntitySummary, PensievePersonDetail } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 
-export function RelationshipsPane({ client }: { client: WebClient }) {
+export function RelationshipsPane() {
 	const [persons, setPersons] = useState<PensieveEntitySummary[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [selected, setSelected] = useState<string | null>(null);
 
 	useEffect(() => {
 		rpc.request.pensievePersonsList({ limit: 200 }).then(setPersons).catch((e) => setError(e.message));
-	}, [client]);
+	}, []);
 
 	return (
 		<div className="pensieve-split">
@@ -45,7 +44,7 @@ export function RelationshipsPane({ client }: { client: WebClient }) {
 				</div>
 			</div>
 			<div className="pensieve-split-detail">
-				{selected ? <PersonDetail client={client} entityId={selected} /> : (
+				{selected ? <PersonDetail entityId={selected} /> : (
 					<div className="empty">Select a person to view their memories + relationships.</div>
 				)}
 			</div>
@@ -53,14 +52,14 @@ export function RelationshipsPane({ client }: { client: WebClient }) {
 	);
 }
 
-function PersonDetail({ client, entityId }: { client: WebClient; entityId: string }) {
+function PersonDetail({ entityId }: { entityId: string }) {
 	const [detail, setDetail] = useState<PensievePersonDetail | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
 		setDetail(null); setError(null);
 		rpc.request.pensievePersonGet({ id: entityId }).then(setDetail).catch((e) => setError(e.message));
-	}, [client, entityId]);
+	}, [entityId]);
 
 	if (error) return <div className="banner error">{error}</div>;
 	if (!detail) return <div className="hint">Loading…</div>;

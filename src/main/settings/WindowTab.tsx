@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
 import type { WindowConfig } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 
-export function WindowTab({ client }: { client: WebClient }) {
+export function WindowTab() {
 	const [cfg, setCfg] = useState<WindowConfig | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 
 	useEffect(() => {
 		void rpc.request.configGetWindow({}).then(setCfg);
-	}, [client]);
+	}, []);
 
 	async function save(next: WindowConfig) {
 		setSaving(true);

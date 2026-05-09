@@ -8,7 +8,6 @@
 
 import { useCallback, useState } from "react";
 import type { ActivityTasksSnapshot } from "../../shared/index";
-import type { WebClient } from "../api/client";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
@@ -39,7 +38,7 @@ function fmtInterval(ms?: number): string {
 	return `${Math.round(ms / 86_400_000)}d`;
 }
 
-export function TasksPane({ client: _client }: { client: WebClient }) {
+export function TasksPane() {
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const fetcher = useCallback(() => rpc.request.activityTasksList({}), []);

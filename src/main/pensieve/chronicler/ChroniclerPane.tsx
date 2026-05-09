@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import type { ChroniclerConfig, ChroniclerObservation, ChroniclerStatus } from "../../../shared/index";
-import type { WebClient } from "../../api/client";
 import { rpc } from "../../rpc";
 import { usePoller } from "../usePoller";
 
@@ -124,7 +123,7 @@ function ChroniclerRecent({ observations }: { observations: ChroniclerObservatio
 	);
 }
 
-export function ChroniclerPane({ client }: { client: WebClient }) {
+export function ChroniclerPane() {
 	const [busyCount, setBusyCount] = useState(0);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const fetcher = useCallback(async (): Promise<ChroniclerData> => {
@@ -133,7 +132,7 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 			rpc.request.pensieveChroniclerRecent({ limit: 20 }),
 		]);
 		return { status, recent };
-	}, [client]);
+	}, []);
 	const { data, error, loading, refresh } = usePoller<ChroniclerData>(fetcher, 5000, []);
 	const status = data?.status;
 	const busy = busyCount > 0;
@@ -150,7 +149,7 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 		} finally {
 			setBusyCount((count) => Math.max(0, count - 1));
 		}
-	}, [client, refresh]);
+	}, [refresh]);
 
 	const sampleNow = useCallback(async () => {
 		setBusyCount((count) => count + 1);
@@ -163,7 +162,7 @@ export function ChroniclerPane({ client }: { client: WebClient }) {
 		} finally {
 			setBusyCount((count) => Math.max(0, count - 1));
 		}
-	}, [client, refresh]);
+	}, [refresh]);
 
 	return (
 		<div className="chronicler-pane">
