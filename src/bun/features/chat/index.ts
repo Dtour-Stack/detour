@@ -46,7 +46,18 @@ export const chatFeature: Feature = {
 				rpc: {
 					maxRequestTime: 60_000,
 					handlers: {
-						requests: {},
+						// First migrated RPC method (per .claude/rules/electrobun.md
+						// "Typed RPC" — replaces /api/backends HTTP fetch). The
+						// handler delegates to the same VaultManager the HTTP route
+						// uses, so the runtime-level behavior is identical;
+						// migration of the call site lives in src/main/rpc.ts +
+						// src/main/settings/BackendsTab.tsx. See docs/rpc-migration.md.
+						requests: {
+							vaultListBackends: async () => {
+								const manager = await deps.core.vault.manager();
+								return manager.detectBackends();
+							},
+						},
 						messages: {},
 					},
 				},

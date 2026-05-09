@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { BackendStatus, OpDiagnostic } from "../../shared/index";
 import type { WebClient } from "../api/client";
+import { rpc } from "../rpc";
 
 type InstallSpec = {
 	id: string;
@@ -17,8 +18,11 @@ export function BackendsTab({ client }: { client: WebClient }) {
 	const [view, setView] = useState<View>({ kind: "list" });
 
 	async function refresh() {
+		// First migrated call: vaultListBackends now goes via electrobun
+		// typed RPC instead of HTTP fetch. The other two still use HTTP
+		// fetch via WebClient — they'll migrate as the schema grows.
 		const [b, e, i] = await Promise.all([
-			client.detectBackends().catch(() => [] as BackendStatus[]),
+			rpc.request.vaultListBackends({}).catch(() => [] as BackendStatus[]),
 			client.getEnabledBackends().catch(() => [] as string[]),
 			client.getBackendInstall().catch(() => null),
 		]);
