@@ -40,23 +40,35 @@ function resolveBundledIndex(): string | null {
 }
 
 /**
- * Resolve the URL for a hash-routed React window.
- *   resolveViewUrl()           → chat (no hash)
- *   resolveViewUrl("pensieve") → "#pensieve"
- *   resolveViewUrl("activity") → "#activity"
- *   resolveViewUrl("channels") → "#channels"
+ * Resolve the URL for a Detour tray-window React view.
+ *   resolveViewUrl()           → views://main/index.html      (chat)
+ *   resolveViewUrl("activity") → views://main/activity.html
+ *   resolveViewUrl("pensieve") → views://main/pensieve.html
+ *   resolveViewUrl("browser")  → views://main/browser.html
+ *   resolveViewUrl("channels") → views://main/channels.html
+ *   resolveViewUrl("portless") → views://main/portless.html
+ *
+ * Each per-view HTML inlines `window.__detourView = "<view>"` before
+ * loading the shared bundle (index.js / index.css), so React's entry
+ * picks the right component synchronously. We use distinct file paths
+ * (not URL fragments) because electrobun's views:// scheme handler
+ * doesn't strip URL fragments and would 404 on `index.html#activity`.
+ *
+ * In DETOUR_DEV_URL mode we fall back to the URL-fragment form, which
+ * is fine because a real HTTP server (e.g. Vite) handles fragments
+ * correctly.
  */
-export function resolveViewUrl(hash?: string): string {
-	const fragment = hash ? `#${hash}` : "";
+export function resolveViewUrl(view?: string): string {
 	const bundled = resolveBundledIndex();
 	if (bundled) {
-		return `views://main/index.html${fragment}`;
+		const file = view ? `${view}.html` : "index.html";
+		return `views://main/${file}`;
 	}
 	if (DEV_URL) {
+		const fragment = view ? `#${view}` : "";
 		return `${DEV_URL}/${fragment}`;
 	}
-	// Should be unreachable — bundled assets are produced by electrobun dev/build.
-	// If we're here, something is wrong with the build artifact.
 	console.warn("[view-url] no bundled index.html found and no DETOUR_DEV_URL set — webview will be blank");
-	return `views://main/index.html${fragment}`;
+	const file = view ? `${view}.html` : "index.html";
+	return `views://main/${file}`;
 }

@@ -61,10 +61,19 @@ export default {
 			// Character knowledge bundled with the app, surfaced via
 			// resolveBundledIndex() / KnowledgeService.
 			"src/bun/core/knowledge/detour-squirrel": "knowledge/detour-squirrel",
-			// HTML shell for the single React entrypoint. Loaded by the tray as
-			// `views://main/index.html`. Sources index.js + index.css from the same
-			// directory (electrobun's view bundler emits those alongside).
+			// HTML shells for the single React entrypoint. Each window loads
+			// its own per-view HTML that sets window.__detourView before the
+			// shared bundle runs — this avoids electrobun's views:// scheme
+			// handler choking on URL fragments (it doesn't strip them, so
+			// `views://main/index.html#activity` would 404 looking for a
+			// file literally named index.html#activity). All HTMLs reference
+			// the same index.js + index.css siblings.
 			"src/main/index.html": "views/main/index.html",
+			"src/main/activity.html": "views/main/activity.html",
+			"src/main/pensieve.html": "views/main/pensieve.html",
+			"src/main/browser.html": "views/main/browser.html",
+			"src/main/channels.html": "views/main/channels.html",
+			"src/main/portless.html": "views/main/portless.html",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk
 			// (Bun.Worker reads .ts source directly). Worker import of the SDK
 			// resolves via the path-preserving copy of carrot-sdk/index.ts, so

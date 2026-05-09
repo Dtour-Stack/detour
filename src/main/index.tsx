@@ -8,19 +8,25 @@ import { BrowserView } from "./browser/BrowserView";
 import { PortlessView } from "./portless/PortlessView";
 import "./index.css";
 
-// Hash-routing: the same Vite bundle serves four windows.
-//   #pensieve → memory + relationship browser (own window)
-//   #activity → trajectories + logs + runtime introspection (own window)
-//   #channels → connected messaging surfaces (Discord/Telegram/iMessage)
-//   #browser  → isolated multi-tab agent browser
-//   default   → chat popup (App)
-const hash = typeof window !== "undefined" ? window.location.hash : "";
+// Per-window view selection: each window opens a distinct HTML wrapper
+// (views://main/<name>.html) that injects window.__detourView before this
+// bundle runs. We read it synchronously here. The `hash` fallback exists
+// for the DETOUR_DEV_URL path (real HTTP server, fragments work normally).
+//   pensieve → memory + relationship browser
+//   activity → trajectories + logs + runtime introspection
+//   channels → connected messaging surfaces (Discord/Telegram/iMessage)
+//   browser  → isolated multi-tab agent browser
+//   portless → local-dev reverse proxy management
+//   default  → chat popup (App)
+const view = typeof window !== "undefined"
+	? ((window as unknown as { __detourView?: string }).__detourView ?? window.location.hash.slice(1))
+	: "";
 const root =
-	hash === "#pensieve" ? <PensieveView /> :
-	hash === "#activity" ? <ActivityView /> :
-	hash === "#channels" ? <ChannelsView /> :
-	hash === "#browser" ? <BrowserView /> :
-	hash === "#portless" ? <PortlessView /> :
+	view === "pensieve" ? <PensieveView /> :
+	view === "activity" ? <ActivityView /> :
+	view === "channels" ? <ChannelsView /> :
+	view === "browser" ? <BrowserView /> :
+	view === "portless" ? <PortlessView /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);
