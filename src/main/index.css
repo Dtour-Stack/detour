@@ -2289,3 +2289,36 @@ label { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 
 	font-size: 11px;
 	font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
+
+/* ─── Cloud key/value lists (Apps + Containers tabs) ──────────────── */
+.cloud-kv {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 12px;
+	margin: 0;
+	font-size: 12px;
+}
+.cloud-kv dt {
+	color: var(--fg-muted);
+	font-weight: 500;
+}
+.cloud-kv dd {
+	margin: 0;
+	color: var(--fg);
+	word-break: break-all;
+}
+.cloud-kv dd code {
+	background: var(--bg-elevated);
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-size: 11px;
+}
+
+/* Chat bubble video preview — for `/video` slash command results. */
+.bubble video {
+	display: block;
+	max-width: 100%;
+	margin-top: 6px;
+	border-radius: var(--radius-md);
+	background: var(--bg-elevated);
+}

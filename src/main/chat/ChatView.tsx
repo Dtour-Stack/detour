@@ -6,9 +6,10 @@ import { onProviderChanged } from "../rpc-listeners/providers";
 
 type Bubble = {
 	id: string;
-	role: "user" | "assistant" | "error";
+	role: "user" | "assistant" | "error" | "media";
 	text: string;
 	thinking?: boolean;
+	media?: { kind: "video"; url: string; contentType?: string };
 };
 
 const CONV_ID = "web-default";
@@ -30,6 +31,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 	{ name: "/1password", usage: "/1password <identifier> [url]", description: "Fill a 1Password login in the browser.", insert: "/1password ", aliases: ["/op"] },
 	{ name: "/pet", usage: "/pet [name]", description: "List or inspect Codex pets.", insert: "/pet " },
 	{ name: "/hatch", usage: "/hatch <concept>", description: "Prepare a Codex pet hatch run.", insert: "/hatch " },
+	{ name: "/video", usage: "/video <prompt>", description: "Generate a video via ElizaOS Cloud (fal-ai/veo3).", insert: "/video " },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help" },
 ];
 
@@ -114,9 +116,28 @@ export function ChatView({
 	}, [slashMatches.length]);
 
 	function send(text: string) {
-		if (!text.trim()) return;
+		const trimmed = text.trim();
+		if (!trimmed) return;
+
+		// `/video <prompt>` — short-circuit the agent path and call
+		// ElizaOS Cloud's video generator directly. The prompt-or-empty
+		// check matters because /video alone is meaningless.
+		if (trimmed.startsWith("/video")) {
+			const prompt = trimmed.replace(/^\/video\s*/, "").trim();
+			if (!prompt) {
+				setBubbles((bs) => [
+					...bs,
+					{ id: uid(), role: "user", text: trimmed },
+					{ id: uid(), role: "error", text: "Usage: /video <prompt>" },
+				]);
+				return;
+			}
+			runVideoCommand(prompt);
+			return;
+		}
+
 		if (!activeProvider) return;
-		const userBubble: Bubble = { id: uid(), role: "user", text: text.trim() };
+		const userBubble: Bubble = { id: uid(), role: "user", text: trimmed };
 		const aId = uid();
 		assistantId.current = aId;
 		setBubbles((bs) => [
@@ -125,7 +146,7 @@ export function ChatView({
 			{ id: aId, role: "assistant", text: "", thinking: true },
 		]);
 		setPending(true);
-		void rpc.request.chatSend({ convId: CONV_ID, text: text.trim() }).catch((err) => {
+		void rpc.request.chatSend({ convId: CONV_ID, text: trimmed }).catch((err) => {
 			setBubbles((bs) => [
 				...bs.filter((b) => b.id !== assistantId.current),
 				{ id: uid(), role: "error", text: err instanceof Error ? err.message : String(err) },
@@ -133,6 +154,48 @@ export function ChatView({
 			assistantId.current = null;
 			setPending(false);
 		});
+	}
+
+	function runVideoCommand(prompt: string) {
+		const userId = uid();
+		const placeholderId = uid();
+		setBubbles((bs) => [
+			...bs,
+			{ id: userId, role: "user", text: `/video ${prompt}` },
+			{ id: placeholderId, role: "assistant", text: "Generating video…", thinking: true },
+		]);
+		setPending(true);
+		void rpc.request
+			.cloudGenerateVideo({ prompt })
+			.then((res) => {
+				setBubbles((bs) => bs.filter((b) => b.id !== placeholderId));
+				if (res.ok) {
+					setBubbles((bs) => [
+						...bs,
+						{
+							id: uid(),
+							role: "media",
+							text: prompt,
+							media: { kind: "video", url: res.video.url, ...(res.video.contentType ? { contentType: res.video.contentType } : {}) },
+						},
+					]);
+				} else {
+					const detail = res.insufficientCredits
+						? ` (need ${res.insufficientCredits.required} credits)`
+						: "";
+					setBubbles((bs) => [
+						...bs,
+						{ id: uid(), role: "error", text: `Video generation failed: ${res.error}${detail}` },
+					]);
+				}
+			})
+			.catch((err) => {
+				setBubbles((bs) => [
+					...bs.filter((b) => b.id !== placeholderId),
+					{ id: uid(), role: "error", text: err instanceof Error ? err.message : String(err) },
+				]);
+			})
+			.finally(() => setPending(false));
 	}
 
 	function insertSlash(command: SlashCommand) {
@@ -158,6 +221,14 @@ export function ChatView({
 				{bubbles.map((b) => (
 					<div key={b.id} className={`bubble ${b.role}${b.thinking ? " thinking" : ""}`}>
 						{b.text}
+						{b.media?.kind === "video" && (
+							<video
+								src={b.media.url}
+								controls
+								preload="metadata"
+								playsInline
+							/>
+						)}
 					</div>
 				))}
 				<div ref={bottomRef} />

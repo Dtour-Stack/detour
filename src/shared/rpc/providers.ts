@@ -11,6 +11,90 @@ export type CloudCreditsBalance = {
 	signedIn: boolean;
 };
 
+// ── Cloud apps + containers (cloud/apps/api/v1/apps + /containers) ──
+// Mirrors elizacloud.ai's user-facing endpoints. Detour surfaces them
+// read-only with provision buttons that pop the dashboard for create
+// flows (which require domain ownership / billing flows that aren't
+// worth re-implementing here).
+
+export type CloudApp = {
+	readonly id: string;
+	readonly name: string;
+	readonly description: string | null;
+	readonly app_url: string | null;
+	readonly website_url?: string | null;
+	readonly contact_email?: string | null;
+	readonly logo_url?: string | null;
+	readonly created_at?: string;
+	readonly updated_at?: string;
+};
+
+export type CloudAppsList = {
+	apps: CloudApp[];
+	signedIn: boolean;
+	error?: string;
+};
+
+export type CloudContainerStatus =
+	| "pending"
+	| "provisioning"
+	| "running"
+	| "stopped"
+	| "disconnected"
+	| "error"
+	| "unknown";
+
+export type CloudContainer = {
+	readonly id: string;
+	readonly name?: string | null;
+	readonly status: CloudContainerStatus;
+	readonly image?: string | null;
+	readonly host?: string | null;
+	readonly endpoint_url?: string | null;
+	readonly created_at?: string;
+	readonly updated_at?: string;
+};
+
+export type CloudContainersList = {
+	containers: CloudContainer[];
+	signedIn: boolean;
+	error?: string;
+};
+
+// ── Video generation (cloud/apps/api/v1/generate-video) ───────────
+// Wraps Fal-AI (veo3 default) via ElizaCloud's billing layer. Returns
+// a finished video URL — fal's flow is synchronous from our POV so
+// no polling needed on the Detour side.
+
+export type CloudVideoGenerationParams = {
+	prompt: string;
+	model?: string;
+	referenceUrl?: string;
+	durationSeconds?: number;
+	resolution?: string;
+	audio?: boolean;
+	voiceControl?: boolean;
+};
+
+export type CloudVideoResult =
+	| {
+			ok: true;
+			id: string;
+			video: {
+				url: string;
+				width?: number;
+				height?: number;
+				fileSize?: number;
+				contentType?: string;
+			};
+			cost?: { totalCost: number };
+	  }
+	| {
+			ok: false;
+			error: string;
+			insufficientCredits?: { required: number };
+	  };
+
 export type ProvidersRequests = {
 	providersList: {
 		params: Record<string, never>;
@@ -47,6 +131,29 @@ export type ProvidersRequests = {
 	cloudCreditsBalance: {
 		params: Record<string, never>;
 		response: CloudCreditsBalance;
+	};
+	// ElizaCloud apps registry — hosted client-app records the user
+	// owns (each one gets an API key + optional GitHub repo). Wraps
+	// GET /api/v1/apps. Read-only on the Detour side; create/update
+	// happens in the dashboard.
+	cloudListApps: {
+		params: Record<string, never>;
+		response: CloudAppsList;
+	};
+	// ElizaCloud containers — Hetzner-Docker-backed agent runtimes.
+	// Wraps GET /api/v1/containers. Provisioning requires the cloud
+	// control plane and isn't surfaced here; Detour links to the
+	// dashboard for that.
+	cloudListContainers: {
+		params: Record<string, never>;
+		response: CloudContainersList;
+	};
+	// Video generation — POST /api/v1/generate-video. Synchronous from
+	// the Detour-side POV (Fal returns the finished video URL when the
+	// request completes). Used by the `/video` chat slash command.
+	cloudGenerateVideo: {
+		params: CloudVideoGenerationParams;
+		response: CloudVideoResult;
 	};
 };
 

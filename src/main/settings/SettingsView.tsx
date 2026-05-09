@@ -11,12 +11,14 @@ import { WindowTab } from "./WindowTab";
 import { OsPermissionsTab } from "./OsPermissionsTab";
 import { LocalAITab } from "./LocalAITab";
 import { ElizaCloudTab } from "./ElizaCloudTab";
+import { CloudAppsTab } from "./CloudAppsTab";
+import { CloudContainersTab } from "./CloudContainersTab";
 
 type Section = "configuration" | "vault" | "cloud";
 
 type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "character" | "agent" | "os" | "window";
 type VaultTab = "inventory" | "saved-logins" | "backends";
-type CloudTab = "elizacloud";
+type CloudTab = "elizacloud" | "apps" | "containers";
 
 const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "appearance", label: "Appearance" },
@@ -37,6 +39,8 @@ const VAULT_TABS: { id: VaultTab; label: string }[] = [
 
 const CLOUD_TABS: { id: CloudTab; label: string }[] = [
 	{ id: "elizacloud", label: "ElizaOS Cloud" },
+	{ id: "apps", label: "Apps" },
+	{ id: "containers", label: "Containers" },
 ];
 
 function ConfigContent({ tab }: { tab: ConfigTab }) {
@@ -79,6 +83,10 @@ function CloudContent({ tab }: { tab: CloudTab }) {
 	switch (tab) {
 		case "elizacloud":
 			return <ElizaCloudTab />;
+		case "apps":
+			return <CloudAppsTab />;
+		case "containers":
+			return <CloudContainersTab />;
 		default:
 			return <div className="empty">Unknown cloud tab.</div>;
 	}

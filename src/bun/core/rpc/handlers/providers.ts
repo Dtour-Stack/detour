@@ -4,12 +4,47 @@ import type {
 	ProviderId,
 	ProviderInfo,
 } from "../../../../shared/index";
-import type { CloudCreditsBalance } from "../../../../shared/rpc/providers";
+import type {
+	CloudAppsList,
+	CloudContainersList,
+	CloudContainerStatus,
+	CloudCreditsBalance,
+	CloudVideoGenerationParams,
+	CloudVideoResult,
+} from "../../../../shared/rpc/providers";
 import { fetchOpenRouterModels } from "../../openrouter-models";
 import { fetchElizaCloudModels } from "../../elizacloud-models";
 import type { RpcDeps } from "../types";
 
-const ELIZACLOUD_BALANCE_URL = "https://www.elizacloud.ai/api/v1/credits/balance";
+const ELIZACLOUD_BASE = "https://www.elizacloud.ai/api/v1";
+const ELIZACLOUD_BALANCE_URL = `${ELIZACLOUD_BASE}/credits/balance`;
+const ELIZACLOUD_APPS_URL = `${ELIZACLOUD_BASE}/apps`;
+const ELIZACLOUD_CONTAINERS_URL = `${ELIZACLOUD_BASE}/containers`;
+const ELIZACLOUD_VIDEO_URL = `${ELIZACLOUD_BASE}/generate-video`;
+const VALID_CONTAINER_STATUSES: CloudContainerStatus[] = [
+	"pending",
+	"provisioning",
+	"running",
+	"stopped",
+	"disconnected",
+	"error",
+	"unknown",
+];
+
+function normalizeContainerStatus(value: unknown): CloudContainerStatus {
+	if (typeof value !== "string") return "unknown";
+	const lower = value.toLowerCase();
+	return (VALID_CONTAINER_STATUSES as string[]).includes(lower)
+		? (lower as CloudContainerStatus)
+		: "unknown";
+}
+
+async function getElizaCloudApiKey(deps: RpcDeps): Promise<string | null> {
+	const manager = await deps.vault.manager();
+	if (!(await manager.has("ELIZAOS_CLOUD_API_KEY"))) return null;
+	const key = await manager.get("ELIZAOS_CLOUD_API_KEY");
+	return key && key.length > 0 ? key : null;
+}
 
 /**
  * Providers RPC handlers — replaces the HTTP routes:
@@ -133,11 +168,8 @@ export function providersRequests(deps: RpcDeps) {
 		cloudCreditsBalance: async (
 			_params: Record<string, never>,
 		): Promise<CloudCreditsBalance> => {
-			const manager = await deps.vault.manager();
-			if (!(await manager.has("ELIZAOS_CLOUD_API_KEY"))) {
-				return { balance: 0, signedIn: false };
-			}
-			const apiKey = await manager.get("ELIZAOS_CLOUD_API_KEY");
+			const apiKey = await getElizaCloudApiKey(deps);
+			if (!apiKey) return { balance: 0, signedIn: false };
 			try {
 				const res = await fetch(ELIZACLOUD_BALANCE_URL, {
 					headers: { Authorization: `Bearer ${apiKey}` },
@@ -158,6 +190,154 @@ export function providersRequests(deps: RpcDeps) {
 				return {
 					balance: 0,
 					signedIn: true,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
+		},
+
+		cloudListApps: async (_params: Record<string, never>): Promise<CloudAppsList> => {
+			const apiKey = await getElizaCloudApiKey(deps);
+			if (!apiKey) return { apps: [], signedIn: false };
+			try {
+				const res = await fetch(ELIZACLOUD_APPS_URL, {
+					headers: { Authorization: `Bearer ${apiKey}` },
+				});
+				if (res.status === 401 || res.status === 403) {
+					return { apps: [], signedIn: false, error: "API key was rejected. Reconnect via Cloud sign-in." };
+				}
+				if (!res.ok) {
+					const body = await res.text().catch(() => res.statusText);
+					return { apps: [], signedIn: true, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
+				}
+				const data = (await res.json()) as { apps?: unknown };
+				const apps = Array.isArray(data.apps)
+					? data.apps.flatMap((entry): CloudAppsList["apps"] => {
+						if (!entry || typeof entry !== "object") return [];
+						const e = entry as Record<string, unknown>;
+						const id = typeof e.id === "string" ? e.id : null;
+						const name = typeof e.name === "string" ? e.name : null;
+						if (!id || !name) return [];
+						return [{
+							id,
+							name,
+							description: typeof e.description === "string" ? e.description : null,
+							app_url: typeof e.app_url === "string" ? e.app_url : null,
+							website_url: typeof e.website_url === "string" ? e.website_url : null,
+							contact_email: typeof e.contact_email === "string" ? e.contact_email : null,
+							logo_url: typeof e.logo_url === "string" ? e.logo_url : null,
+							created_at: typeof e.created_at === "string" ? e.created_at : undefined,
+							updated_at: typeof e.updated_at === "string" ? e.updated_at : undefined,
+						}];
+					})
+					: [];
+				return { apps, signedIn: true };
+			} catch (err) {
+				return {
+					apps: [],
+					signedIn: true,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
+		},
+
+		cloudListContainers: async (
+			_params: Record<string, never>,
+		): Promise<CloudContainersList> => {
+			const apiKey = await getElizaCloudApiKey(deps);
+			if (!apiKey) return { containers: [], signedIn: false };
+			try {
+				const res = await fetch(ELIZACLOUD_CONTAINERS_URL, {
+					headers: { Authorization: `Bearer ${apiKey}` },
+				});
+				if (res.status === 401 || res.status === 403) {
+					return { containers: [], signedIn: false, error: "API key was rejected. Reconnect via Cloud sign-in." };
+				}
+				if (!res.ok) {
+					const body = await res.text().catch(() => res.statusText);
+					return { containers: [], signedIn: true, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
+				}
+				const json = (await res.json()) as { data?: unknown };
+				const containers = Array.isArray(json.data)
+					? json.data.flatMap((entry): CloudContainersList["containers"] => {
+						if (!entry || typeof entry !== "object") return [];
+						const e = entry as Record<string, unknown>;
+						const id = typeof e.id === "string" ? e.id : null;
+						if (!id) return [];
+						return [{
+							id,
+							name: typeof e.name === "string" ? e.name : null,
+							status: normalizeContainerStatus(e.status),
+							image: typeof e.image === "string" ? e.image : null,
+							host: typeof e.host === "string" ? e.host : null,
+							endpoint_url: typeof e.endpoint_url === "string" ? e.endpoint_url : null,
+							created_at: typeof e.created_at === "string" ? e.created_at : undefined,
+							updated_at: typeof e.updated_at === "string" ? e.updated_at : undefined,
+						}];
+					})
+					: [];
+				return { containers, signedIn: true };
+			} catch (err) {
+				return {
+					containers: [],
+					signedIn: true,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
+		},
+
+		cloudGenerateVideo: async (
+			params: CloudVideoGenerationParams,
+		): Promise<CloudVideoResult> => {
+			const apiKey = await getElizaCloudApiKey(deps);
+			if (!apiKey) {
+				return { ok: false, error: "Not signed in to ElizaOS Cloud — Cloud → ElizaOS Cloud → Connect." };
+			}
+			try {
+				const res = await fetch(ELIZACLOUD_VIDEO_URL, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(params),
+				});
+				if (res.status === 402) {
+					const body = (await res.json().catch(() => ({}))) as {
+						required?: number;
+					};
+					return {
+						ok: false,
+						error: "Insufficient ElizaCloud credits. Top up via the Cloud tab.",
+						...(typeof body.required === "number" ? { insufficientCredits: { required: body.required } } : {}),
+					};
+				}
+				if (!res.ok) {
+					const body = await res.text().catch(() => res.statusText);
+					return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
+				}
+				const data = (await res.json()) as {
+					id?: string;
+					video?: { url?: string; width?: number; height?: number; file_size?: number; content_type?: string };
+					cost?: { totalCost?: number };
+				};
+				if (!data.video?.url) {
+					return { ok: false, error: "ElizaCloud returned no video URL" };
+				}
+				return {
+					ok: true,
+					id: typeof data.id === "string" ? data.id : "",
+					video: {
+						url: data.video.url,
+						...(typeof data.video.width === "number" ? { width: data.video.width } : {}),
+						...(typeof data.video.height === "number" ? { height: data.video.height } : {}),
+						...(typeof data.video.file_size === "number" ? { fileSize: data.video.file_size } : {}),
+						...(typeof data.video.content_type === "string" ? { contentType: data.video.content_type } : {}),
+					},
+					...(typeof data.cost?.totalCost === "number" ? { cost: { totalCost: data.cost.totalCost } } : {}),
+				};
+			} catch (err) {
+				return {
+					ok: false,
 					error: err instanceof Error ? err.message : String(err),
 				};
 			}
