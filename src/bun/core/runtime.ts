@@ -243,7 +243,7 @@ type BuildAttemptOptions = {
 	modelFailover: boolean;
 };
 
-const DEFAULT_PROVIDER_PRIORITY: ProviderId[] = ["openai", "anthropic", "openrouter"];
+const DEFAULT_PROVIDER_PRIORITY: ProviderId[] = ["openai", "anthropic", "openrouter", "elizacloud"];
 const MODEL_FAILOVER_TYPES = new Set<string>([
 	"TEXT_NANO",
 	"TEXT_SMALL",

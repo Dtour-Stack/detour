@@ -86,7 +86,7 @@ describe("ConfigService", () => {
 		expect(m.codexSmall).toBe("gpt-5.2");
 		expect(m.codexImage).toBe("gpt-5.2");
 		expect(m.openRouterTextLarge).toBe("openrouter/free");
-		expect(m.providerPriority).toEqual(["openai", "anthropic", "openrouter"]);
+		expect(m.providerPriority).toEqual(["openai", "anthropic", "openrouter", "elizacloud"]);
 	});
 
 	test("setModels applies env vars so plugin-codex picks them up", async () => {
@@ -100,7 +100,13 @@ describe("ConfigService", () => {
 			openRouterEmbedding: "openai/text-embedding-3-small",
 			openRouterImage: "google/gemini-2.5-flash-image",
 			openRouterVision: "openrouter/free",
-			providerPriority: ["openai", "anthropic", "openrouter"],
+			elizaCloudLarge: "",
+			elizaCloudMedium: "",
+			elizaCloudSmall: "",
+			elizaCloudNano: "",
+			elizaCloudMega: "",
+			elizaCloudResponseHandler: "",
+			providerPriority: ["openai", "anthropic", "openrouter", "elizacloud"],
 		});
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
 		expect(process.env.CODEX_MODEL_SMALL).toBe("gpt-5.4-mini");

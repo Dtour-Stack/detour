@@ -271,6 +271,82 @@ export function ModelsTab() {
 			</div>
 
 			<div className="card">
+				<div className="row" style={{ marginBottom: 8 }}>
+					<label style={{ flex: 1 }}>ElizaOS Cloud models</label>
+				</div>
+				<div className="hint" style={{ marginBottom: 12 }}>
+					Override model IDs per bucket. Leave blank to use the plugin's
+					built-in default. See{" "}
+					<a href="https://www.elizacloud.ai/dashboard" target="_blank" rel="noreferrer">
+						elizacloud.ai/dashboard
+					</a>{" "}
+					for available model IDs.
+				</div>
+				<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+					<div>
+						<label>ElizaCloud large (TEXT_LARGE)</label>
+						<input
+							type="text"
+							value={cfg.elizaCloudLarge}
+							onChange={(e) => save({ ...cfg, elizaCloudLarge: e.target.value })}
+							style={selectStyle}
+							placeholder="(plugin default)"
+						/>
+					</div>
+					<div>
+						<label>ElizaCloud medium (TEXT_MEDIUM)</label>
+						<input
+							type="text"
+							value={cfg.elizaCloudMedium}
+							onChange={(e) => save({ ...cfg, elizaCloudMedium: e.target.value })}
+							style={selectStyle}
+							placeholder="(plugin default)"
+						/>
+					</div>
+					<div>
+						<label>ElizaCloud small (TEXT_SMALL)</label>
+						<input
+							type="text"
+							value={cfg.elizaCloudSmall}
+							onChange={(e) => save({ ...cfg, elizaCloudSmall: e.target.value })}
+							style={selectStyle}
+							placeholder="(plugin default)"
+						/>
+					</div>
+					<div>
+						<label>ElizaCloud nano (TEXT_NANO)</label>
+						<input
+							type="text"
+							value={cfg.elizaCloudNano}
+							onChange={(e) => save({ ...cfg, elizaCloudNano: e.target.value })}
+							style={selectStyle}
+							placeholder="(plugin default)"
+						/>
+					</div>
+					<div>
+						<label>ElizaCloud mega (TEXT_MEGA)</label>
+						<input
+							type="text"
+							value={cfg.elizaCloudMega}
+							onChange={(e) => save({ ...cfg, elizaCloudMega: e.target.value })}
+							style={selectStyle}
+							placeholder="(plugin default)"
+						/>
+					</div>
+					<div>
+						<label>ElizaCloud response handler</label>
+						<input
+							type="text"
+							value={cfg.elizaCloudResponseHandler}
+							onChange={(e) => save({ ...cfg, elizaCloudResponseHandler: e.target.value })}
+							style={selectStyle}
+							placeholder="(plugin default)"
+						/>
+					</div>
+				</div>
+			</div>
+
+			<div className="card">
 				<label>Provider fallback order</label>
 				<div className="hint" style={{ marginTop: 4, marginBottom: 8 }}>
 					The active provider is tried first; this order is used after that.

@@ -328,6 +328,15 @@ export type ModelConfig = {
 	openRouterEmbedding: string;
 	openRouterImage: string;
 	openRouterVision: string;
+	// ElizaOS Cloud model bucket overrides — flow into the
+	// `ELIZAOS_CLOUD_*_MODEL` env vars that
+	// `@elizaos/plugin-elizacloud` reads (utils/config.ts).
+	elizaCloudLarge: string;
+	elizaCloudMedium: string;
+	elizaCloudSmall: string;
+	elizaCloudNano: string;
+	elizaCloudMega: string;
+	elizaCloudResponseHandler: string;
 	providerPriority: ProviderId[];
 };
 

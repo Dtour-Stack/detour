@@ -29,7 +29,15 @@ const DEFAULT_MODELS: ModelConfig = {
 	openRouterEmbedding: "openai/text-embedding-3-small",
 	openRouterImage: "google/gemini-2.5-flash-image",
 	openRouterVision: "openrouter/free",
-	providerPriority: ["openai", "anthropic", "openrouter"],
+	// ElizaOS Cloud model defaults — empty strings let the plugin fall
+	// back to its own defaults if the user hasn't overridden them.
+	elizaCloudLarge: "",
+	elizaCloudMedium: "",
+	elizaCloudSmall: "",
+	elizaCloudNano: "",
+	elizaCloudMega: "",
+	elizaCloudResponseHandler: "",
+	providerPriority: ["openai", "anthropic", "openrouter", "elizacloud"],
 };
 
 const DEFAULT_WINDOW: WindowConfig = {
@@ -139,6 +147,12 @@ export class ConfigService {
 			openRouterEmbedding: modelString(raw, "openRouterEmbedding"),
 			openRouterImage: modelString(raw, "openRouterImage"),
 			openRouterVision: modelString(raw, "openRouterVision"),
+			elizaCloudLarge: modelString(raw, "elizaCloudLarge"),
+			elizaCloudMedium: modelString(raw, "elizaCloudMedium"),
+			elizaCloudSmall: modelString(raw, "elizaCloudSmall"),
+			elizaCloudNano: modelString(raw, "elizaCloudNano"),
+			elizaCloudMega: modelString(raw, "elizaCloudMega"),
+			elizaCloudResponseHandler: modelString(raw, "elizaCloudResponseHandler"),
 			providerPriority: this.providerPriority(raw.providerPriority),
 		};
 	}
@@ -158,6 +172,25 @@ export class ConfigService {
 		process.env.OPENROUTER_MODEL_EMBEDDING = cfg.openRouterEmbedding;
 		process.env.OPENROUTER_MODEL_IMAGE = cfg.openRouterImage;
 		process.env.OPENROUTER_MODEL_VISION = cfg.openRouterVision;
+		// ElizaOS Cloud — env-var names match the plugin's reader
+		// (eliza/plugins/plugin-elizacloud/utils/config.ts).
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_LARGE_MODEL", cfg.elizaCloudLarge);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_MEDIUM_MODEL", cfg.elizaCloudMedium);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_SMALL_MODEL", cfg.elizaCloudSmall);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_NANO_MODEL", cfg.elizaCloudNano);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_MEGA_MODEL", cfg.elizaCloudMega);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_RESPONSE_HANDLER_MODEL", cfg.elizaCloudResponseHandler);
+	}
+
+	private applyElizaCloudEnv(name: string, value: string): void {
+		// Empty value = let the plugin's own default kick in. We have to
+		// explicitly delete (not set to "") because the plugin treats
+		// empty-string as a configured override.
+		if (value) {
+			process.env[name] = value;
+		} else {
+			delete process.env[name];
+		}
 	}
 
 	private providerPriority(value: unknown): ModelConfig["providerPriority"] {
