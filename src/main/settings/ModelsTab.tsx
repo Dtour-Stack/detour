@@ -95,6 +95,7 @@ function ensureModel(models: OpenRouterModelInfo[], id: string): OpenRouterModel
 
 export function ModelsTab({ client }: { client: WebClient }) {
 	const [cfg, setCfg] = useState<ModelConfig | null>(null);
+	const [cfgError, setCfgError] = useState<string | null>(null);
 	const [catalog, setCatalog] = useState<OpenRouterModelsResponse | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
 	const [loadingCatalog, setLoadingCatalog] = useState(false);
@@ -102,7 +103,9 @@ export function ModelsTab({ client }: { client: WebClient }) {
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 
 	useEffect(() => {
-		void client.getModelConfig().then(setCfg);
+		client.getModelConfig()
+			.then((c) => { setCfg(c); setCfgError(null); })
+			.catch((err) => setCfgError(err instanceof Error ? err.message : String(err)));
 		void refreshOpenRouterModels();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [client]);
@@ -142,6 +145,27 @@ export function ModelsTab({ client }: { client: WebClient }) {
 		void save({ ...cfg, providerPriority: next });
 	}
 
+	if (cfgError) {
+		return (
+			<div>
+				<h3 style={{ margin: "0 0 4px" }}>Models &amp; routing</h3>
+				<div className="banner error" style={{ marginTop: 8 }}>
+					Failed to load model config: {cfgError}
+				</div>
+				<button
+					type="button"
+					className="btn small"
+					style={{ marginTop: 8 }}
+					onClick={() => {
+						setCfgError(null);
+						client.getModelConfig()
+							.then((c) => { setCfg(c); setCfgError(null); })
+							.catch((err) => setCfgError(err instanceof Error ? err.message : String(err)));
+					}}
+				>Retry</button>
+			</div>
+		);
+	}
 	if (!cfg) return <div className="hint">Loading…</div>;
 
 	return (
