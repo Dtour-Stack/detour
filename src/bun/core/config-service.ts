@@ -18,6 +18,7 @@ const DEFAULT_AGENT: AgentConfig = {
 	mode: "read",
 	allowedPrefixes: [],
 	deniedPrefixes: [],
+	elevatedCoding: false,
 };
 
 const DEFAULT_MODELS: ModelConfig = {
@@ -95,6 +96,7 @@ export class ConfigService {
 			mode: this.parseMode(raw.mode),
 			allowedPrefixes: Array.isArray(raw.allowedPrefixes) ? raw.allowedPrefixes.filter((p: unknown): p is string => typeof p === "string") : [],
 			deniedPrefixes: Array.isArray(raw.deniedPrefixes) ? raw.deniedPrefixes.filter((p: unknown): p is string => typeof p === "string") : [],
+			elevatedCoding: typeof raw.elevatedCoding === "boolean" ? raw.elevatedCoding : false,
 		};
 		return next;
 	}
@@ -105,6 +107,7 @@ export class ConfigService {
 			mode: this.parseMode(next.mode),
 			allowedPrefixes: (next.allowedPrefixes ?? []).map(String),
 			deniedPrefixes: (next.deniedPrefixes ?? []).map(String),
+			elevatedCoding: !!next.elevatedCoding,
 		};
 		await this.writeJson(KEY_AGENT, sanitized);
 		this.applyAgent(sanitized);
@@ -117,6 +120,12 @@ export class ConfigService {
 			allowedPrefixes: cfg.allowedPrefixes,
 			deniedPrefixes: cfg.deniedPrefixes,
 		});
+		// Mirror the elevated-coding flag into env so the running runtime
+		// (already booted, won't see new runtime.settings until a rebuild)
+		// can reflect the change immediately. The capabilitiesPlugin's
+		// codingBriefProvider reads this on every turn.
+		if (cfg.elevatedCoding) process.env.DETOUR_ELEVATED_CODING = "true";
+		else delete process.env.DETOUR_ELEVATED_CODING;
 	}
 
 	// ── Agent character ────────────────────────────────────────────────

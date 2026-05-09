@@ -20,8 +20,10 @@ import type {
 	ChannelsSnapshot,
 } from "../../shared/index";
 import type { ChannelsDiscordCatchUpResult } from "../../shared/rpc/channels";
+import type { GitHubActivityEvent, GitHubChannelRole, GitHubIdentity } from "../../shared/rpc/github-channel";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
+import { SidebarIcon } from "../SidebarIcon";
 
 const CHANNEL_ICONS: Record<string, string> = {
 	discord: "💬",
@@ -56,11 +58,14 @@ export function ChannelsView() {
 		<div className="settings-shell">
 			<aside className="settings-sidebar">
 				<div className="window-brand">Channels</div>
-				<div className="hint" style={{ padding: "0 12px 12px", lineHeight: 1.5 }}>
+				<div className="hint section-btn-label" style={{ padding: "0 12px 12px", lineHeight: 1.5 }}>
 					Wire messaging connectors. Per-channel history comes from the agent's trajectory log.
 				</div>
 				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden>Configured</div>
+					<div className="section-btn active" aria-hidden title="Configured">
+						<SidebarIcon name="chat" />
+						<span className="section-btn-label">Configured</span>
+					</div>
 					<div className="sub-nav">
 						{(snap?.channels ?? []).map((c) => (
 							<button
@@ -449,20 +454,33 @@ function ChannelCardBody({
 			)}
 			{channel.id === "discord" && channel.liveStatus === "online" && <DiscordBackfillSection />}
 			<ReplySettingsSection channel={channel} busy={busy} onSetSetting={onSetSetting} />
-			<CredentialsSection
-				allKeys={allKeys}
-				busy={busy}
-				channel={channel}
-				draft={draft}
-				onClearKey={onClearKey}
-				onDraftChange={onDraftChange}
-				onSetKey={onSetKey}
-			/>
+			{channel.id === "github" ? (
+				<GitHubChannelDetails
+					channel={channel}
+					busy={busy}
+					draft={draft}
+					onClearKey={onClearKey}
+					onDraftChange={onDraftChange}
+					onSetKey={onSetKey}
+				/>
+			) : (
+				<CredentialsSection
+					allKeys={allKeys}
+					busy={busy}
+					channel={channel}
+					draft={draft}
+					onClearKey={onClearKey}
+					onDraftChange={onDraftChange}
+					onSetKey={onSetKey}
+				/>
+			)}
 			<ChannelStatusSection channel={channel} reloading={reloading} onReload={onReload} />
-			<section className="channel-card-section">
-				<h4 className="channel-card-section-title">Recent activity (from trajectories)</h4>
-				<ChannelHistory sourceId={channel.id} pluginLoaded={channel.pluginLoaded} />
-			</section>
+			{channel.id !== "github" && (
+				<section className="channel-card-section">
+					<h4 className="channel-card-section-title">Recent activity (from trajectories)</h4>
+					<ChannelHistory sourceId={channel.id} pluginLoaded={channel.pluginLoaded} />
+				</section>
+			)}
 		</div>
 	);
 }
@@ -1030,6 +1048,250 @@ function OwnerPairingSection({
 					)}
 				</>
 			)}
+		</section>
+	);
+}
+
+// ── GitHub channel: agent/user split ──────────────────────────────────
+
+const GITHUB_ROLE_META: Record<GitHubChannelRole, { title: string; vaultKey: string; description: string; activityHeader: string; activityHint: string }> = {
+	agent: {
+		title: "Agent identity",
+		vaultKey: "GITHUB_AGENT_PAT",
+		description: "The bot's PAT. Used by detour-driven actions: opening PRs, leaving review comments, triaging issues. Recent activity shows what the agent has done on GitHub.",
+		activityHeader: "Recent agent activity",
+		activityHint: "From /users/<agent>/events — what this PAT has been doing on GitHub.",
+	},
+	user: {
+		title: "User identity",
+		vaultKey: "GITHUB_USER_PAT",
+		description: "Your personal PAT. Used to read your inbox: notifications, review requests, mentions, assigned issues. Recent activity surfaces what GitHub is pinging you about.",
+		activityHeader: "Recent user activity",
+		activityHint: "From /notifications — what GitHub is asking for your attention on.",
+	},
+};
+
+function GitHubChannelDetails({
+	channel,
+	busy,
+	draft,
+	onClearKey,
+	onDraftChange,
+	onSetKey,
+}: {
+	channel: ChannelStatus;
+	busy: string | null;
+	draft: Record<string, string>;
+	onClearKey: (key: string) => void;
+	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
+	onSetKey: (key: string) => void;
+}) {
+	return (
+		<>
+			<GitHubRoleSection role="agent" channel={channel} busy={busy} draft={draft} onClearKey={onClearKey} onDraftChange={onDraftChange} onSetKey={onSetKey} />
+			<GitHubRoleSection role="user" channel={channel} busy={busy} draft={draft} onClearKey={onClearKey} onDraftChange={onDraftChange} onSetKey={onSetKey} />
+			<GitHubLegacyTokenSection channel={channel} busy={busy} draft={draft} onClearKey={onClearKey} onDraftChange={onDraftChange} onSetKey={onSetKey} />
+		</>
+	);
+}
+
+function GitHubRoleSection({
+	role,
+	channel,
+	busy,
+	draft,
+	onClearKey,
+	onDraftChange,
+	onSetKey,
+}: {
+	role: GitHubChannelRole;
+	channel: ChannelStatus;
+	busy: string | null;
+	draft: Record<string, string>;
+	onClearKey: (key: string) => void;
+	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
+	onSetKey: (key: string) => void;
+}) {
+	const meta = GITHUB_ROLE_META[role];
+	const [identity, setIdentity] = useState<GitHubIdentity | null>(null);
+	const [identityError, setIdentityError] = useState<string | null>(null);
+	const [identityChecking, setIdentityChecking] = useState(false);
+
+	const refreshIdentity = useCallback(async () => {
+		setIdentityChecking(true);
+		try {
+			const r = await rpc.request.githubIdentity({ role });
+			setIdentity(r.identity);
+			setIdentityError(r.error ?? null);
+		} catch (e) {
+			setIdentityError(e instanceof Error ? e.message : String(e));
+			setIdentity(null);
+		} finally {
+			setIdentityChecking(false);
+		}
+	}, [role]);
+
+	useEffect(() => { void refreshIdentity(); }, [refreshIdentity]);
+
+	return (
+		<section className="channel-card-section github-role-section">
+			<div className="github-role-head">
+				<div>
+					<h4 className="channel-card-section-title">{meta.title}</h4>
+					<p className="hint" style={{ margin: "2px 0 0" }}>{meta.description}</p>
+				</div>
+				<GitHubIdentityBadge identity={identity} error={identityError} checking={identityChecking} onRefresh={refreshIdentity} />
+			</div>
+			<CredentialRow
+				busy={busy}
+				channel={channel}
+				credentialKey={meta.vaultKey}
+				draft={draft}
+				onClearKey={(k) => { onClearKey(k); setTimeout(() => void refreshIdentity(), 400); }}
+				onDraftChange={onDraftChange}
+				onSetKey={(k) => { onSetKey(k); setTimeout(() => void refreshIdentity(), 400); }}
+			/>
+			<div className="github-activity-block">
+				<div className="channel-card-section-row">
+					<h5 className="github-activity-title">{meta.activityHeader}</h5>
+					<span className="hint">{meta.activityHint}</span>
+				</div>
+				<GitHubActivityFeed role={role} hasPat={Boolean(identity)} />
+			</div>
+		</section>
+	);
+}
+
+function GitHubIdentityBadge({
+	identity,
+	error,
+	checking,
+	onRefresh,
+}: {
+	identity: GitHubIdentity | null;
+	error: string | null;
+	checking: boolean;
+	onRefresh: () => void;
+}) {
+	if (checking && !identity) return <span className="badge muted" style={{ fontSize: 11 }}>checking…</span>;
+	if (error) {
+		return (
+			<button type="button" className="badge err github-identity-badge" onClick={onRefresh} title={error}>
+				token error
+			</button>
+		);
+	}
+	if (!identity) return <span className="badge muted" style={{ fontSize: 11 }}>not signed in</span>;
+	return (
+		<button type="button" className="github-identity-badge" onClick={onRefresh} title={`@${identity.login}`}>
+			{identity.avatarUrl && <img src={identity.avatarUrl} alt="" width={20} height={20} />}
+			<span>@{identity.login}</span>
+		</button>
+	);
+}
+
+function GitHubActivityFeed({ role, hasPat }: { role: GitHubChannelRole; hasPat: boolean }) {
+	const [events, setEvents] = useState<GitHubActivityEvent[]>([]);
+	const [error, setError] = useState<string | null>(null);
+	const [loading, setLoading] = useState(false);
+
+	const load = useCallback(async () => {
+		if (!hasPat) { setEvents([]); setError(null); return; }
+		setLoading(true);
+		setError(null);
+		try {
+			const r = await rpc.request.githubRecentActivity({ role, limit: 12 });
+			setEvents(r.events);
+			setError(r.error ?? null);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoading(false);
+		}
+	}, [hasPat, role]);
+
+	useEffect(() => {
+		void load();
+		if (!hasPat) return;
+		const t = setInterval(load, 30_000);
+		return () => clearInterval(t);
+	}, [load, hasPat]);
+
+	if (!hasPat) return <div className="empty" style={{ padding: 8 }}>Configure the {role === "agent" ? "agent" : "user"} PAT to see activity.</div>;
+	if (error) return <div className="banner error">{error}</div>;
+	if (loading && events.length === 0) return <div className="hint" style={{ padding: 6 }}>Loading…</div>;
+	if (events.length === 0) return <div className="empty" style={{ padding: 8 }}>No recent activity.</div>;
+	return (
+		<div className="github-activity-list">
+			{events.map((e) => <GitHubActivityRow key={e.id} event={e} />)}
+		</div>
+	);
+}
+
+function GitHubActivityRow({ event }: { event: GitHubActivityEvent }) {
+	const onClick = () => {
+		if (!event.htmlUrl) return;
+		void rpc.request.externalOpen({ url: event.htmlUrl });
+	};
+	return (
+		<button
+			type="button"
+			className={`github-activity-row ${event.htmlUrl ? "clickable" : ""}`}
+			onClick={onClick}
+			disabled={!event.htmlUrl}
+		>
+			<span className="github-activity-type">{event.type.replace(/Event$/, "")}</span>
+			<span className="github-activity-summary">{event.summary}</span>
+			<span className="github-activity-time">{relativeGitHubTime(event.createdAt)}</span>
+		</button>
+	);
+}
+
+function relativeGitHubTime(iso: string): string {
+	try {
+		const ts = new Date(iso).getTime();
+		const sec = Math.max(1, Math.round((Date.now() - ts) / 1000));
+		if (sec < 60) return `${sec}s`;
+		if (sec < 3600) return `${Math.round(sec / 60)}m`;
+		if (sec < 86400) return `${Math.round(sec / 3600)}h`;
+		return `${Math.round(sec / 86400)}d`;
+	} catch {
+		return iso;
+	}
+}
+
+function GitHubLegacyTokenSection({
+	channel,
+	busy,
+	draft,
+	onClearKey,
+	onDraftChange,
+	onSetKey,
+}: {
+	channel: ChannelStatus;
+	busy: string | null;
+	draft: Record<string, string>;
+	onClearKey: (key: string) => void;
+	onDraftChange: Dispatch<SetStateAction<Record<string, string>>>;
+	onSetKey: (key: string) => void;
+}) {
+	if (!channel.optionalVaultKeys.includes("GITHUB_TOKEN")) return null;
+	const present = !channel.missingKeys.includes("GITHUB_TOKEN");
+	return (
+		<section className="channel-card-section">
+			<h4 className="channel-card-section-title">Legacy fallback (GITHUB_TOKEN)</h4>
+			<p className="hint" style={{ marginTop: 0 }}>
+				Optional single-token fallback used when role-specific PATs aren't set. {present ? "Currently set." : "Not set."}
+			</p>
+			<CredentialRow
+				busy={busy}
+				channel={channel}
+				credentialKey="GITHUB_TOKEN"
+				draft={draft}
+				onClearKey={onClearKey}
+				onDraftChange={onDraftChange}
+				onSetKey={onSetKey}
+			/>
 		</section>
 	);
 }

@@ -6,6 +6,7 @@ import { ActivityView } from "./activity/ActivityView";
 import { ChannelsView } from "./channels/ChannelsView";
 import { BrowserView } from "./browser/BrowserView";
 import { PortlessView } from "./portless/PortlessView";
+import { WorkspaceView } from "./workspace/WorkspaceView";
 import "./index.css";
 
 // Per-window view selection: each window opens a distinct HTML wrapper
@@ -27,6 +28,7 @@ const root =
 	view === "channels" ? <ChannelsView /> :
 	view === "browser" ? <BrowserView /> :
 	view === "portless" ? <PortlessView /> :
+	view === "workspace" ? <WorkspaceView /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);

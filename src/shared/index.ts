@@ -5,6 +5,10 @@ export type ProviderInfo = {
 	label: string;
 	hasKey: boolean;
 	active: boolean;
+	/** Number of OAuth-account credentials wired up for this provider
+	 * (e.g. Anthropic subscription / OpenAI Codex). Independent from
+	 * `hasKey` — a user can have OAuth-only with no vault API key. */
+	oauthAccountCount?: number;
 };
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
@@ -37,6 +41,9 @@ export type PortlessSnapshot = {
 	proxyPort: number;
 	tld: string;
 	routes: PortlessRoute[];
+	/** Last bind error when the proxy couldn't claim a port (e.g. a
+	 * stale standalone `portless` daemon owns 4848). null when running. */
+	bindError?: string | null;
 };
 
 export type SetProviderKeyBody = { key: string };
@@ -307,6 +314,10 @@ export type AgentConfig = {
 	mode: AgentVaultMode;
 	allowedPrefixes: string[];
 	deniedPrefixes: string[];
+	/** When true, the coding-tools sandbox path restriction is lifted —
+	 * FILE/BASH/EDIT/etc can operate outside DETOUR_AGENT_SANDBOX. Read by
+	 * runtime.buildRuntimeSettings as DETOUR_ELEVATED_CODING. */
+	elevatedCoding?: boolean;
 };
 
 export type AgentCharacterStyle = {

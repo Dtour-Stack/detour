@@ -1,19 +1,22 @@
 import { useEffect, useState } from "react";
 import { useDetourTheme } from "../useDetourTheme";
+import { SidebarIcon } from "../SidebarIcon";
 import { TrajectoriesPane } from "./TrajectoriesPane";
 import { LogsPane } from "./LogsPane";
 import { RuntimePane } from "./RuntimePane";
 import { TasksPane } from "./TasksPane";
+import { SubagentsPane } from "./SubagentsPane";
 import { AutonomyPane } from "./AutonomyPane";
 import { PluginsPane } from "./PluginsPane";
 import { DbPane } from "./DbPane";
 
-type Tab = "trajectories" | "logs" | "tasks" | "autonomy" | "plugins" | "db" | "runtime";
+type Tab = "trajectories" | "logs" | "tasks" | "subagents" | "autonomy" | "plugins" | "db" | "runtime";
 
 const TABS: { id: Tab; label: string }[] = [
 	{ id: "trajectories", label: "Trajectories" },
 	{ id: "logs", label: "Logs" },
 	{ id: "tasks", label: "Tasks" },
+	{ id: "subagents", label: "Subagents" },
 	{ id: "autonomy", label: "Autonomy" },
 	{ id: "plugins", label: "Plugins" },
 	{ id: "db", label: "DB" },
@@ -47,7 +50,10 @@ export function ActivityView() {
 			<aside className="settings-sidebar">
 				<div className="window-brand">Activity</div>
 				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden>Live runtime</div>
+					<div className="section-btn active" aria-hidden title="Live runtime">
+						<SidebarIcon name="pulse" />
+						<span className="section-btn-label">Live runtime</span>
+					</div>
 					<div className="sub-nav">
 						{TABS.map((t) => (
 							<button
@@ -67,6 +73,7 @@ export function ActivityView() {
 				{tab === "trajectories" && <TrajectoriesPane />}
 				{tab === "logs" && <LogsPane />}
 				{tab === "tasks" && <TasksPane />}
+				{tab === "subagents" && <SubagentsPane />}
 				{tab === "autonomy" && <AutonomyPane />}
 				{tab === "plugins" && <PluginsPane />}
 				{tab === "db" && <DbPane />}

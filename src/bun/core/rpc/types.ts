@@ -21,6 +21,7 @@ import type { LlamaServerService } from "../llama/server-service";
 import type { OwnerBindService } from "../owner-bind";
 import type { PensieveService } from "../pensieve";
 import type { PortlessService } from "../portless";
+import type { PreviewServerRegistry } from "../preview-server-registry";
 import type { RuntimeService } from "../runtime";
 import type { VaultService } from "../vault";
 
@@ -53,5 +54,6 @@ export type RpcDeps = {
 	cron: CronService;
 	ownerBind: OwnerBindService;
 	portless: PortlessService;
+	previewServers: PreviewServerRegistry;
 	broadcaster: RpcBroadcaster;
 };

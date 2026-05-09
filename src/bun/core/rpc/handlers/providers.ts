@@ -16,6 +16,14 @@ import { fetchOpenRouterModels } from "../../openrouter-models";
 import { fetchElizaCloudModels } from "../../elizacloud-models";
 import type { RpcDeps } from "../types";
 
+// ProviderId → AccountCredentialProvider mapping. Anthropic and OpenAI
+// each have an OAuth account store separate from the vault API key
+// path; OpenRouter and ElizaCloud are vault-key-only.
+const OAUTH_PROVIDER_FOR: Partial<Record<ProviderId, "anthropic-subscription" | "openai-codex">> = {
+	anthropic: "anthropic-subscription",
+	openai: "openai-codex",
+};
+
 const ELIZACLOUD_BASE = "https://www.elizacloud.ai/api/v1";
 const ELIZACLOUD_BALANCE_URL = `${ELIZACLOUD_BASE}/credits/balance`;
 const ELIZACLOUD_APPS_URL = `${ELIZACLOUD_BASE}/apps`;
@@ -83,9 +91,20 @@ export function providersRequests(deps: RpcDeps) {
 					.catch(() => {});
 			}
 			const runtimeProvider = deps.runtime.getCurrentProvider();
+			const oauthCounts: Partial<Record<ProviderId, number>> = {};
+			for (const [providerId, oauthProvider] of Object.entries(OAUTH_PROVIDER_FOR)) {
+				try {
+					oauthCounts[providerId as ProviderId] = deps.auth
+						.listAccounts(oauthProvider)
+						.length;
+				} catch {
+					oauthCounts[providerId as ProviderId] = 0;
+				}
+			}
 			return list.map((p) => ({
 				...p,
 				active: runtimeProvider === p.id,
+				oauthAccountCount: oauthCounts[p.id] ?? 0,
 			}));
 		},
 
@@ -112,7 +131,33 @@ export function providersRequests(deps: RpcDeps) {
 		},
 
 		providersRemoveKey: async (params: { id: ProviderId }): Promise<{ ok: true }> => {
+			// Two storage paths exist for any single provider (vault API
+			// key + OAuth account records). Removing only one leaves
+			// orphaned credentials that the runtime can still pick up,
+			// which is exactly the "can't remove the token" UX bug.
+			// Wipe BOTH so the user sees a clean slate.
 			await deps.vault.removeProviderKey(params.id);
+			const oauthProvider = OAUTH_PROVIDER_FOR[params.id];
+			if (oauthProvider) {
+				try {
+					const accounts = deps.auth.listAccounts(oauthProvider);
+					for (const acc of accounts) {
+						try {
+							deps.auth.deleteAccount(oauthProvider, acc.id);
+						} catch (err) {
+							console.warn(
+								`[providers] failed to delete OAuth account ${oauthProvider}/${acc.id}:`,
+								err instanceof Error ? err.message : err,
+							);
+						}
+					}
+				} catch (err) {
+					console.warn(
+						`[providers] OAuth account list failed for ${oauthProvider}:`,
+						err instanceof Error ? err.message : err,
+					);
+				}
+			}
 			if (deps.runtime.getCurrentProvider() === params.id) {
 				void deps.runtime
 					.rebuild()

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SidebarIcon, type IconName } from "../SidebarIcon";
 import { ProvidersTab } from "./ProvidersTab";
 import { InventoryTab } from "./InventoryTab";
 import { SavedLoginsTab } from "./SavedLoginsTab";
@@ -96,6 +97,7 @@ function SidebarSection<T extends string>({
 	active,
 	current,
 	label,
+	icon,
 	onSelect,
 	onTab,
 	tabs,
@@ -103,14 +105,21 @@ function SidebarSection<T extends string>({
 	active: boolean;
 	current: T;
 	label: string;
+	icon: IconName;
 	onSelect: () => void;
 	onTab: (tab: T) => void;
 	tabs: { id: T; label: string }[];
 }) {
 	return (
 		<div className="sidebar-section">
-			<button type="button" className={active ? "section-btn active" : "section-btn"} onClick={onSelect}>
-				{label}
+			<button
+				type="button"
+				className={active ? "section-btn active" : "section-btn"}
+				onClick={onSelect}
+				title={label}
+			>
+				<SidebarIcon name={icon} />
+				<span className="section-btn-label">{label}</span>
 			</button>
 			{active && (
 				<div className="sub-nav">
@@ -143,6 +152,7 @@ export function SettingsView() {
 					active={section === "configuration"}
 					current={configTab}
 					label="Configuration"
+					icon="gear"
 					onSelect={() => setSection("configuration")}
 					onTab={setConfigTab}
 					tabs={CONFIG_TABS}
@@ -151,6 +161,7 @@ export function SettingsView() {
 					active={section === "vault"}
 					current={vaultTab}
 					label="Vault Nav"
+					icon="vault"
 					onSelect={() => setSection("vault")}
 					onTab={setVaultTab}
 					tabs={VAULT_TABS}
@@ -159,6 +170,7 @@ export function SettingsView() {
 					active={section === "cloud"}
 					current={cloudTab}
 					label="Cloud"
+					icon="cloud"
 					onSelect={() => setSection("cloud")}
 					onTab={setCloudTab}
 					tabs={CLOUD_TABS}

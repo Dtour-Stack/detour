@@ -17,7 +17,11 @@ export type ChatFeedbackRating = 1 | -1;
 export type ChatRequests = {
 	chatSend: {
 		params: { convId: string; text: string };
-		response: { ok: true };
+		// Returns immediately after kicking off the agent turn. Actual
+		// turn output is streamed via chatDelta/chatComplete/chatError.
+		// `traceId` lets the view correlate UI feedback (thumbs) with
+		// the trajectory record.
+		response: { ok: true; traceId: string };
 	};
 	// Thumbs feedback on an agent reply. `traceId` is the assistant
 	// turn's trajectory id (same id the chat handler passes through

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDetourTheme } from "../useDetourTheme";
+import { SidebarIcon } from "../SidebarIcon";
 import { MemoriesPane } from "./memories/MemoriesPane";
 import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";
@@ -63,7 +64,10 @@ export function PensieveView() {
 			<aside className="settings-sidebar">
 				<div className="window-brand">Pensieve</div>
 				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden>Live</div>
+					<div className="section-btn active" aria-hidden title="Live">
+						<SidebarIcon name="wave" />
+						<span className="section-btn-label">Live</span>
+					</div>
 					<div className="sub-nav">
 						{LIVE_SECTIONS.map((s) => (
 							<button
@@ -78,7 +82,10 @@ export function PensieveView() {
 					</div>
 				</div>
 				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden>Knowledge</div>
+					<div className="section-btn active" aria-hidden title="Knowledge">
+						<SidebarIcon name="book" />
+						<span className="section-btn-label">Knowledge</span>
+					</div>
 					<div className="sub-nav">
 						{KNOWLEDGE_SECTIONS.map((s) => (
 							<button

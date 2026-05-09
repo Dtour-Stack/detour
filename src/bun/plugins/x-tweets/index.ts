@@ -151,6 +151,51 @@ function withClient<T>(
 	return fn(client);
 }
 
+// ── Self-action guard ──────────────────────────────────────────────────
+// Caches the authenticated viewer (handle + numeric id) per process so
+// reply/like/retweet/follow can refuse to operate on the agent's own
+// posts/account. Prevents loops where the agent reacts to its own
+// activity. Failures in lookup fall through (fail-open) — we don't
+// hard-fail legitimate writes on a transient X error.
+
+let cachedSelfViewer: { userId: string; screenName: string } | null = null;
+let cachedSelfPromise: Promise<{ userId: string; screenName: string } | null> | null = null;
+
+async function selfViewer(client: XClient): Promise<{ userId: string; screenName: string } | null> {
+	if (cachedSelfViewer) return cachedSelfViewer;
+	if (cachedSelfPromise) return cachedSelfPromise;
+	cachedSelfPromise = (async () => {
+		try {
+			const v = await client.viewer();
+			const result = { userId: String(v.userId), screenName: v.screenName.toLowerCase() };
+			cachedSelfViewer = result;
+			return result;
+		} catch {
+			return null;
+		} finally {
+			cachedSelfPromise = null;
+		}
+	})();
+	return cachedSelfPromise;
+}
+
+function isSelfTweet(tweet: { authorId?: string | null; authorScreenName?: string | null } | null, self: { userId: string; screenName: string } | null): boolean {
+	if (!tweet || !self) return false;
+	if (tweet.authorId && String(tweet.authorId) === self.userId) return true;
+	if (tweet.authorScreenName && tweet.authorScreenName.toLowerCase() === self.screenName) return true;
+	return false;
+}
+
+function isSelfHandle(screenName: string | null | undefined, self: { userId: string; screenName: string } | null): boolean {
+	if (!screenName || !self) return false;
+	return screenName.toLowerCase().replace(/^@/, "") === self.screenName;
+}
+
+function isSelfUserId(userId: string | null | undefined, self: { userId: string; screenName: string } | null): boolean {
+	if (!userId || !self) return false;
+	return String(userId) === self.userId;
+}
+
 const X_AUTONOMY_TASK_NAME = "X_AUTONOMY";
 const X_AUTONOMY_TASK_TAGS = ["queue", "repeat", "x-autonomy"];
 const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
@@ -2204,6 +2249,16 @@ const replyHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	if (!replyToTweetId) return missing("X_REPLY", "replyToTweetId", callback);
 
 	return withClient(runtime, callback, "X_REPLY", async (client) => {
+		// Self-action guard: refuse to reply to a tweet the agent posted.
+		try {
+			const [self, target] = await Promise.all([selfViewer(client), client.getTweet(replyToTweetId)]);
+			if (isSelfTweet(target, self)) {
+				const msg = `Refusing to reply to ${replyToTweetId}: it was authored by @${self?.screenName} (self). Self-action guard.`;
+				logger.info({ src: "x-tweets", tweetId: replyToTweetId }, msg);
+				await emit(callback, msg, "X_REPLY");
+				return { success: false, error: msg };
+			}
+		} catch { /* fail-open on lookup error */ }
 		const r = await client.reply(text, replyToTweetId);
 		if (!r.success) {
 			await emit(callback, `X_REPLY failed: ${r.error ?? "unknown"}`, "X_REPLY");
@@ -2244,6 +2299,14 @@ const likeHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	const tweetId = pickString(opts, ["tweetId", "id"]);
 	if (!tweetId) return missing("X_LIKE", "tweetId", callback);
 	return withClient(runtime, callback, "X_LIKE", async (client) => {
+		try {
+			const [self, target] = await Promise.all([selfViewer(client), client.getTweet(tweetId)]);
+			if (isSelfTweet(target, self)) {
+				const msg = `Refusing to like ${tweetId}: tweet authored by @${self?.screenName} (self). Self-action guard.`;
+				await emit(callback, msg, "X_LIKE");
+				return { success: false, error: msg };
+			}
+		} catch { /* fail-open */ }
 		const r = await client.like(tweetId);
 		await emit(callback, r.success ? `Liked ${tweetId}` : `X_LIKE failed: ${r.error}`, "X_LIKE");
 		return r;
@@ -2295,6 +2358,14 @@ const retweetHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	const tweetId = pickString(opts, ["tweetId", "id"]);
 	if (!tweetId) return missing("X_RETWEET", "tweetId", callback);
 	return withClient(runtime, callback, "X_RETWEET", async (client) => {
+		try {
+			const [self, target] = await Promise.all([selfViewer(client), client.getTweet(tweetId)]);
+			if (isSelfTweet(target, self)) {
+				const msg = `Refusing to retweet ${tweetId}: it's your own tweet (@${self?.screenName}). Self-action guard.`;
+				await emit(callback, msg, "X_RETWEET");
+				return { success: false, error: msg };
+			}
+		} catch { /* fail-open */ }
 		const r = await client.retweet(tweetId);
 		await emit(callback, r.success ? `Retweeted ${tweetId} → ${r.url}` : `X_RETWEET failed: ${r.error}`, "X_RETWEET");
 		return r;
@@ -2372,6 +2443,15 @@ const followHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	const screenName = pickString(opts, ["screenName", "handle", "username"]);
 	if (!userId && !screenName) return missing("X_FOLLOW", "userId or screenName", callback);
 	return withClient(runtime, callback, "X_FOLLOW", async (client) => {
+		// Self-guard: can't follow yourself.
+		try {
+			const self = await selfViewer(client);
+			if (isSelfHandle(screenName, self) || isSelfUserId(userId, self)) {
+				const msg = `Refusing to follow self (@${self?.screenName}). Self-action guard.`;
+				await emit(callback, msg, "X_FOLLOW");
+				return { success: false, error: msg };
+			}
+		} catch { /* fail-open */ }
 		let resolvedId = userId;
 		if (!resolvedId && screenName) {
 			const u = await client.getUserByScreenName(screenName);

@@ -17,4 +17,11 @@ export type PortlessRequests = {
 		params: Record<string, never>;
 		response: { ok: true; removed: PortlessRoute[]; snapshot: PortlessSnapshot };
 	};
+	/** Open the standalone Portless window. Implemented by broadcasting
+	 * `uiOpenPortless`; the kernel listens and emits the
+	 * `ui:open-portless` event handled by portlessFeature. */
+	portlessOpen: {
+		params: Record<string, never>;
+		response: { ok: true };
+	};
 };

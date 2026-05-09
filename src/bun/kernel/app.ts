@@ -28,6 +28,8 @@ export function createKernel(opts: {
 	// `enqueueAndWait`. `browserCommand` is view-only and ignored here.
 	registerWindow((name) => {
 		if (name === "uiOpenBrowser") events.emit("ui:open-browser", {});
+		if (name === "uiOpenWorkspace") events.emit("ui:open-workspace", {});
+		if (name === "uiOpenPortless") events.emit("ui:open-portless", {});
 	});
 
 	// Tray status poller — surfaces "● Agent ready (Codex + local embeds)"

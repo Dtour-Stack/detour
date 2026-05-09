@@ -427,8 +427,13 @@ export function ProvidersTab() {
 									value={drafts[vendor.id] ?? ""}
 									onChange={(e) => setDrafts((d) => ({ ...d, [vendor.id]: e.target.value }))}
 								/>
-								{provider?.hasKey ? (
-									<button type="button" className="btn ghost small" onClick={() => removeKey(vendor.id)}>
+								{provider?.hasKey || (provider?.oauthAccountCount ?? 0) > 0 ? (
+									<button
+										type="button"
+										className="btn ghost small"
+										onClick={() => removeKey(vendor.id)}
+										title="Removes both the API key and any OAuth-account credentials for this provider."
+									>
 										Remove
 									</button>
 								) : (

@@ -25,6 +25,13 @@ export default {
 	runtime: {
 		exitOnLastWindowClosed: false,
 	},
+	scripts: {
+		// Inject NSAppTransportSecurity localhost exception so the
+		// workspace's WKWebView preview iframe can load
+		// `http://<slug>.localhost:4848/` URLs from portless. Default
+		// macOS WKWebView ATS rejects plain HTTP.
+		postBuild: "scripts/post-build-ats.ts",
+	},
 	build: {
 		bun: {
 			entrypoint: "src/bun/index.ts",
@@ -74,6 +81,7 @@ export default {
 			"src/main/browser.html": "views/main/browser.html",
 			"src/main/channels.html": "views/main/channels.html",
 			"src/main/portless.html": "views/main/portless.html",
+			"src/main/workspace.html": "views/main/workspace.html",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk
 			// (Bun.Worker reads .ts source directly). Worker import of the SDK
 			// resolves via the path-preserving copy of carrot-sdk/index.ts, so

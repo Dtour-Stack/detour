@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ChannelStatus } from "../../shared/index";
+import { GitHubChannelFeed } from "./GitHubChannelFeed";
 
 type GatewayMessage = {
 	id: string;
@@ -21,6 +22,7 @@ type GatewayMessage = {
 	entityId: string;
 	externalHandle?: string;
 	text: string;
+	meta?: { trajectoryId?: string; trajectoryStepId?: string; action?: string };
 };
 import { rpc } from "../rpc";
 
@@ -41,6 +43,13 @@ function fmtTime(ts: number): string {
 }
 
 export function ChannelView({ channel }: { channel: ChannelStatus }) {
+	// GitHub is event-shaped, not chat-shaped — render the dedicated
+	// agent/user split instead of the gateway feed (which is empty here).
+	if (channel.id === "github") return <GitHubChannelFeed channel={channel} />;
+	return <GatewayFeedView channel={channel} />;
+}
+
+function GatewayFeedView({ channel }: { channel: ChannelStatus }) {
 	const [messages, setMessages] = useState<GatewayMessage[]>([]);
 	const [error, setError] = useState<string | null>(null);
 
@@ -104,11 +113,78 @@ export function ChannelView({ channel }: { channel: ChannelStatus }) {
 									<span className="hub-channel-time">{fmtTime(m.time)}</span>
 								</div>
 								<div className="hub-channel-text">{m.text}</div>
+								{m.direction === "out" && m.meta?.trajectoryId && (
+									<ChannelFeedback
+										traceId={m.meta.trajectoryId}
+										convId={`channel:${channel.id}`}
+										text={m.text}
+									/>
+								)}
 							</div>
 						</li>
 					))}
 				</ul>
 			)}
+		</div>
+	);
+}
+
+function ChannelFeedback({
+	traceId,
+	convId,
+	text,
+}: {
+	traceId: string;
+	convId: string;
+	text: string;
+}) {
+	const [rating, setRating] = useState<1 | -1 | null>(null);
+	const [busy, setBusy] = useState(false);
+	const send = async (r: 1 | -1) => {
+		if (busy) return;
+		const next = rating === r ? null : r;
+		setBusy(true);
+		try {
+			// Record the rating; toggling to null still sends (so the server
+			// can write a "rating cleared" memory if it cares to). The
+			// existing handler tolerates either rating value.
+			if (next !== null) {
+				await rpc.request.chatRateMessage({
+					traceId,
+					convId,
+					rating: next,
+					text: text.slice(0, 500),
+				});
+			}
+			setRating(next);
+		} catch {
+			/* swallow — rating is best-effort */
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<div className="hub-channel-feedback">
+			<button
+				type="button"
+				className={`bubble-feedback-btn up ${rating === 1 ? "active" : ""}`}
+				onClick={() => void send(1)}
+				disabled={busy}
+				aria-label="Thumbs up"
+				title="Helpful"
+			>
+				👍
+			</button>
+			<button
+				type="button"
+				className={`bubble-feedback-btn down ${rating === -1 ? "active" : ""}`}
+				onClick={() => void send(-1)}
+				disabled={busy}
+				aria-label="Thumbs down"
+				title="Not helpful"
+			>
+				👎
+			</button>
 		</div>
 	);
 }

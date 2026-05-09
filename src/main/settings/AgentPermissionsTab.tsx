@@ -43,6 +43,10 @@ export function AgentPermissionsTab() {
 		if (!cfg) return;
 		void save({ ...cfg, deny });
 	}
+	function setElevatedCoding(elevatedCoding: boolean) {
+		if (!cfg) return;
+		void save({ ...cfg, elevatedCoding });
+	}
 	function commitPrefixes() {
 		if (!cfg) return;
 		const allowedPrefixes = allowedDraft.split(",").map((s) => s.trim()).filter(Boolean);
@@ -132,6 +136,36 @@ export function AgentPermissionsTab() {
 					onChange={(e) => setDeniedDraft(e.target.value)}
 					onBlur={commitPrefixes}
 				/>
+			</div>
+
+			<h3 style={{ margin: "20px 0 4px" }}>Coding agent</h3>
+			<p className="hint">
+				Behavior of the FILE / BASH / EDIT / GLOB / GREP / WEB_FETCH actions and the AGENT_PROJECT_NEW
+				scaffolder. Toggling elevated permissions tells the agent it's authorized to act broadly
+				without extra confirmation gates — useful when you want the agent to drive a real coding session.
+			</p>
+			<div className="card">
+				<div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+					<div>
+						<span className="name" style={{ fontSize: 13 }}>Elevated permissions</span>
+						<div className="hint" style={{ marginTop: 2 }}>
+							When on, the coding-agent brief tells the agent it can run shell commands and write files freely
+							without ASK_USER_QUESTION confirmation gates. The system blocklist (<code>~/.ssh</code>,
+							<code>~/.aws</code>, <code>~/Library</code>, system dirs) is still enforced regardless.
+						</div>
+					</div>
+					<label style={{ margin: 0, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+						<input
+							type="checkbox"
+							checked={cfg.elevatedCoding ?? false}
+							onChange={(e) => setElevatedCoding(e.target.checked)}
+							disabled={saving}
+						/>
+						<span style={{ fontSize: 12, color: cfg.elevatedCoding ? "var(--accent)" : "var(--fg-muted)" }}>
+							{cfg.elevatedCoding ? "ELEVATED" : "off"}
+						</span>
+					</label>
+				</div>
 			</div>
 
 			{saving && <div className="hint">Saving…</div>}

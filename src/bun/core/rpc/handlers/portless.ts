@@ -40,5 +40,9 @@ export function portlessRequests(deps: RpcDeps) {
 			const removed = deps.portless.pruneStale();
 			return { ok: true, removed, snapshot: deps.portless.snapshot() };
 		},
+		portlessOpen: async (_params: Record<string, never>): Promise<{ ok: true }> => {
+			deps.broadcaster.broadcast("uiOpenPortless", {});
+			return { ok: true };
+		},
 	};
 }

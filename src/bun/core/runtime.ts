@@ -40,6 +40,58 @@ import {
 import { xTweetsPlugin } from "../plugins/x-tweets/index";
 import { codingToolsPlugin } from "@elizaos/plugin-coding-tools";
 import { cloudAppsPlugin } from "../plugins/cloud-apps/index";
+import { agentProjectsPlugin } from "../plugins/agent-projects/index";
+import { capabilitiesPlugin } from "../plugins/capabilities/index";
+import { portlessToolsPlugin } from "../plugins/portless-tools/index";
+import { agentSkillsPlugin } from "../plugins/agent-skills/index";
+import { agentPublicLogPlugin } from "../plugins/agent-public-log/index";
+// Orchestrator ships from the eliza submodule. Guarded import — node-pty
+// build can fail on first install; if the dist isn't there the plugin
+// stays null. Service start() failures are absorbed by the wrapper below
+// so a broken PTY layer can't crash detour boot — the plugin's actions
+// will return errors at call time instead.
+let agentOrchestratorPlugin: Plugin | null = null;
+try {
+	const m = await import("@elizaos/plugin-agent-orchestrator");
+	const raw = (m.default ?? null) as Plugin | null;
+	if (raw) {
+		// Wrap each service class so a thrown start() inside PTYService or
+		// CodingWorkspaceService doesn't propagate up through
+		// runtime.initialize() and abort all provider attempts. ElizaOS
+		// calls `ServiceClass.start(runtime)` as a static factory; a Proxy
+		// on the class lets us intercept that one call while leaving
+		// everything else (instanceof, prototype chain, static fields) alone.
+		type ServiceCtor = { start?: (rt: unknown) => Promise<unknown>; serviceType?: string; name?: string };
+		const wrappedServices = (raw.services ?? []).map((svc) => {
+			const ctor = svc as unknown as ServiceCtor;
+			if (typeof ctor.start !== "function") return svc;
+			const proxied = new Proxy(ctor, {
+				get(target, prop, receiver) {
+					if (prop === "start") {
+						return async (rt: unknown) => {
+							try {
+								return await (target.start as NonNullable<ServiceCtor["start"]>).call(target, rt);
+							} catch (err) {
+								console.warn(
+									`[runtime] orchestrator service ${target.serviceType ?? target.name ?? "?"} start failed (boot continuing without it):`,
+									err instanceof Error ? err.message : err,
+								);
+								return null;
+							}
+						};
+					}
+					return Reflect.get(target, prop, receiver);
+				},
+			});
+			return proxied as unknown as typeof svc;
+		});
+		agentOrchestratorPlugin = { ...raw, services: wrappedServices };
+	}
+} catch (err) {
+	console.warn("[runtime] orchestrator plugin unavailable:", err instanceof Error ? err.message : err);
+	agentOrchestratorPlugin = null;
+}
+import { broadcaster } from "./rpc/registry";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { discordContextPlugin } from "./discord-context-provider";
@@ -688,6 +740,8 @@ export class RuntimeService {
 				this.scheduleDiscordCatchUp(runtime);
 			}
 
+			this.wireOrchestratorBridges(runtime);
+
 			return {
 				runtime,
 				provider: attempt.runtimeProvider,
@@ -697,6 +751,84 @@ export class RuntimeService {
 		} catch (err) {
 			await runtime.stop().catch(() => {});
 			throw err;
+		}
+	}
+
+	/**
+	 * Hook the orchestrator's swarm coordinator into detour's plumbing.
+	 *
+	 * - chatCallback: coordinator emits "task-agent says X". If the task was
+	 *   spawned in response to a Discord/X/iMessage thread the routing
+	 *   helper sends X back to that thread. Otherwise we drop X into the
+	 *   in-app chat via gateway.recordChatReply + chatDelta broadcast so
+	 *   the user sees the task progress in the chat panel they spawned it
+	 *   from.
+	 * - wsBroadcast: PTY session events go out as `ptySessionEvent` so the
+	 *   Tasks panel can render live status.
+	 * - swarmCompleteCallback: when all tasks in a swarm finish, route the
+	 *   synthesized summary the same way as chat callback.
+	 *
+	 * No-ops cleanly when the orchestrator plugin failed to load (PTY_SERVICE
+	 * absent → coordinator absent → early return).
+	 */
+	private wireOrchestratorBridges(runtime: AgentRuntime): void {
+		try {
+			const ptyService = runtime.getService("PTY_SERVICE") as
+				| { coordinator?: import("./orchestrator-types").OrchestratorCoordinator }
+				| null;
+			const coordinator = ptyService?.coordinator;
+			if (!coordinator) return;
+
+			type OrchRouting = import("./orchestrator-types").OrchestratorChatRouting;
+			const routeOrFallback = async (text: string, source?: string, routing?: OrchRouting) => {
+				try {
+					const m = (await import("@elizaos/agent/api/task-agent-message-routing")) as {
+						routeTaskAgentTextToConnector?: (
+							rt: AgentRuntime,
+							t: string,
+							s: string,
+							r?: OrchRouting,
+						) => Promise<boolean>;
+					};
+					if (m.routeTaskAgentTextToConnector) {
+						const delivered = await m.routeTaskAgentTextToConnector(runtime, text, source ?? "coding-agent", routing);
+						if (delivered) return;
+					}
+				} catch {
+					/* fall through to in-app chat */
+				}
+				if (this.gateway) {
+					this.gateway.recordChatReply({
+						text,
+						roomId: String(ROOM_ID),
+						entityId: String(runtime.agentId),
+						channel: "chat",
+						source: source ?? "coding-agent",
+					});
+				}
+				broadcaster.broadcast("chatDelta", { convId: "default", delta: text, traceId: `task-agent:${source ?? "coding-agent"}` });
+			};
+
+			coordinator.setChatCallback?.((text, source, routing) => {
+				void routeOrFallback(text, source, routing);
+			});
+
+			coordinator.setWsBroadcast?.((event) => {
+				const { type: eventType, ...rest } = event;
+				broadcaster.broadcast("ptySessionEvent", { eventType, ...rest });
+			});
+
+			coordinator.setSwarmCompleteCallback?.(async (payload) => {
+				const summary = payload.tasks
+					.map((t) => `• ${t.label} (${t.status}): ${t.completionSummary}`)
+					.join("\n");
+				const text = `Swarm complete (${payload.completed}/${payload.total} tasks)\n${summary}`;
+				await routeOrFallback(text, "swarm-coordinator");
+			});
+
+			console.log("[runtime] orchestrator bridges wired (chat + ws + swarm-complete)");
+		} catch (err) {
+			console.warn("[runtime] orchestrator bridge wiring failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
@@ -809,6 +941,20 @@ export class RuntimeService {
 		// Forward to env so plugin actions that read process.env
 		// (e.g. CLOUD_LIST_APPS / CLOUD_CREATE_APP) pick up the same value.
 		process.env.DETOUR_AGENT_SANDBOX = settings.DETOUR_AGENT_SANDBOX;
+		// Elevated-coding flag: persisted in AgentConfig, mirrored to env
+		// by ConfigService.applyAgent. We carry it into runtime settings
+		// here so providers reading via runtime.getSetting() see it
+		// regardless of process.env state.
+		try {
+			const agentCfg = this.config ? await this.config.getAgent() : null;
+			if (agentCfg?.elevatedCoding) {
+				settings.DETOUR_ELEVATED_CODING = "true";
+				process.env.DETOUR_ELEVATED_CODING = "true";
+			} else {
+				delete settings.DETOUR_ELEVATED_CODING;
+				delete process.env.DETOUR_ELEVATED_CODING;
+			}
+		} catch { /* config service unavailable — leave flag unset */ }
 		// Forward the stored ElizaCloud key so plugin-cloud-apps actions
 		// can authenticate without an extra round-trip through the vault
 		// service. setProviderKey already mirrors into process.env when
@@ -867,6 +1013,12 @@ export class RuntimeService {
 			dpeFallbackPlugin,
 			xTweetsPlugin,
 			cloudAppsPlugin,
+			agentProjectsPlugin,
+			capabilitiesPlugin,
+			portlessToolsPlugin,
+			agentSkillsPlugin,
+			agentPublicLogPlugin,
+			...(agentOrchestratorPlugin ? [agentOrchestratorPlugin] : []),
 			// cronToolsPlugin: replaced by `cron-tools` carrot loaded via the
 			// carrot bridge — see core/index.ts and src/bun/core/carrots/. The
 			// carrot worker.ts mirrors the static plugin's actions, but runs

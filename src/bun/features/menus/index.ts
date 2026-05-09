@@ -1,5 +1,26 @@
-import { ApplicationMenu } from "electrobun/bun";
+import { ApplicationMenu, Utils } from "electrobun/bun";
 import type { Feature } from "../../kernel/registry";
+
+/**
+ * Relaunch the app by detaching a fresh copy of the same invocation
+ * (process.execPath + argv) and then quitting the current process.
+ * Works in both `bun start` (dev) and the packaged binary because in
+ * either case argv[0] is the binary that knows how to launch us.
+ */
+function relaunch(): void {
+	try {
+		const proc = Bun.spawn({
+			cmd: [process.execPath, ...process.argv.slice(1)],
+			stdio: ["ignore", "ignore", "ignore"],
+			cwd: process.cwd(),
+			env: { ...process.env },
+		});
+		(proc as unknown as { unref?: () => void }).unref?.();
+	} catch (err) {
+		console.warn("[menus] relaunch spawn failed:", err instanceof Error ? err.message : err);
+	}
+	Utils.quit();
+}
 
 export const menusFeature: Feature = {
 	id: "menus",
@@ -16,6 +37,7 @@ export const menusFeature: Feature = {
 					{ role: "hideOthers" },
 					{ role: "unhide" },
 					{ type: "separator" },
+					{ label: "Restart Detour", action: "app:restart", accelerator: "CommandOrControl+Shift+R" },
 					{ role: "quit" },
 				],
 			},
@@ -65,6 +87,12 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
+				label: "Workspace",
+				submenu: [
+					{ label: "Open Workspace", action: "workspace:open", accelerator: "CommandOrControl+Shift+W" },
+				],
+			},
+			{
 				label: "Window",
 				submenu: [
 					{ role: "minimize" },
@@ -78,6 +106,9 @@ export const menusFeature: Feature = {
 			switch (action) {
 				case "app:settings":
 					deps.events.emit("ui:open-settings", {});
+					break;
+				case "app:restart":
+					relaunch();
 					break;
 				case "chat:toggle":
 					deps.events.emit("ui:toggle-chat", {});
@@ -96,6 +127,9 @@ export const menusFeature: Feature = {
 					break;
 				case "channels:open":
 					deps.events.emit("ui:open-channels", {});
+					break;
+				case "workspace:open":
+					deps.events.emit("ui:open-workspace", {});
 					break;
 			}
 		});

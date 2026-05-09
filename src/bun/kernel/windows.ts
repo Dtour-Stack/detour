@@ -117,7 +117,14 @@ export class WindowFactory {
 
 	private buildRpc(): DefinedRPC {
 		return BrowserView.defineRPC<DetourRPC>({
-			maxRequestTime: 60_000,
+			// 5 minutes — covers preview-server boot (`bun install` +
+			// `bun dev`), portless proxy probes, large file tree builds,
+			// and trajectory-detail fetches across thousands of records.
+			// Chat sends are fire-and-forget so the streamed turn isn't
+			// gated on this anymore, but other RPCs occasionally need
+			// real time. Don't go higher without surfacing a UX
+			// indicator — silent 5-minute hangs are bad enough.
+			maxRequestTime: 5 * 60_000,
 			handlers: buildRpcHandlers(this.rpcDeps),
 		});
 	}

@@ -362,6 +362,20 @@ export class ChannelGatewayService {
 		text: string,
 	): GatewayMessage {
 		const externalHandle = inferExternalHandle(message, channel);
+		// Surface the trajectory id (and step id when present) on every
+		// outbound agent message. The chat hub's per-channel feed renders
+		// thumbs-up/down on direction=out rows; the rating handler takes
+		// a trajectoryId-style id as `traceId`, which lets feedback
+		// memories cross-reference the trajectory log.
+		const md = (message.metadata ?? {}) as Record<string, unknown>;
+		const trajectoryId = typeof md.trajectoryId === "string" ? md.trajectoryId : undefined;
+		const trajectoryStepId = typeof md.trajectoryStepId === "string" ? md.trajectoryStepId : undefined;
+		const action = message.content?.action;
+		const metaParts: Record<string, unknown> = {};
+		if (action) metaParts.action = action;
+		if (trajectoryId) metaParts.trajectoryId = trajectoryId;
+		if (trajectoryStepId) metaParts.trajectoryStepId = trajectoryStepId;
+		const hasMeta = Object.keys(metaParts).length > 0;
 		return {
 			id: typeof message.id === "string" ? message.id : `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 			time: typeof message.createdAt === "number" ? message.createdAt : Date.now(),
@@ -372,7 +386,7 @@ export class ChannelGatewayService {
 			entityId: String(message.entityId ?? ""),
 			...(externalHandle ? { externalHandle } : {}),
 			text,
-			...(message.content?.action ? { meta: { action: message.content.action } } : {}),
+			...(hasMeta ? { meta: metaParts } : {}),
 		};
 	}
 

@@ -33,6 +33,9 @@ import { routingRequests } from "./handlers/routing";
 import { vaultRequests } from "./handlers/vault";
 import { viewMessages } from "./handlers/log";
 import { windowRequests } from "./handlers/window";
+import { agentProjectsRequests } from "./handlers/agent-projects";
+import { githubChannelRequests } from "./handlers/github-channel";
+import { tasksRequests } from "./handlers/tasks";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
 type SendFn = (name: string, payload: unknown) => void;
@@ -88,6 +91,9 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...gatewayRequests(deps),
 			...chatRequests(deps),
 			...debugRequests(deps),
+			...agentProjectsRequests(deps),
+			...githubChannelRequests(deps),
+			...tasksRequests(deps),
 		},
 		// View→bun fire-and-forget messages (the webview side of the
 		// schema). logWebview routes console/error forwarding into

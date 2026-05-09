@@ -21,7 +21,15 @@ import { newTraceId, traceScope } from "../../trace";
  */
 export function chatRequests(deps: RpcDeps) {
 	return {
-		chatSend: async (params: { convId: string; text: string }): Promise<{ ok: true }> => {
+		chatSend: async (params: { convId: string; text: string }): Promise<{ ok: true; traceId: string }> => {
+			// Fire-and-forget. The actual chat turn can take 30-180s (model
+			// generation + tool chains); a synchronous await of that here
+			// gates the RPC on it and the WindowFactory's maxRequestTime
+			// fires long before the work is done — the view sees "RPC
+			// request timed out" while the bun-side is still streaming
+			// deltas. Instead we ack immediately and stream progress
+			// purely through chatDelta / chatComplete / chatError. The
+			// view never awaits the heavy lifting.
 			const { convId, text } = params;
 			const traceId = newTraceId();
 			let completeFired = false;
@@ -36,20 +44,26 @@ export function chatRequests(deps: RpcDeps) {
 				if (idleTimer) clearTimeout(idleTimer);
 				idleTimer = setTimeout(fireComplete, 1500);
 			};
-			await traceScope(traceId, async () => {
+			void (async () => {
 				try {
-					await deps.runtime.sendMessage(text, (delta) => {
-						deps.broadcaster.broadcast("chatDelta", { convId, delta, traceId });
-						armIdle();
+					await traceScope(traceId, async () => {
+						try {
+							await deps.runtime.sendMessage(text, (delta) => {
+								deps.broadcaster.broadcast("chatDelta", { convId, delta, traceId });
+								armIdle();
+							});
+							fireComplete();
+						} catch (err) {
+							if (idleTimer) clearTimeout(idleTimer);
+							const message = err instanceof Error ? err.message : String(err);
+							deps.broadcaster.broadcast("chatError", { convId, message, traceId });
+						}
 					});
-					fireComplete();
 				} catch (err) {
-					if (idleTimer) clearTimeout(idleTimer);
-					const message = err instanceof Error ? err.message : String(err);
-					deps.broadcaster.broadcast("chatError", { convId, message, traceId });
+					console.warn("[chatSend] traceScope error:", err instanceof Error ? err.message : err);
 				}
-			});
-			return { ok: true };
+			})();
+			return { ok: true, traceId };
 		},
 
 		/**

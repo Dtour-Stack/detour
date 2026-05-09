@@ -255,12 +255,20 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
 
+	// Per-project static-file preview server registry. Hands out
+	// stable `<slug>.localhost:<portlessPort>` URLs for static + carrot
+	// projects; nextjs projects register their own dev-server port via
+	// agentProjectRegisterPreviewPort.
+	const { PreviewServerRegistry, setPreviewRegistry } = await import("./preview-server-registry");
+	const previewServers = new PreviewServerRegistry(portless);
+	setPreviewRegistry(previewServers);
+
 	// Compose the dependency bag every typed-RPC handler reads from.
 	// Per docs/rpc-migration.md — handlers are window-agnostic; the same
 	// bag is mounted on every webview's RPC instance via WindowFactory.
 	const rpcDeps = buildRpcDeps({
 		runtime, vault, auth, backendOps, config, pensieve, activity,
-		channels, gateway, inbox, llama, cron, ownerBind, portless,
+		channels, gateway, inbox, llama, cron, ownerBind, portless, previewServers,
 	});
 
 	// Eager-build the runtime in the background so Pensieve / Activity have
@@ -291,6 +299,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			api.stop();
 			llama.stop();
 			carrotManager.stopAll();
+			void previewServers.stopAll();
 			portless.stop();
 		},
 	};
