@@ -1,5 +1,10 @@
 import { BrowserView, BrowserWindow, Screen } from "electrobun/bun";
 
+// TODO(rpc-migration): WindowFactory is currently structurally typed over RPC
+// configs. Per .claude/rules/electrobun.md ("Don't Use `as any` for RPC Types"),
+// we need to parameterize PopupOptions/RegularWindowOptions over a Schema
+// generic and let each feature pass its typed RPC schema through. This is
+// done as part of the HTTP→RPC migration tracked in docs/rpc-migration.md.
 type RpcConfig = {
 	maxRequestTime?: number;
 	handlers: {

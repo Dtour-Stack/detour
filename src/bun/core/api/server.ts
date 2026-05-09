@@ -1119,21 +1119,17 @@ export class ApiServer {
 			return null;
 		},
 		async (ctx) => {
-			const { req, url, path, json, ok, error } = ctx;
+			const { req, path, ok, error } = ctx;
 			// --- system browser (OAuth flows can't use window.open from inside a webview) ---
+			// Uses electrobun's Utils.openExternal — canonical, cross-platform,
+			// no shell-out. See .claude/rules/electrobun.md.
 			if (req.method === "POST" && path === "/api/external/open") {
 				const body = (await req.json()) as { url: string };
 				if (typeof body.url !== "string" || !/^https?:\/\//i.test(body.url)) {
 					return error("invalid url", 400);
 				}
-				const cmd =
-					process.platform === "darwin"
-						? "open"
-						: process.platform === "win32"
-							? "start"
-							: "xdg-open";
-				const { spawn: sp } = await import("node:child_process");
-				sp(cmd, [body.url], { stdio: "ignore", detached: true, shell: false }).unref();
+				const { Utils } = await import("electrobun/bun");
+				Utils.openExternal(body.url);
 				return ok();
 			}
 			return null;

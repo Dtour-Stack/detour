@@ -93,4 +93,11 @@ export default {
 			bundleCEF: false,
 		},
 	},
+	release: {
+		// Required by electrobun.md rules ("release.baseUrl is required for
+		// auto-updates"). Points at the host where canary/stable artifacts
+		// (and update.json + .tar.zst + .patch) will be uploaded. Override
+		// with DETOUR_RELEASE_BASE_URL once the deployment target is known.
+		baseUrl: process.env.DETOUR_RELEASE_BASE_URL ?? "https://detour.ai/releases/",
+	},
 } satisfies ElectrobunConfig;

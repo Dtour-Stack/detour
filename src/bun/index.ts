@@ -1,16 +1,18 @@
+import Electrobun, { Utils } from "electrobun/bun";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 console.log("[main] starting");
 
-// Cleanup hooks for graceful shutdown paths. Note: in the electrobun launcher
-// context, SIGTERM/SIGINT/exit DO NOT reach Bun's listeners — the launcher
-// inherits a signal disposition that drops them before JS dispatch. We still
-// register handlers (using `prependListener` to win against eliza's runtime
-// handlers in the rare case bun is run directly), but they're not the
-// load-bearing cleanup path. Real cleanup for the llama subprocess is
-// handled by:
+// Shutdown hooks. Canonical Electrobun pattern is `before-quit` for async
+// cleanup — see .claude/rules/electrobun.md ("Use `before-quit` for async
+// shutdown cleanup — never rely on `process.on(\"exit\")` for async work").
+//
+// We register the standard Electrobun event AND keep process.* listeners
+// as fallbacks for direct-bun execution (no launcher) and for unhandled
+// errors. The launcher swallows SIGTERM/SIGINT before Bun dispatches them,
+// so for hard kills we additionally rely on:
 //   1. A detached watchdog process that polls our pid and SIGKILLs llama
 //      when we die — see LlamaServerService.spawnWatchdog().
 //   2. A pidfile-based reaper at next startup — see LlamaServerService.reapOrphan().
@@ -25,19 +27,20 @@ const runCleanup = (label: string) => {
 		try { hook(); } catch { /* best-effort */ }
 	}
 };
-process.prependListener("SIGINT", () => { runCleanup("SIGINT"); process.exit(0); });
-process.prependListener("SIGTERM", () => { runCleanup("SIGTERM"); process.exit(0); });
-process.prependListener("SIGHUP", () => { runCleanup("SIGHUP"); process.exit(0); });
+Electrobun.events.on("before-quit", () => runCleanup("before-quit"));
+process.prependListener("SIGINT", () => { runCleanup("SIGINT"); Utils.quit(); });
+process.prependListener("SIGTERM", () => { runCleanup("SIGTERM"); Utils.quit(); });
+process.prependListener("SIGHUP", () => { runCleanup("SIGHUP"); Utils.quit(); });
 process.prependListener("exit", () => runCleanup("exit"));
 process.prependListener("uncaughtException", (err) => {
 	console.error("[main] uncaughtException:", err);
 	runCleanup("uncaughtException");
-	process.exit(1);
+	Utils.quit();
 });
 process.prependListener("unhandledRejection", (err) => {
 	console.error("[main] unhandledRejection:", err);
 	runCleanup("unhandledRejection");
-	process.exit(1);
+	Utils.quit();
 });
 
 // Detour's canonical home dir. Everything in core/cli/plugins hardcodes
