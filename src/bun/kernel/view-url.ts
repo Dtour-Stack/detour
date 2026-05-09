@@ -1,37 +1,25 @@
 /**
  * Pick the right URL for a tray window's React view.
  *
- *   - In a packaged .app: `views://main/index.html#<route>` — Electrobun
- *     resolves `views://` against `Resources/app/views/`, where
- *     electrobun.config.ts copies the production Vite build (web/dist).
- *   - In dev: Vite dev server (default http://localhost:5180), with a hash
- *     route, so React's hash-based router mounts the right window.
- *
- * Detection: presence of the bundled index.html on disk. Reliable in both
- * `electrobun build` artifacts and `electrobun dev` (which still bundles).
- *
- * Override via DETOUR_DEV_URL if you want to force dev URL even with
- * bundled assets present (useful for hot-reload while shipping).
+ *   - Default: `views://main/index.html#<route>` — Electrobun resolves
+ *     `views://` against `Resources/app/views/`, where electrobun.config.ts
+ *     copies the bundled view (electrobun dev AND build both produce this).
+ *   - With DETOUR_DEV_URL set: use that as the base instead, with a hash
+ *     route. Useful when you want a separate Vite dev server for hot
+ *     reload (not the default — electrobun dev already rebuilds on save).
  */
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const DEV_URL = process.env.DETOUR_DEV_URL ?? "http://localhost:5180";
+const DEV_URL = process.env.DETOUR_DEV_URL ?? null;
 
 let cachedBundledRoot: string | null | undefined;
 
-function isDevBundle(): boolean {
-	// Electrobun emits the dev .app at `Detour-dev.app` (build:dev) and prod
-	// at `Detour.app` (build:canary / build:stable). When running from the
-	// dev bundle we always prefer the live Vite server — hot reload trumps
-	// the bundled assets.
-	return typeof process.execPath === "string" && process.execPath.includes("Detour-dev.app/");
-}
-
 function resolveBundledIndex(): string | null {
 	if (cachedBundledRoot !== undefined) return cachedBundledRoot;
-	if (process.env.DETOUR_DEV_URL || isDevBundle()) {
+	if (DEV_URL) {
+		// Explicit opt-in: use Vite (or whatever DETOUR_DEV_URL points at).
 		cachedBundledRoot = null;
 		return null;
 	}
@@ -64,5 +52,11 @@ export function resolveViewUrl(hash?: string): string {
 	if (bundled) {
 		return `views://main/index.html${fragment}`;
 	}
-	return `${DEV_URL}/${fragment}`;
+	if (DEV_URL) {
+		return `${DEV_URL}/${fragment}`;
+	}
+	// Should be unreachable — bundled assets are produced by electrobun dev/build.
+	// If we're here, something is wrong with the build artifact.
+	console.warn("[view-url] no bundled index.html found and no DETOUR_DEV_URL set — webview will be blank");
+	return `views://main/index.html${fragment}`;
 }
