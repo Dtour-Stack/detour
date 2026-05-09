@@ -13,7 +13,8 @@ export const notificationsFeature: Feature = {
 		});
 
 		// Auto-notify on agent errors so the user sees them when the popup is hidden.
-		deps.api.on((msg) => {
+		// Listens via in-process ApiServer.listen() — no WS round-trip.
+		deps.core.api.listen((msg) => {
 			if (msg.kind === "chat:error") {
 				try {
 					Utils.showNotification({

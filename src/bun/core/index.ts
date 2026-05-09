@@ -18,7 +18,7 @@ import { PortlessService } from "./portless";
 import { PensieveService } from "./pensieve";
 import { RuntimeService } from "./runtime";
 import { VaultService } from "./vault";
-import { bridgeWsToRpc, buildRpcDeps } from "./rpc/registry";
+import { buildRpcDeps } from "./rpc/registry";
 import type { RpcDeps } from "./rpc/types";
 
 export type CoreOptions = {
@@ -239,7 +239,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
 		}
 	});
-	const api = new ApiServer(runtime, vault, auth, backendOps, config, pensieve, activity, channels, gateway, inbox, llama, cron, ownerBind, portless);
+	const api = new ApiServer(runtime, activity);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
@@ -251,12 +251,6 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		runtime, vault, auth, backendOps, config, pensieve, activity,
 		channels, gateway, inbox, llama, cron, ownerBind, portless,
 	});
-
-	// Bridge legacy `api.publish({kind: "..."})` ws pushes to typed RPC
-	// broadcasts. As features migrate, the WS publish call sites get
-	// replaced with direct `broadcaster.broadcast(...)` calls and the
-	// translation entry in registry.ts can be removed.
-	const unbridge = bridgeWsToRpc(api);
 
 	// Eager-build the runtime in the background so Pensieve / Activity have
 	// real data the moment the user opens those windows — instead of
@@ -278,7 +272,6 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		portless,
 		rpcDeps,
 		stop: () => {
-			unbridge();
 			discordObservations.stop();
 			improvement.stop();
 			activity.stop();

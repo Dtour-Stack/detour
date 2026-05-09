@@ -102,16 +102,7 @@ export function LocalAITab({ client: _client }: { client: WebClient }) {
 		setBusy("save");
 		setSaveError(null);
 		try {
-			await fetch("/api/channels/credentials", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ key: "OPENAI_EMBEDDING_API_KEY", value: v }),
-			}).then(async (res) => {
-				if (!res.ok) {
-					const t = await res.text();
-					throw new Error(t.slice(0, 200));
-				}
-			});
+			await rpc.request.channelsSetCredential({ key: "OPENAI_EMBEDDING_API_KEY", value: v });
 			setOpenaiKey("");
 			setHasOpenaiKey(true);
 		} catch (err) {
@@ -124,7 +115,7 @@ export function LocalAITab({ client: _client }: { client: WebClient }) {
 	const clearOpenaiKey = useCallback(async () => {
 		setBusy("clear");
 		try {
-			await fetch("/api/channels/credentials/OPENAI_EMBEDDING_API_KEY", { method: "DELETE" });
+			await rpc.request.channelsClearCredential({ key: "OPENAI_EMBEDDING_API_KEY" });
 			setHasOpenaiKey(false);
 		} catch {
 			/* noop */

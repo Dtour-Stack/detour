@@ -18,7 +18,6 @@ export class EventBus<Events extends Record<string, unknown>> {
 }
 
 export type KernelEvents = {
-	"provider:changed": { activeProvider: string | null };
 	"runtime:ready": Record<string, never>;
 	"runtime:error": { message: string };
 	"ui:open-settings": Record<string, never>;

@@ -41,3 +41,4 @@ packages/web/public/apple-touch-icon.png
 .gemini/settings.json
 .cursor/hooks.json
 .opencode/plugins/xh-hooks.js
+.claude/worktrees/

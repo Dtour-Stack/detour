@@ -275,13 +275,7 @@ export type WsServerMessage =
 	| { kind: "chat:delta"; convId: string; delta: string; traceId?: string }
 	| { kind: "chat:complete"; convId: string; traceId?: string }
 	| { kind: "chat:error"; convId: string; message: string; traceId?: string }
-	| { kind: "provider:changed"; activeProvider: ProviderId | null }
-	| { kind: "auth:flow-update"; sessionId: string; state: AuthFlowState }
-	| { kind: "backend:changed"; backendId: string }
 	| { kind: "ui:open-settings" }
-	| { kind: "ui:open-browser" }
-	| { kind: "browser:command"; command: BrowserCommand }
-	| { kind: "ui:preferences-changed"; preferences: UiPreferences }
 	| { kind: "pong" };
 
 export type ThemeChoice = "system" | "light" | "dark";

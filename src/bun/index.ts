@@ -63,12 +63,6 @@ const core = await startCore({ dataDir, pgliteDataDir, port: 2138 });
 shutdownHooks.push(() => core.stop());
 console.log(`[main] core listening on http://127.0.0.1:${core.port}`);
 
-const { ApiClient } = await import("./kernel/api-client");
-const api = new ApiClient(`http://127.0.0.1:${core.port}`);
-await api.start();
-shutdownHooks.unshift(() => api.stop()); // run api.stop() before core.stop()
-console.log("[main] api client connected");
-
 const { createKernel } = await import("./kernel/app");
 const { loadFeatures } = await import("./kernel/registry");
 const { chatFeature } = await import("./features/chat");
@@ -83,7 +77,7 @@ const { menusFeature } = await import("./features/menus");
 const { portlessFeature } = await import("./features/portless");
 
 console.log("[main] creating kernel");
-const kernel = createKernel({ trayTitle: "Detour", core, api });
+const kernel = createKernel({ trayTitle: "Detour", core });
 
 console.log("[main] loading features");
 await loadFeatures(kernel, [
