@@ -1,3 +1,11 @@
+/**
+ * Portless tab — local-dev reverse proxy management.
+ *
+ * Single-pane view (no sidebar nav). Uses the same theme variables and
+ * card/banner classes as Settings / Pensieve / Activity / Channels so
+ * the visual language stays consistent across all of Detour's windows.
+ */
+
 import { useCallback, useEffect, useState } from "react";
 import type { PortlessSnapshot } from "../../shared/index";
 import { rpc } from "../rpc";
@@ -55,100 +63,80 @@ export function PortlessView() {
 	const proxyBase = snapshot ? `http://127.0.0.1:${snapshot.proxyPort}` : "";
 
 	return (
-		<div style={{ padding: 16, fontFamily: "system-ui, -apple-system, sans-serif", color: "var(--text, #ddd)", background: "var(--bg, #0a0a0a)", minHeight: "100vh" }}>
-			<header style={{ marginBottom: 16 }}>
-				<h1 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Portless</h1>
-				<p style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.65 }}>
+		<div className="portless-shell">
+			<header className="portless-header">
+				<h1>Portless</h1>
+				<p className="hint">
 					Local-dev reverse proxy. Map <code>&lt;name&gt;.{snapshot?.tld ?? "localhost"}</code> hostnames to local ports.
 				</p>
 			</header>
 
-			<section style={{ marginBottom: 16, padding: 12, background: "rgba(255,255,255,0.04)", borderRadius: 6, fontSize: 12 }}>
-				<div>
-					proxy:{" "}
+			<section className="card">
+				<div className="provider-header">
+					<span className="name">Proxy</span>
 					{snapshot?.running
-						? <span style={{ color: "#7fd76a" }}>● running</span>
-						: <span style={{ color: "#ff6b6b" }}>● down</span>}{" "}
-					on <code>{proxyBase}</code>
+						? <span className="badge ok">running on {proxyBase}</span>
+						: <span className="badge err">down</span>}
 				</div>
-				<div style={{ marginTop: 4, opacity: 0.65 }}>
-					Test a registered route with <code>curl -H "Host: NAME.localhost" {proxyBase || "http://127.0.0.1:4848"}/</code>
+				<div className="hint">
+					Test a registered route with{" "}
+					<code>curl -H "Host: NAME.localhost" {proxyBase || "http://127.0.0.1:4848"}/</code>
 				</div>
 			</section>
 
-			<section style={{ marginBottom: 16 }}>
-				<h2 style={{ fontSize: 13, fontWeight: 600, margin: "0 0 8px", opacity: 0.85 }}>Register route</h2>
-				<div style={{ display: "flex", gap: 8 }}>
+			<section className="card">
+				<h3>Register route</h3>
+				<div className="row" style={{ gap: 8 }}>
 					<input
+						className="portless-input"
 						placeholder="hostname (e.g. myapp or myapp.localhost)"
 						value={hostname}
 						onChange={(e) => setHostname(e.target.value)}
-						style={{ flex: 2, padding: "6px 8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "inherit", fontSize: 13 }}
+						style={{ flex: 2 }}
 					/>
 					<input
+						className="portless-input"
 						placeholder="port"
 						value={port}
 						onChange={(e) => setPort(e.target.value)}
-						style={{ flex: 1, padding: "6px 8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "inherit", fontSize: 13 }}
+						style={{ flex: 1 }}
 					/>
-					<button onClick={onAdd} style={btnStyle()}>Add</button>
+					<button type="button" className="btn" onClick={onAdd}>Add</button>
 				</div>
 			</section>
 
-			<section>
-				<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-					<h2 style={{ fontSize: 13, fontWeight: 600, margin: 0, opacity: 0.85 }}>
-						Routes {snapshot ? `(${snapshot.routes.length})` : ""}
-					</h2>
-					<button onClick={onPrune} style={btnStyle({ subtle: true })}>Prune dead PIDs</button>
+			<section className="card">
+				<div className="provider-header">
+					<span className="name">Routes {snapshot ? `(${snapshot.routes.length})` : ""}</span>
+					<button type="button" className="btn ghost small" onClick={onPrune}>
+						Prune dead PIDs
+					</button>
 				</div>
 				{snapshot?.routes.length === 0 && (
-					<div style={{ padding: 16, fontSize: 12, opacity: 0.5, textAlign: "center" }}>No routes registered yet.</div>
+					<div className="empty">No routes registered yet.</div>
 				)}
-				<ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+				<ul className="portless-routes">
 					{snapshot?.routes.map((r) => (
-						<li key={r.hostname} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 4, marginBottom: 4, fontSize: 13 }}>
+						<li key={r.hostname} className="portless-route">
 							<a
 								href={`${proxyBase}/`}
 								onClick={(e) => { e.preventDefault(); fetch(`${proxyBase}/`, { headers: { Host: r.hostname } }).catch(() => {}); }}
-								style={{ flex: 1, color: "#7fb3ff", textDecoration: "none" }}
+								className="portless-route-host"
 								title={`http://${r.hostname}:${snapshot.proxyPort}/`}
 							>
 								<code>{r.hostname}</code>
 							</a>
-							<span style={{ opacity: 0.6, fontFamily: "monospace" }}>:{r.port}</span>
-							<span style={{ opacity: 0.4, fontSize: 11, fontFamily: "monospace" }}>pid {r.pid}</span>
-							<button onClick={() => onRemove(r.hostname)} style={btnStyle({ danger: true })}>Remove</button>
+							<span className="portless-route-port">:{r.port}</span>
+							<span className="portless-route-pid">pid {r.pid}</span>
+							<button type="button" className="btn ghost small" onClick={() => onRemove(r.hostname)}>
+								Remove
+							</button>
 						</li>
 					))}
 				</ul>
 			</section>
 
-			{error && (
-				<div style={{ marginTop: 16, padding: 8, background: "rgba(255,80,80,0.15)", border: "1px solid rgba(255,80,80,0.4)", borderRadius: 4, fontSize: 12, color: "#ff9a9a" }}>
-					{error}
-				</div>
-			)}
+			{error && <div className="banner error">{error}</div>}
 		</div>
 	);
-}
-
-function btnStyle(opts: { danger?: boolean; subtle?: boolean } = {}) {
-	const base: React.CSSProperties = {
-		padding: "6px 12px",
-		fontSize: 12,
-		fontWeight: 500,
-		border: "1px solid rgba(255,255,255,0.15)",
-		borderRadius: 4,
-		cursor: "pointer",
-		color: "inherit",
-		background: "rgba(255,255,255,0.06)",
-	};
-	if (opts.danger) {
-		base.borderColor = "rgba(255,100,100,0.3)";
-		base.color = "#ff9a9a";
-	} else if (opts.subtle) {
-		base.opacity = 0.6;
-	}
-	return base;
 }
