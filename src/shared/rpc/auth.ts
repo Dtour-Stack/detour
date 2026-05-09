@@ -75,6 +75,19 @@ export type AuthRequests = {
 		params: { code: string; label?: string };
 		response: { ok: true; accountId: string };
 	};
+	// OpenRouter OAuth (PKCE) — start a flow that opens browser to
+	// openrouter.ai/auth, captures the code via a loopback listener,
+	// exchanges it for a user-controlled API key, and stores under
+	// OPENROUTER_API_KEY. Status is broadcast through `authFlowUpdate`.
+	// Reference: https://openrouter.ai/docs/guides/overview/auth/oauth
+	authStartOpenRouterFlow: {
+		params: { label?: string };
+		response: {
+			sessionId: string;
+			authUrl: string;
+			needsCodeSubmission: false;
+		};
+	};
 };
 
 export type AuthMessages = {

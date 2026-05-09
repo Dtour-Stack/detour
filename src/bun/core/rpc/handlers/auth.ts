@@ -7,6 +7,8 @@ import {
 	type SubscriptionProvider,
 } from "../../auth";
 import { saveAccount, type AccountCredentialRecord } from "@elizaos/agent/auth";
+import { createServer, type Server } from "node:http";
+import { randomBytes, createHash } from "node:crypto";
 import type { RpcDeps } from "../types";
 
 // Anthropic OAuth constants — duplicated from
@@ -17,6 +19,28 @@ import type { RpcDeps } from "../types";
 const ANTHROPIC_CLIENT_ID = atob("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
+
+// OpenRouter PKCE flow constants —
+// https://openrouter.ai/docs/guides/overview/auth/oauth
+const OPENROUTER_AUTH_URL = "https://openrouter.ai/auth";
+const OPENROUTER_TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
+const OPENROUTER_CALLBACK_PATH = "/openrouter-callback";
+const OPENROUTER_FLOW_TIMEOUT_MS = 5 * 60_000;
+
+const OPENROUTER_SUCCESS_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>OpenRouter connected</title>
+<style>body{font:14px -apple-system,system-ui,sans-serif;padding:60px;text-align:center;background:#0a0a0a;color:#eee}h1{font-weight:500}p{opacity:.7}</style>
+</head><body><h1>OpenRouter connected</h1><p>You can close this window — Detour has your key.</p></body></html>`;
+
+function base64UrlEncode(buf: Buffer): string {
+	return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function generatePkcePair(): { verifier: string; challenge: string } {
+	const verifier = base64UrlEncode(randomBytes(32));
+	const challenge = base64UrlEncode(createHash("sha256").update(verifier).digest());
+	return { verifier, challenge };
+}
 
 /**
  * Detect whether a user-pasted string is an Anthropic OAuth callback
@@ -145,6 +169,148 @@ export function authRequests(deps: RpcDeps) {
 		}): Promise<{ ok: boolean }> => {
 			const ok = deps.auth.submitFlowCode(params.sessionId, params.code);
 			return { ok };
+		},
+
+		/**
+		 * Start an OpenRouter PKCE OAuth flow. Opens a loopback HTTP
+		 * listener on an ephemeral port, returns the auth URL the view
+		 * should pop in a browser. The flow runs to completion in the
+		 * background — status is broadcast through `authFlowUpdate`.
+		 *
+		 * Reference: https://openrouter.ai/docs/guides/overview/auth/oauth
+		 *
+		 * Unlike Anthropic/Codex this stores the resulting *user-scoped
+		 * API key* (not OAuth tokens) under `OPENROUTER_API_KEY` in the
+		 * vault, because that's what OpenRouter's exchange endpoint
+		 * returns.
+		 */
+		authStartOpenRouterFlow: async (params: {
+			label?: string;
+		}): Promise<{
+			sessionId: string;
+			authUrl: string;
+			needsCodeSubmission: false;
+		}> => {
+			const sessionId = crypto.randomUUID();
+			const startedAt = Date.now();
+			const { verifier, challenge } = generatePkcePair();
+
+			let resolveCode: ((code: string) => void) | null = null;
+			let rejectCode: ((err: Error) => void) | null = null;
+			const codePromise = new Promise<string>((resolve, reject) => {
+				resolveCode = resolve;
+				rejectCode = reject;
+			});
+
+			const server: Server = createServer((req, res) => {
+				try {
+					const reqUrl = new URL(req.url ?? "", "http://127.0.0.1");
+					if (reqUrl.pathname !== OPENROUTER_CALLBACK_PATH) {
+						res.statusCode = 404;
+						res.end("Not found");
+						return;
+					}
+					const code = reqUrl.searchParams.get("code");
+					if (!code) {
+						res.statusCode = 400;
+						res.end("Missing 'code' query param");
+						rejectCode?.(new Error("OpenRouter callback missing 'code' query param"));
+						return;
+					}
+					res.statusCode = 200;
+					res.setHeader("Content-Type", "text/html; charset=utf-8");
+					res.end(OPENROUTER_SUCCESS_HTML);
+					resolveCode?.(code);
+				} catch (err) {
+					res.statusCode = 500;
+					res.end("Internal error");
+					rejectCode?.(err instanceof Error ? err : new Error(String(err)));
+				}
+			});
+
+			await new Promise<void>((resolve, reject) => {
+				server.once("error", reject);
+				server.listen(0, "127.0.0.1", () => resolve());
+			});
+			const address = server.address();
+			if (!address || typeof address === "string") {
+				server.close();
+				throw new Error("Failed to bind OpenRouter callback listener");
+			}
+			const port = address.port;
+			const callbackUrl = `http://127.0.0.1:${port}${OPENROUTER_CALLBACK_PATH}`;
+			const authUrl =
+				`${OPENROUTER_AUTH_URL}?callback_url=${encodeURIComponent(callbackUrl)}` +
+				`&code_challenge=${encodeURIComponent(challenge)}` +
+				`&code_challenge_method=S256`;
+
+			const initialState = {
+				sessionId,
+				providerId: "openrouter" as const,
+				status: "pending" as const,
+				authUrl,
+				needsCodeSubmission: false,
+				startedAt,
+			};
+			deps.broadcaster.broadcast("authFlowUpdate", { sessionId, state: initialState });
+
+			const timeoutTimer = setTimeout(() => {
+				rejectCode?.(new Error(`OpenRouter OAuth flow timed out after ${OPENROUTER_FLOW_TIMEOUT_MS / 1000}s`));
+			}, OPENROUTER_FLOW_TIMEOUT_MS);
+
+			// Drive the flow to completion in the background. Status updates
+			// land via `authFlowUpdate`. The original RPC call returns
+			// immediately with the authUrl so the view can open a browser.
+			void (async () => {
+				try {
+					const code = await codePromise;
+					clearTimeout(timeoutTimer);
+					const exchange = await fetch(OPENROUTER_TOKEN_URL, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							code,
+							code_verifier: verifier,
+							code_challenge_method: "S256",
+						}),
+					});
+					if (!exchange.ok) {
+						const errText = await exchange.text().catch(() => exchange.statusText);
+						throw new Error(`OpenRouter token exchange failed: ${errText}`);
+					}
+					const data = (await exchange.json()) as { key?: string };
+					if (!data.key) throw new Error("OpenRouter response missing 'key'");
+					await deps.vault.setProviderKey("openrouter", data.key);
+					console.log(`[auth] Imported OpenRouter API key via PKCE flow (sessionId=${sessionId})`);
+					await deps.runtime.rebuild().catch((err) =>
+						console.error("[runtime] rebuild after OpenRouter import failed:", err),
+					);
+					deps.broadcaster.broadcast("authFlowUpdate", {
+						sessionId,
+						state: { ...initialState, status: "success", endedAt: Date.now() },
+					});
+					deps.broadcaster.broadcast("providerChanged", {
+						activeProvider: deps.runtime.getCurrentProvider(),
+					});
+				} catch (err) {
+					clearTimeout(timeoutTimer);
+					const message = err instanceof Error ? err.message : String(err);
+					const isCancel = message.includes("timed out");
+					deps.broadcaster.broadcast("authFlowUpdate", {
+						sessionId,
+						state: {
+							...initialState,
+							status: isCancel ? "timeout" : "error",
+							error: message,
+							endedAt: Date.now(),
+						},
+					});
+				} finally {
+					try { server.close(); } catch { /* ignore */ }
+				}
+			})();
+
+			return { sessionId, authUrl, needsCodeSubmission: false };
 		},
 
 		/**
