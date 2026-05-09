@@ -80,7 +80,13 @@ export class WebClient {
 	private listeners = new Set<Listener>();
 	private outbox: WsClientMessage[] = [];
 
-	constructor(private readonly base = "") {}
+	// When the page is served via electrobun's `views://` scheme, `location.host`
+	// is the view name (e.g. "main"), not the API server. The bun side sets
+	// `window.__detourApiBase = "http://127.0.0.1:<port>"` via a window preload
+	// script, so we read it here as the default base.
+	constructor(private readonly base = typeof window !== "undefined"
+		? ((window as unknown as { __detourApiBase?: string }).__detourApiBase ?? "")
+		: "") {}
 
 	async connect(): Promise<void> {
 		await new Promise<void>((resolve, reject) => {

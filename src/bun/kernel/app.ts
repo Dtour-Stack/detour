@@ -18,7 +18,8 @@ export function createKernel(opts: {
 	api: ApiClient;
 }): KernelDeps {
 	const events = new EventBus<KernelEvents>();
-	const windows = new WindowFactory();
+	const apiBase = `http://127.0.0.1:${opts.core.port}`;
+	const windows = new WindowFactory(apiBase);
 	const tray = new TrayController({ title: opts.trayTitle });
 
 	// Bridge WS server-push messages onto the kernel event bus
@@ -34,7 +35,7 @@ export function createKernel(opts: {
 	// at the top of the menu so the user sees lifecycle state without
 	// opening Settings. Polls every 4 seconds; calls setStatus(text) which
 	// no-ops when the text hasn't changed.
-	const baseUrl = `http://127.0.0.1:${opts.core.port}`;
+	const baseUrl = apiBase;
 	const refreshTrayStatus = async (): Promise<void> => {
 		try {
 			const [providers, llama] = await Promise.all([

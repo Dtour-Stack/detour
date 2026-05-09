@@ -82,13 +82,23 @@ export type RegularWindowOptions = {
 };
 
 export class WindowFactory {
+	constructor(private readonly apiBase: string) {}
+
+	private preload(): string {
+		// Runs in the page context BEFORE any of the page's scripts. Sets
+		// the API base URL the React app needs to talk to bun's HTTP/WS
+		// server — `location.host` under views:// is the view name, not
+		// the API host, so we have to inject this explicitly.
+		return `window.__detourApiBase = ${JSON.stringify(this.apiBase)};`;
+	}
+
 	createPopup(opts: PopupOptions): WindowHandle {
 		const rpc = BrowserView.defineRPC(opts.rpc as any);
 		const window = new BrowserWindow({
 			title: "",
 			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
-			preload: null,
+			preload: this.preload(),
 			viewsRoot: null,
 			renderer: "native",
 			rpc,
@@ -120,7 +130,7 @@ export class WindowFactory {
 			title: opts.title,
 			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
-			preload: null,
+			preload: this.preload(),
 			viewsRoot: null,
 			renderer: "native",
 			rpc,
