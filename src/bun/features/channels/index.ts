@@ -32,10 +32,6 @@ export const channelsFeature: Feature = {
 				height: DEFAULT_HEIGHT,
 				centered: true,
 				url: resolveViewUrl("channels"),
-				rpc: {
-					maxRequestTime: 60_000,
-					handlers: { requests: {}, messages: {} },
-				},
 			});
 			handle.onClose(() => {
 				channelsWindow = null;

@@ -19,7 +19,7 @@ export function createKernel(opts: {
 }): KernelDeps {
 	const events = new EventBus<KernelEvents>();
 	const apiBase = `http://127.0.0.1:${opts.core.port}`;
-	const windows = new WindowFactory(apiBase);
+	const windows = new WindowFactory(apiBase, opts.core.rpcDeps);
 	const tray = new TrayController({ title: opts.trayTitle });
 
 	// Bridge WS server-push messages onto the kernel event bus

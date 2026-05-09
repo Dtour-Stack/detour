@@ -31,10 +31,6 @@ export const activityFeature: Feature = {
 				height: DEFAULT_HEIGHT,
 				centered: true,
 				url: resolveViewUrl("activity"),
-				rpc: {
-					maxRequestTime: 60_000,
-					handlers: { requests: {}, messages: {} },
-				},
 			});
 			handle.onClose(() => { w = null; });
 			w = handle;

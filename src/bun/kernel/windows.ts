@@ -1,24 +1,37 @@
+/**
+ * WindowFactory — typed wrapper around BrowserWindow + RPC for every
+ * webview Detour creates. All windows share a single typed schema
+ * (DetourRPC, composed in src/shared/rpc/) and a single handler bag
+ * (built by src/bun/core/rpc/registry.ts), so any RPC method works
+ * from any webview — not just the chat window.
+ *
+ * Per .claude/rules/electrobun.md ("Don't Use `as any` for RPC Types"),
+ * this file uses Schema generics throughout — there are no `as any`
+ * casts on RPC-typed paths.
+ */
+
 import { BrowserView, BrowserWindow, Screen } from "electrobun/bun";
+import type { DetourRPC } from "../../shared/rpc";
+import { buildRpcHandlers, registerWindow } from "../core/rpc/registry";
+import type { RpcDeps } from "../core/rpc/types";
 
-// TODO(rpc-migration): WindowFactory is currently structurally typed over RPC
-// configs. Per .claude/rules/electrobun.md ("Don't Use `as any` for RPC Types"),
-// we need to parameterize PopupOptions/RegularWindowOptions over a Schema
-// generic and let each feature pass its typed RPC schema through. This is
-// done as part of the HTTP→RPC migration tracked in docs/rpc-migration.md.
-type RpcConfig = {
-	maxRequestTime?: number;
-	handlers: {
-		requests?: Record<string, (params: any) => any>;
-		messages?: Record<string, (payload: any) => any>;
-	};
-};
+type DefinedRPC = ReturnType<typeof BrowserView.defineRPC<DetourRPC>>;
+type RpcSendFn = (name: string, payload: unknown) => void;
 
-type RPCInstance = ReturnType<typeof BrowserView.defineRPC>;
+type DetourBrowserWindow = BrowserWindow<DefinedRPC>;
 
 export type WindowHandle = {
-	window: BrowserWindow<RPCInstance>;
-	rpc: RPCInstance;
-	send<K extends string>(messageName: K, payload: unknown): void;
+	window: DetourBrowserWindow;
+	rpc: DefinedRPC;
+	/**
+	 * Push a typed message into this specific window. Most callers
+	 * should use the broadcaster (which fans out to all windows) — use
+	 * this only when the target window is the same one the caller owns.
+	 */
+	send<K extends keyof DetourRPC["bun"]["messages"]>(
+		messageName: K,
+		payload: DetourRPC["bun"]["messages"][K],
+	): void;
 	close(): void;
 	show(): void;
 	hide(): void;
@@ -28,22 +41,35 @@ export type WindowHandle = {
 	onBlur(handler: () => void): void;
 };
 
+type PendingFlush = { ready: boolean; queue: Array<[string, unknown]> };
+
+type SendProxy = Record<string, ((payload: unknown) => void) | undefined>;
+
+function getSendProxy(window: DetourBrowserWindow): SendProxy | undefined {
+	// The typed `send` proxy is keyed only by known message names; cast
+	// to a string-indexed callable bag for dynamic broadcasting. Type
+	// safety is enforced at the schema level — registry only emits
+	// names declared in src/shared/rpc/<group>.ts.
+	return window.webview.rpc?.send as unknown as SendProxy | undefined;
+}
+
 function makeHandle(
-	window: BrowserWindow<RPCInstance>,
-	rpc: RPCInstance,
-	pendingFlush: { ready: boolean; queue: Array<[string, unknown]> },
+	window: DetourBrowserWindow,
+	rpc: DefinedRPC,
+	pendingFlush: PendingFlush,
 ): WindowHandle {
+	const sendRaw: RpcSendFn = (messageName, payload) => {
+		if (!pendingFlush.ready) {
+			pendingFlush.queue.push([messageName, payload]);
+			return;
+		}
+		const send = getSendProxy(window);
+		send?.[messageName]?.(payload);
+	};
 	return {
 		window,
 		rpc,
-		send: (messageName, payload) => {
-			if (!pendingFlush.ready) {
-				pendingFlush.queue.push([messageName, payload]);
-				return;
-			}
-			const send = (window.webview.rpc as any)?.send;
-			send?.[messageName]?.(payload);
-		},
+		send: ((messageName: string, payload: unknown) => sendRaw(messageName, payload)) as WindowHandle["send"],
 		close: () => window.close(),
 		show: () => window.show(),
 		hide: () => window.hide(),
@@ -54,10 +80,10 @@ function makeHandle(
 	};
 }
 
-function attachReadyFlush(handle: WindowHandle, pendingFlush: { ready: boolean; queue: Array<[string, unknown]> }) {
+function attachReadyFlush(handle: WindowHandle, pendingFlush: PendingFlush) {
 	handle.onDomReady(() => {
 		pendingFlush.ready = true;
-		const send = (handle.window.webview.rpc as any)?.send;
+		const send = getSendProxy(handle.window);
 		for (const [name, payload] of pendingFlush.queue.splice(0)) {
 			send?.[name]?.(payload);
 		}
@@ -68,7 +94,6 @@ export type PopupOptions = {
 	viewKey: string;
 	width: number;
 	height: number;
-	rpc: RpcConfig;
 	hideOnBlur?: boolean;
 	alwaysOnTop?: boolean;
 	/** Override the default `views://<viewKey>/index.html` URL. Useful for pointing at a Vite dev server. */
@@ -80,26 +105,51 @@ export type RegularWindowOptions = {
 	title: string;
 	width: number;
 	height: number;
-	rpc: RpcConfig;
 	centered?: boolean;
 	/** Override the default `views://<viewKey>/index.html` URL. Useful for pointing at a Vite dev server. */
 	url?: string;
 };
 
 export class WindowFactory {
-	constructor(private readonly apiBase: string) {}
+	constructor(
+		private readonly apiBase: string,
+		private readonly rpcDeps: RpcDeps,
+	) {}
 
 	private preload(): string {
 		// Runs in the page context BEFORE any of the page's scripts. Sets
 		// the API base URL the React app needs to talk to bun's HTTP/WS
 		// server — `location.host` under views:// is the view name, not
-		// the API host, so we have to inject this explicitly.
+		// the API host, so we have to inject this explicitly. Goes away
+		// in Phase 2 after the HTTP/WS server is removed.
 		return `window.__detourApiBase = ${JSON.stringify(this.apiBase)};`;
 	}
 
+	private buildRpc(): DefinedRPC {
+		return BrowserView.defineRPC<DetourRPC>({
+			maxRequestTime: 60_000,
+			handlers: buildRpcHandlers(this.rpcDeps),
+		});
+	}
+
+	/** Hook the window into the broadcaster on dom-ready, unhook on close. */
+	private wireBroadcastRegistration(handle: WindowHandle): void {
+		let unregister: (() => void) | null = null;
+		handle.onDomReady(() => {
+			const send = getSendProxy(handle.window);
+			if (!send) return;
+			const sendFn: RpcSendFn = (name, payload) => send[name]?.(payload);
+			unregister = registerWindow(sendFn);
+		});
+		handle.onClose(() => {
+			unregister?.();
+			unregister = null;
+		});
+	}
+
 	createPopup(opts: PopupOptions): WindowHandle {
-		const rpc = BrowserView.defineRPC(opts.rpc as any);
-		const window = new BrowserWindow({
+		const rpc = this.buildRpc();
+		const window = new BrowserWindow<DefinedRPC>({
 			title: "",
 			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
@@ -116,14 +166,15 @@ export class WindowFactory {
 			frame: { x: 0, y: 0, width: opts.width, height: opts.height },
 		});
 		if (opts.alwaysOnTop ?? true) window.setAlwaysOnTop(true);
-		const pendingFlush = { ready: false, queue: [] as Array<[string, unknown]> };
-		const handle = makeHandle(window as any, rpc, pendingFlush);
+		const pendingFlush: PendingFlush = { ready: false, queue: [] };
+		const handle = makeHandle(window, rpc, pendingFlush);
 		attachReadyFlush(handle, pendingFlush);
+		this.wireBroadcastRegistration(handle);
 		return handle;
 	}
 
 	createWindow(opts: RegularWindowOptions): WindowHandle {
-		const rpc = BrowserView.defineRPC(opts.rpc as any);
+		const rpc = this.buildRpc();
 		const display = Screen.getPrimaryDisplay();
 		const x = opts.centered
 			? Math.round((display.bounds.width - opts.width) / 2)
@@ -131,7 +182,7 @@ export class WindowFactory {
 		const y = opts.centered
 			? Math.round((display.bounds.height - opts.height) / 2)
 			: 100;
-		const window = new BrowserWindow({
+		const window = new BrowserWindow<DefinedRPC>({
 			title: opts.title,
 			url: opts.url ?? `views://${opts.viewKey}/index.html`,
 			html: null,
@@ -147,9 +198,10 @@ export class WindowFactory {
 			sandbox: false,
 			frame: { x, y, width: opts.width, height: opts.height },
 		});
-		const pendingFlush = { ready: false, queue: [] as Array<[string, unknown]> };
-		const handle = makeHandle(window as any, rpc, pendingFlush);
+		const pendingFlush: PendingFlush = { ready: false, queue: [] };
+		const handle = makeHandle(window, rpc, pendingFlush);
 		attachReadyFlush(handle, pendingFlush);
+		this.wireBroadcastRegistration(handle);
 		return handle;
 	}
 

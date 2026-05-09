@@ -18,6 +18,8 @@ import { PortlessService } from "./portless";
 import { PensieveService } from "./pensieve";
 import { RuntimeService } from "./runtime";
 import { VaultService } from "./vault";
+import { bridgeWsToRpc, buildRpcDeps } from "./rpc/registry";
+import type { RpcDeps } from "./rpc/types";
 
 export type CoreOptions = {
 	port?: number;
@@ -32,6 +34,7 @@ export type CoreHandle = {
 	auth: AuthService;
 	api: ApiServer;
 	portless: PortlessService;
+	rpcDeps: RpcDeps;
 	stop: () => void;
 };
 
@@ -241,6 +244,20 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
 
+	// Compose the dependency bag every typed-RPC handler reads from.
+	// Per docs/rpc-migration.md — handlers are window-agnostic; the same
+	// bag is mounted on every webview's RPC instance via WindowFactory.
+	const rpcDeps = buildRpcDeps({
+		runtime, vault, auth, backendOps, config, pensieve, activity,
+		channels, gateway, inbox, llama, cron, ownerBind, portless,
+	});
+
+	// Bridge legacy `api.publish({kind: "..."})` ws pushes to typed RPC
+	// broadcasts. As features migrate, the WS publish call sites get
+	// replaced with direct `broadcaster.broadcast(...)` calls and the
+	// translation entry in registry.ts can be removed.
+	const unbridge = bridgeWsToRpc(api);
+
 	// Eager-build the runtime in the background so Pensieve / Activity have
 	// real data the moment the user opens those windows — instead of
 	// `available: false` until first chat. Failure (e.g. no provider configured
@@ -259,7 +276,9 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		auth,
 		api,
 		portless,
+		rpcDeps,
 		stop: () => {
+			unbridge();
 			discordObservations.stop();
 			improvement.stop();
 			activity.stop();

@@ -27,10 +27,6 @@ export const browserFeature: Feature = {
 				height: DEFAULT_HEIGHT,
 				centered: true,
 				url: resolveViewUrl("browser"),
-				rpc: {
-					maxRequestTime: 60_000,
-					handlers: { requests: {}, messages: {} },
-				},
 			});
 			handle.onClose(() => {
 				browserWindow = null;

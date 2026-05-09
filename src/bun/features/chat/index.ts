@@ -1,7 +1,6 @@
 import { resolveViewUrl } from "../../kernel/view-url";
 import type { Feature } from "../../kernel/registry";
 import type { WindowHandle } from "../../kernel/windows";
-import type { ChatRPC } from "./rpc-schema";
 
 const DEFAULT_WIDTH = 480;
 const DEFAULT_HEIGHT = 720;
@@ -26,7 +25,7 @@ export const chatFeature: Feature = {
 				currentHeight = cmd.height;
 				if (chatWindow) {
 					try {
-						(chatWindow.window as any).setSize?.(cmd.width, cmd.height);
+						(chatWindow.window as unknown as { setSize?: (w: number, h: number) => void }).setSize?.(cmd.width, cmd.height);
 					} catch {
 						// best-effort; some Electrobun versions might not expose setSize
 					}
@@ -36,6 +35,9 @@ export const chatFeature: Feature = {
 
 		function ensureWindow(): WindowHandle {
 			if (chatWindow) return chatWindow;
+			// RPC handlers are mounted globally by WindowFactory via the
+			// registry — no per-window handler block here. See
+			// src/bun/core/rpc/registry.ts and docs/rpc-migration.md.
 			const handle = deps.windows.createPopup({
 				viewKey: "chat",
 				width: currentWidth,
@@ -43,24 +45,6 @@ export const chatFeature: Feature = {
 				url: resolveViewUrl(),
 				hideOnBlur: false,
 				alwaysOnTop: true,
-				rpc: {
-					maxRequestTime: 60_000,
-					handlers: {
-						// First migrated RPC method (per .claude/rules/electrobun.md
-						// "Typed RPC" — replaces /api/backends HTTP fetch). The
-						// handler delegates to the same VaultManager the HTTP route
-						// uses, so the runtime-level behavior is identical;
-						// migration of the call site lives in src/main/rpc.ts +
-						// src/main/settings/BackendsTab.tsx. See docs/rpc-migration.md.
-						requests: {
-							vaultListBackends: async () => {
-								const manager = await deps.core.vault.manager();
-								return manager.detectBackends();
-							},
-						},
-						messages: {},
-					},
-				},
 			});
 			handle.onClose(() => {
 				chatWindow = null;
@@ -116,5 +100,3 @@ export const chatFeature: Feature = {
 		});
 	},
 };
-
-export type { ChatRPC };

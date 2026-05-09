@@ -5,29 +5,28 @@
  * Use this instead of WebClient HTTP fetch for migrated methods. Each
  * `rpc.request.*` round-trips through electrobun's native postMessage
  * bridge (no HTTP/CORS/network in the loop) to the bun main process,
- * which dispatches to the handler defined alongside the chat window's
- * BrowserWindow construction.
+ * which dispatches to handlers composed in
+ * src/bun/core/rpc/registry.ts.
  *
- * As we migrate HTTP endpoints to RPC, methods land in src/shared/rpc.ts
- * and the corresponding `client.foo()` call sites in views switch to
- * `rpc.request.foo()`.
+ * As HTTP endpoints migrate, methods land in src/shared/rpc/<group>.ts
+ * and the corresponding `client.foo()` call sites switch to
+ * `rpc.request.foo()`. Server-push messages (replacing WS) listen via
+ * the per-feature subscribers exported from
+ * src/main/rpc-listeners/<group>.ts.
  */
 
 import Electrobun, { Electroview } from "electrobun/view";
 import type { DetourRPC } from "../shared/rpc";
+import { buildViewListeners } from "./rpc-listeners";
 
 const rpcDef = Electroview.defineRPC<DetourRPC>({
 	maxRequestTime: 30_000,
 	handlers: {
-		// View side has no requests/messages from bun yet — those come over
-		// `messages` (fire-and-forget pushes from bun, listened to via the
-		// `messages` handler bag below).
+		// View side has no incoming requests — bun never asks the view to
+		// answer anything in this app. All view→bun traffic is `request`,
+		// all bun→view traffic is `messages`.
 		requests: {},
-		messages: {
-			tokenDelta: () => { /* per-window listeners attach via electroview events */ },
-			messageComplete: () => { /* same — see below */ },
-			providerChanged: () => { /* listener attached lazily */ },
-		},
+		messages: buildViewListeners(),
 	},
 });
 

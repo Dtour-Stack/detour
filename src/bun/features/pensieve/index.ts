@@ -36,10 +36,6 @@ export const pensieveFeature: Feature = {
 				height: DEFAULT_HEIGHT,
 				centered: true,
 				url: resolveViewUrl("pensieve"),
-				rpc: {
-					maxRequestTime: 60_000,
-					handlers: { requests: {}, messages: {} },
-				},
 			});
 			handle.onClose(() => {
 				pensieveWindow = null;
