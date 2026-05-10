@@ -29,5 +29,6 @@ export type KernelEvents = {
 	"ui:open-browser": Record<string, never>;
 	"ui:open-portless": Record<string, never>;
 	"ui:open-workspace": Record<string, never>;
+	"ui:open-pet": Record<string, never>;
 	notify: { title: string; body?: string; subtitle?: string };
 };

@@ -96,6 +96,11 @@ export type PopupOptions = {
 	height: number;
 	hideOnBlur?: boolean;
 	alwaysOnTop?: boolean;
+	/** Transparent window backdrop. Used by the Codex pet so the
+	 * sprite renders without a card behind it. Implies frameless +
+	 * passthrough off (the pet window still receives pointer events
+	 * for drag/menu). */
+	transparent?: boolean;
 	/** Override the default `views://<viewKey>/index.html` URL. Useful for pointing at a Vite dev server. */
 	url?: string;
 };
@@ -154,7 +159,7 @@ export class WindowFactory {
 			renderer: "native",
 			rpc,
 			titleBarStyle: "hidden",
-			transparent: false,
+			transparent: opts.transparent ?? false,
 			passthrough: false,
 			hidden: true,
 			navigationRules: null,

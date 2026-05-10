@@ -80,6 +80,7 @@ export default {
 			"src/main/pensieve.html": "views/main/pensieve.html",
 			"src/main/browser.html": "views/main/browser.html",
 			"src/main/channels.html": "views/main/channels.html",
+			"src/main/pet.html": "views/main/pet.html",
 			"src/main/portless.html": "views/main/portless.html",
 			"src/main/workspace.html": "views/main/workspace.html",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk

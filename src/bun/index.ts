@@ -76,6 +76,7 @@ const { notificationsFeature } = await import("./features/notifications");
 const { menusFeature } = await import("./features/menus");
 const { portlessFeature } = await import("./features/portless");
 const { workspaceFeature } = await import("./features/workspace");
+const { petFeature } = await import("./features/pet");
 
 console.log("[main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
@@ -93,6 +94,7 @@ await loadFeatures(kernel, [
 	menusFeature,
 	portlessFeature,
 	workspaceFeature,
+	petFeature,
 ]);
 
 console.log("[main] tray-app ready");

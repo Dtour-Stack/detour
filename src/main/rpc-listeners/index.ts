@@ -17,6 +17,7 @@ import { chatMessages } from "./chat";
 import { configMessages } from "./config";
 import { providersMessages } from "./providers";
 import { vaultMessages } from "./vault";
+import { petsMessages } from "./pets";
 
 type ViewMessageBag = {
 	[K in keyof DetourRPC["bun"]["messages"]]?: (payload: DetourRPC["bun"]["messages"][K]) => void;
@@ -36,5 +37,6 @@ export function buildViewListeners(): ViewMessageBag {
 		...configMessages(),
 		...browserMessages(),
 		...chatMessages(),
+		...petsMessages(),
 	};
 }

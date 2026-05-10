@@ -154,16 +154,24 @@ export function petsRequests(deps: RpcDeps) {
 }
 
 /**
- * View → bun pet messages. petWindowDrag is a no-op until the
- * PetWindow + bun-side pet feature land (origin's tray pet feature
- * owned the BrowserWindow handle and translated drag deltas to
- * setPosition; flatten will register the same callback when its
- * src/bun/features/pet/index.ts arrives).
+ * petWindowDrag handler — registered by the bun-side pet feature
+ * (src/bun/features/pet/index.ts) so it can translate drag deltas
+ * into BrowserWindow.setPosition. Lives at module scope rather than
+ * on RpcDeps because the feature is the only thing that knows about
+ * the pet window handle, and there's at most one active pet window.
  */
+let dragHandler: ((delta: { dx: number; dy: number }) => void) | null = null;
+
+export function setPetWindowDragHandler(
+	fn: ((delta: { dx: number; dy: number }) => void) | null,
+): void {
+	dragHandler = fn;
+}
+
 export function petsMessages(_deps: RpcDeps) {
 	return {
-		petWindowDrag: (_payload: { dx: number; dy: number }) => {
-			// no-op until PetWindow and the pet feature register a handler
+		petWindowDrag: (payload: { dx: number; dy: number }) => {
+			dragHandler?.(payload);
 		},
 	};
 }

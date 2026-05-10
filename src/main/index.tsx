@@ -7,6 +7,7 @@ import { ChannelsView } from "./channels/ChannelsView";
 import { BrowserView } from "./browser/BrowserView";
 import { PortlessView } from "./portless/PortlessView";
 import { WorkspaceView } from "./workspace/WorkspaceView";
+import { PetWindow } from "./pet/PetWindow";
 import "./index.css";
 
 // Per-window view selection: each window opens a distinct HTML wrapper
@@ -29,6 +30,7 @@ const root =
 	view === "browser" ? <BrowserView /> :
 	view === "portless" ? <PortlessView /> :
 	view === "workspace" ? <WorkspaceView /> :
+	view === "pet" ? <PetWindow /> :
 	<App />;
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);
