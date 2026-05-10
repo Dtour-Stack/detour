@@ -11,6 +11,26 @@ export type ProviderInfo = {
 	oauthAccountCount?: number;
 };
 
+export type ChatCommandInfo = {
+	name: string;
+	usage: string;
+	description: string;
+	insert: string;
+	aliases?: string[];
+	source: "native" | "skill";
+};
+
+export type WindowOpenTarget =
+	| "chat"
+	| "command-palette"
+	| "settings"
+	| "pensieve"
+	| "activity"
+	| "channels"
+	| "browser"
+	| "agents"
+	| "pet";
+
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
 export type BackendId = "in-house" | "1password" | "protonpass" | "bitwarden";
@@ -872,6 +892,143 @@ export type ActivityTasksSnapshot = {
 	};
 };
 
+export type WorkspaceAgentStatus = "running" | "completed" | "failed" | "stopped";
+
+export type WorkspaceAgentRecord = {
+	id: string;
+	provider: "acpx" | "codex" | "claude";
+	agentType: string;
+	task: string;
+	cwd: string;
+	status: WorkspaceAgentStatus;
+	command: string;
+	args: string[];
+	logPath: string;
+	previewUrl?: string;
+	publicUrl?: string;
+	publicUrlProvider?: "ngrok";
+	publicUrlPid?: number;
+	publicUrlStartedAt?: number;
+	publicUrlError?: string;
+	startedAt: number;
+	pid?: number;
+	exitCode?: number | null;
+	signal?: string | null;
+	endedAt?: number;
+	credentialAttempt?: number;
+};
+
+export type WorkspaceAgentsSnapshot = {
+	agents: WorkspaceAgentRecord[];
+	stateDir: string;
+	updatedAt: number;
+};
+
+export type WorkspaceAgentLog = {
+	id: string;
+	offset: number;
+	nextOffset: number;
+	text: string;
+	truncated: boolean;
+};
+
+export type WorkspaceProjectRecord = {
+	id: string;
+	name: string;
+	cwd: string;
+	agentIds: string[];
+	runningCount: number;
+	completedCount: number;
+	failedCount: number;
+	latestStartedAt: number;
+	previewUrl?: string;
+	publicUrl?: string;
+};
+
+export type WorkspaceProjectsSnapshot = {
+	projects: WorkspaceProjectRecord[];
+	workspaceRoot?: string;
+	updatedAt: number;
+};
+
+export type WorkspaceProjectFileNode = {
+	name: string;
+	path: string;
+	type: "directory" | "file";
+	size?: number;
+	updatedAt?: number;
+};
+
+export type WorkspaceProjectFilesSnapshot = {
+	projectId: string;
+	cwd: string;
+	path: string;
+	entries: WorkspaceProjectFileNode[];
+};
+
+export type WorkspaceProjectFile = {
+	projectId: string;
+	cwd: string;
+	path: string;
+	name: string;
+	language: string;
+	content: string;
+	size: number;
+	updatedAt: number;
+	truncated: boolean;
+};
+
+export type CodexPetAtlas = {
+	columns: number;
+	rows: number;
+	cellWidth: number;
+	cellHeight: number;
+	width: number;
+	height: number;
+};
+
+export type CodexPetAnimationState =
+	| "idle"
+	| "running-right"
+	| "running-left"
+	| "waving"
+	| "jumping"
+	| "failed"
+	| "waiting"
+	| "running"
+	| "review";
+
+export type CodexPetSummary = {
+	id: string;
+	displayName: string;
+	description: string;
+	directory: string;
+	petJsonPath: string;
+	spritesheetPath: string;
+	spritesheetUrl: string;
+	atlas: CodexPetAtlas;
+};
+
+export type CodexPetsResponse = {
+	pets: CodexPetSummary[];
+	errors: string[];
+};
+
+export type CodexPetSpawnResponse = {
+	pet: CodexPetSummary;
+	state: CodexPetAnimationState;
+};
+
+export type CodexPetActivity = {
+	state: CodexPetAnimationState;
+	summary: string;
+	detail?: string;
+	runningAgents: WorkspaceAgentRecord[];
+	recentLogs: ActivityLogEntry[];
+	runtime?: Pick<ActivityRuntimeSnapshot, "available" | "agentName" | "counts">;
+	updatedAt: number;
+};
+
 export type PensieveMemorySummary = {
 	id: string;
 	type?: string;
@@ -911,6 +1068,8 @@ export type PensieveEntitySummary = {
 	relationshipCount: number;
 	memoryCount: number;
 	lastSeen?: number;
+	importanceScore?: number;
+	messageCount?: number;
 	tags: string[];
 };
 
