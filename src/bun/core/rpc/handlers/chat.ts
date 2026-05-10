@@ -1,4 +1,5 @@
 import type { ChatCommandInfo } from "../../../../shared/index";
+import { codexSkillChatCommands } from "../../codex-skills";
 import type { RpcDeps } from "../types";
 import { newTraceId, traceScope } from "../../trace";
 
@@ -125,7 +126,16 @@ export function chatRequests(deps: RpcDeps) {
 			// Skill-derived commands are deduped after natives so a skill
 			// can't shadow a native by collision (matches origin's
 			// `byName.set` only-if-absent behavior).
-			return { commands: [...NATIVE_CHAT_COMMANDS] };
+			const byName = new Map<string, ChatCommandInfo>();
+			for (const command of [
+				...NATIVE_CHAT_COMMANDS,
+				{ name: "/skills", usage: "/skills", description: "List installed Codex skills.", insert: "/skills", source: "native" as const },
+				{ name: "/skill", usage: "/skill <name> <task>", description: "Run a Codex skill against a task.", insert: "/skill ", source: "native" as const },
+				...codexSkillChatCommands(),
+			]) {
+				if (!byName.has(command.name)) byName.set(command.name, command);
+			}
+			return { commands: [...byName.values()] };
 		},
 	};
 }

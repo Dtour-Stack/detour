@@ -28,6 +28,12 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 import { embeddingOpenAIPlugin } from "../plugins/embedding-openai/index";
 import { decodeCodexJwt } from "../plugins/codex-chatgpt/index";
 import { codexHatchAction, codexPetAction, codexPetsPlugin } from "../plugins/codex-pets/index";
+import {
+	codexSkillInvocationPrompt,
+	codexSkillsListText,
+	codexSkillsPlugin,
+	findCodexSkill,
+} from "./codex-skills";
 import { pensieveToolsPlugin } from "../plugins/pensieve-tools/index";
 import {
 	browserFillLoginAction,
@@ -171,7 +177,11 @@ const X_RUNTIME_SETTING_KEYS = [
 
 type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
-	| { kind: "reply"; text: string };
+	| { kind: "reply"; text: string }
+	// Renders a Codex skill's invocation prompt and runs it as a
+	// regular chat turn (not a slash action). The text replaces the
+	// user's `/skill foo bar` and goes through the LLM pipeline.
+	| { kind: "prompt"; text: string };
 
 function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 	const trimmed = text.trim();
@@ -207,9 +217,32 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 			return { kind: "action", action: codexPetAction, options: {} };
 		case "/hatch":
 			return { kind: "action", action: codexHatchAction, options: {} };
+		case "/skills":
+			return { kind: "reply", text: codexSkillsListText() };
+		case "/skill":
+			return slashSkill(tail);
 		default:
-			return null;
+			// Fall through to skill-named matching: a user can type
+			// `/<skill-command> <task>` and we'll find the skill and
+			// render its invocation prompt. Unknown commands still
+			// return null (regular chat).
+			return slashNamedSkill(command, tail);
 	}
+}
+
+function slashSkill(tail: string): NativeSlashDispatch {
+	const match = tail.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+	const name = match?.[1] ?? "";
+	if (!name) return { kind: "reply", text: "Usage: /skill <name> <task>" };
+	const skill = findCodexSkill(name);
+	if (!skill) return { kind: "reply", text: `No Codex skill matched "${name}".` };
+	return { kind: "prompt", text: codexSkillInvocationPrompt(skill, match?.[2] ?? "") };
+}
+
+function slashNamedSkill(command: string, tail: string): NativeSlashDispatch | null {
+	const skill = findCodexSkill(command);
+	if (!skill) return null;
+	return { kind: "prompt", text: codexSkillInvocationPrompt(skill, tail) };
 }
 
 function slashHelp(): NativeSlashDispatch {
@@ -226,6 +259,8 @@ function slashHelp(): NativeSlashDispatch {
 			"/1password <identifier> [url]",
 			"/pet [name]",
 			"/hatch <concept>",
+			"/skills",
+			"/skill <name> <task>",
 		].join("\n"),
 	};
 }
@@ -532,9 +567,17 @@ export class RuntimeService {
 		text: string,
 		onDelta: (delta: string) => void,
 	): Promise<void> {
-		if (nativeSlashCommand(text)) {
+		const slashEarly = nativeSlashCommand(text);
+		if (slashEarly) {
 			const state = await this.getOrBuild();
 			if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
+			if (slashEarly.kind === "prompt") {
+				// Skill-rendered prompt: route through the regular chat
+				// pipeline (LLM + tools) by replacing the user's text
+				// and falling out of the slash branch.
+				await this.deliverMessage(state, slashEarly.text, onDelta, /* asNativeSlash */ false);
+				return;
+			}
 			await this.deliverMessage(state, text, onDelta);
 			return;
 		}
@@ -568,6 +611,7 @@ export class RuntimeService {
 		state: RuntimeState,
 		text: string,
 		onDelta: (delta: string) => void,
+		asNativeSlash: boolean = true,
 	): Promise<void> {
 		const service = state.runtime.messageService;
 		if (!service) {
@@ -618,8 +662,18 @@ export class RuntimeService {
 			content: { text, source: "tray-app", attachments: [] },
 			createdAt: Date.now(),
 		};
-		const slash = nativeSlashCommand(text);
-		if (slash) {
+		// asNativeSlash=false means the caller already rendered a
+		// skill-derived prompt — skip slash detection and run the
+		// text through the LLM as a regular chat input.
+		const slash = asNativeSlash ? nativeSlashCommand(text) : null;
+		if (slash && slash.kind === "prompt") {
+			// Substitute the rendered skill prompt for the user's
+			// `/skill foo bar` and fall through to the LLM pipeline
+			// below. message.content.text gets re-set to the prompt
+			// so the agent sees the expanded request.
+			text = slash.text;
+			(message.content as { text: string }).text = slash.text;
+		} else if (slash) {
 			let emitted = "";
 			if (slash.kind === "reply") {
 				onDelta(slash.text);
@@ -1008,6 +1062,7 @@ export class RuntimeService {
 			pensieveToolsPlugin,
 			codingToolsPlugin,
 			codexPetsPlugin,
+			codexSkillsPlugin,
 			discordMentionAliasPlugin,
 			discordContextPlugin,
 			dpeFallbackPlugin,
