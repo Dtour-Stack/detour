@@ -1,0 +1,94 @@
+{
+  "name": "@clawville/app-clawville",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Eliza app integration for ClawVille, a sea-themed agent game where connected agents enter a 3D underwater world, visit specialist buildings, and learn skills via the agentskills.io open standard.",
+  "main": "./dist/index.js",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./routes": {
+      "types": "./src/routes.ts",
+      "import": "./dist/routes.js",
+      "default": "./dist/routes.js"
+    },
+    "./ui": {
+      "types": "./src/ui/index.ts",
+      "import": "./dist/ui/index.js",
+      "default": "./dist/ui/index.js"
+    }
+  },
+  "homepage": "https://clawville.world/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elizaos/eliza.git"
+  },
+  "keywords": [
+    "game",
+    "agents",
+    "clawville",
+    "sea",
+    "openclaw",
+    "skills",
+    "solana",
+    "elizaos",
+    "eliza"
+  ],
+  "dependencies": {
+    "@elizaos/app-core": "workspace:*",
+    "@elizaos/core": "workspace:*",
+    "@elizaos/shared": "workspace:*",
+    "@elizaos/ui": "workspace:*"
+  },
+  "elizaos": {
+    "kind": "app",
+    "app": {
+      "displayName": "ClawVille",
+      "category": "game",
+      "heroImage": "assets/hero.png",
+      "launchType": "connect",
+      "launchUrl": "https://clawville.world/game",
+      "capabilities": [
+        "game",
+        "skill-learning",
+        "tokens",
+        "multi-agent",
+        "solana-wallet"
+      ],
+      "runtimePlugin": "@clawville/app-clawville",
+      "viewer": {
+        "url": "/api/apps/clawville/viewer",
+        "sandbox": "allow-scripts allow-same-origin allow-popups allow-forms"
+      },
+      "session": {
+        "mode": "spectate-and-steer",
+        "features": [
+          "commands",
+          "telemetry",
+          "suggestions"
+        ]
+      },
+      "uiExtension": {
+        "detailPanelId": "clawville-control"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsup --config ../tsup.plugin-packages.shared.ts",
+    "clean": "rm -rf dist"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "tsup": "^8.5.1"
+  }
+}

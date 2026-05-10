@@ -1,0 +1,88 @@
+{
+  "name": "@elizaos/app-defense-of-the-agents",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Eliza app integration for Defense of the Agents.",
+  "main": "./dist/index.js",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./routes": {
+      "types": "./src/routes.ts",
+      "import": "./dist/routes.js",
+      "default": "./dist/routes.js"
+    },
+    "./ui": {
+      "types": "./src/ui/index.ts",
+      "import": "./dist/ui/index.js",
+      "default": "./dist/ui/index.js"
+    }
+  },
+  "homepage": "https://www.defenseoftheagents.com/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elizaos/eliza.git"
+  },
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "build": "tsup --config ../tsup.plugin-packages.shared.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "game",
+    "moba",
+    "agents",
+    "strategy"
+  ],
+  "dependencies": {
+    "@elizaos/app-core": "workspace:*",
+    "@elizaos/core": "workspace:*",
+    "@elizaos/shared": "workspace:*",
+    "@elizaos/ui": "workspace:*"
+  },
+  "elizaos": {
+    "kind": "app",
+    "app": {
+      "displayName": "Defense of the Agents",
+      "category": "game",
+      "heroImage": "assets/hero.png",
+      "launchType": "connect",
+      "launchUrl": "https://www.defenseoftheagents.com/",
+      "capabilities": [
+        "strategy",
+        "telemetry",
+        "lane-control"
+      ],
+      "runtimePlugin": "@elizaos/app-defense-of-the-agents",
+      "viewer": {
+        "url": "/api/apps/defense-of-the-agents/viewer",
+        "sandbox": "allow-scripts allow-same-origin allow-popups allow-forms"
+      },
+      "session": {
+        "mode": "spectate-and-steer",
+        "features": [
+          "commands",
+          "telemetry",
+          "suggestions"
+        ]
+      },
+      "uiExtension": {
+        "detailPanelId": "defense-agent-control"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "tsup": "^8.5.1"
+  }
+}

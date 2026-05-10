@@ -1,0 +1,97 @@
+{
+  "name": "@elizaos/app-babylon",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Eliza app integration for Babylon prediction market game.",
+  "main": "./dist/index.js",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./routes": {
+      "types": "./src/routes.ts",
+      "import": "./dist/routes.js",
+      "default": "./dist/routes.js"
+    },
+    "./ui": {
+      "types": "./src/ui/index.ts",
+      "import": "./dist/ui/index.js",
+      "default": "./dist/ui/index.js"
+    },
+    "./ui/babylon-data": {
+      "types": "./src/ui/babylon-data.ts",
+      "import": "./dist/ui/babylon-data.js",
+      "default": "./dist/ui/babylon-data.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elizaos/eliza.git"
+  },
+  "keywords": [
+    "game",
+    "prediction-market",
+    "babylon",
+    "elizaos",
+    "eliza"
+  ],
+  "dependencies": {
+    "@elizaos/app-core": "workspace:*",
+    "@elizaos/core": "workspace:*",
+    "@elizaos/shared": "workspace:*",
+    "@elizaos/ui": "workspace:*"
+  },
+  "elizaos": {
+    "app": {
+      "displayName": "Babylon",
+      "category": "game",
+      "heroImage": "assets/hero.png",
+      "launchType": "url",
+      "launchUrl": "{BABYLON_CLIENT_URL}",
+      "capabilities": [
+        "trades",
+        "prediction-markets",
+        "social",
+        "team-chat",
+        "autonomous"
+      ],
+      "uiExtension": {
+        "detailPanelId": "babylon-operator-dashboard"
+      },
+      "viewer": {
+        "url": "{BABYLON_CLIENT_URL}",
+        "embedParams": {
+          "embedded": "true"
+        },
+        "postMessageAuth": true,
+        "sandbox": "allow-scripts allow-same-origin allow-popups allow-forms"
+      },
+      "session": {
+        "mode": "spectate-and-steer",
+        "features": [
+          "commands",
+          "telemetry",
+          "pause",
+          "resume"
+        ]
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsup --config ../tsup.plugin-packages.shared.ts",
+    "clean": "rm -rf dist"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "tsup": "^8.5.1"
+  }
+}
