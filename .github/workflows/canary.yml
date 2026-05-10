@@ -65,7 +65,26 @@ jobs:
         run: bun run build:eliza
 
       - name: Build canary app
-        run: bun run build:canary
+        # electrobun's build pipeline tries to fetch the previous version's
+        # update.json from release.baseUrl (configured in
+        # electrobun.config.ts) so it can generate an incremental patch.
+        # On a fresh canary URL with no prior release, the fetch returns
+        # non-JSON (e.g. an HTML 404 page) and electrobun's `.json()` call
+        # throws SyntaxError after the .app/.dmg are already built. We
+        # tolerate that failure as long as the .app exists — full bundle
+        # uploads work without patch generation.
+        run: |
+          set +e
+          bun run build:canary
+          BUILD_EXIT=$?
+          set -e
+          APP=$(find build -maxdepth 3 -name "*.app" -type d 2>/dev/null | head -1)
+          if [ -n "$APP" ]; then
+            echo "build:canary exit=$BUILD_EXIT, but .app produced at $APP — continuing"
+          else
+            echo "::error::build:canary exit=$BUILD_EXIT and no .app produced"
+            exit $BUILD_EXIT
+          fi
 
       - name: Ad-hoc sign + package artifacts
         run: |

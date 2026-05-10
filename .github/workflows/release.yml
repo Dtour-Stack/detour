@@ -104,7 +104,22 @@ jobs:
         run: bun run build:eliza
 
       - name: Build (env=${{ needs.classify.outputs.env }})
-        run: bun run build:${{ needs.classify.outputs.env }}
+        # See canary.yml comment — tolerate electrobun's patch-gen
+        # JSON parse failure when no prior release exists at
+        # release.baseUrl. The .app is built before patch-gen, so as
+        # long as it's on disk we proceed.
+        run: |
+          set +e
+          bun run build:${{ needs.classify.outputs.env }}
+          BUILD_EXIT=$?
+          set -e
+          APP=$(find build -maxdepth 3 -name "*.app" -type d 2>/dev/null | head -1)
+          if [ -n "$APP" ]; then
+            echo "build exit=$BUILD_EXIT, but .app produced at $APP — continuing"
+          else
+            echo "::error::build exit=$BUILD_EXIT and no .app produced"
+            exit $BUILD_EXIT
+          fi
 
       - name: "Optional code-sign + notarize (stable only, when secrets present)"
         if: needs.classify.outputs.channel == 'stable' && env.APPLE_CERT_BASE64 != ''

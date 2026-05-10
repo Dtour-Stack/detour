@@ -78,11 +78,15 @@ jobs:
         # scope — so `bun test src/` matches every test file whose path
         # contains "src/", including eliza/.../src/. Enumerate our own
         # test files explicitly to keep the run scoped to flatten code.
+        # Plain word-splitting (no `mapfile`) — bash 3.x on the macOS
+        # runner doesn't have it. Filenames in src/ don't contain
+        # spaces, so unquoted expansion is safe.
         run: |
-          mapfile -t TESTS < <(find src -name "*.test.ts" -not -path "*/node_modules/*")
-          if [ ${#TESTS[@]} -eq 0 ]; then echo "no tests found"; exit 1; fi
-          echo "running ${#TESTS[@]} test files"
-          bun test "${TESTS[@]}"
+          TESTS=$(find src -name "*.test.ts" -not -path "*/node_modules/*")
+          if [ -z "$TESTS" ]; then echo "no tests found"; exit 1; fi
+          echo "running:"; echo "$TESTS"
+          # shellcheck disable=SC2086
+          bun test $TESTS
 
   verify-assets:
     name: Verify icon + asset pipeline
