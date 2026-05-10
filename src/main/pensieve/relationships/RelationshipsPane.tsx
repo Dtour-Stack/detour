@@ -28,7 +28,9 @@ export function RelationshipsPane() {
 						>
 							<div className="pensieve-list-row-header">
 								<strong>{p.name ?? p.id.slice(0, 8)}</strong>
+								{p.importanceScore !== undefined && <span className="badge ok">rank {p.importanceScore}</span>}
 								<span className="hint">{p.relationshipCount} rel</span>
+								{p.messageCount !== undefined && <span className="hint">{p.messageCount} msg</span>}
 								{p.lastSeen && <span className="hint">{new Date(p.lastSeen).toLocaleDateString()}</span>}
 							</div>
 							{p.tags.length > 0 && (
@@ -77,6 +79,8 @@ function PersonDetail({ entityId }: { entityId: string }) {
 				<label>Stats</label>
 				<div className="hint">
 					{detail.entity.relationshipCount} relationship(s) · {detail.entity.memoryCount} memory(ies)
+					{detail.entity.importanceScore !== undefined && ` · rank ${detail.entity.importanceScore}`}
+					{detail.entity.messageCount !== undefined && ` · ${detail.entity.messageCount} message(s)`}
 				</div>
 				{detail.entity.tags.length > 0 && (
 					<div className="row" style={{ flexWrap: "wrap", gap: 4, marginTop: 6 }}>
