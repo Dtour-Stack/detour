@@ -47,6 +47,15 @@ export type ChatRequests = {
 		params: Record<string, never>;
 		response: { commands: ChatCommandInfo[] };
 	};
+	// Cancel an in-flight chat turn. The chatSend handler tracks the
+	// active turn per convId; chatCancel looks it up and triggers its
+	// cancel callback, which suppresses further delta broadcasts and
+	// fires chatComplete so the view stops the spinner. No-op if no
+	// turn is active for this convId.
+	chatCancel: {
+		params: { convId: string };
+		response: { ok: true };
+	};
 };
 
 export type ChatMessages = {

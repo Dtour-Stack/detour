@@ -354,6 +354,22 @@ export function ChatView({
 						}
 					}}
 				/>
+				{pending && (
+					<button
+						type="button"
+						className="chat-stop"
+						title="Stop generating"
+						aria-label="Stop generating"
+						onClick={() => {
+							void rpc.request.chatCancel({ convId: CONV_ID });
+						}}
+					>
+						<svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+							<rect x="0" y="0" width="11" height="11" rx="1.5" />
+						</svg>
+						<span>Stop</span>
+					</button>
+				)}
 			</div>
 		</div>
 	);

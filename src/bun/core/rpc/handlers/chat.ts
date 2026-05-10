@@ -42,6 +42,15 @@ const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
  * pattern (1.5s after last delta, since runtime.sendMessage doesn't
  * itself signal end-of-turn).
  */
+/**
+ * Active chat turn tracker, keyed by convId. Populated when chatSend
+ * starts a turn; consulted by chatCancel to abort it. Module-level
+ * because there's at most one active turn per convId per process and
+ * the cancel closure captures local refs to fireComplete / cancelled
+ * / idleTimer that are scoped to the chatSend invocation.
+ */
+const activeChatTurns = new Map<string, { traceId: string; cancel: () => void }>();
+
 export function chatRequests(deps: RpcDeps) {
 	return {
 		chatSend: async (params: { convId: string; text: string }): Promise<{ ok: true; traceId: string }> => {
@@ -56,28 +65,51 @@ export function chatRequests(deps: RpcDeps) {
 			const { convId, text } = params;
 			const traceId = newTraceId();
 			let completeFired = false;
+			let cancelled = false;
 			let idleTimer: ReturnType<typeof setTimeout> | null = null;
+			const clearActive = () => {
+				const active = activeChatTurns.get(convId);
+				if (active?.traceId === traceId) activeChatTurns.delete(convId);
+			};
 			const fireComplete = () => {
-				if (completeFired) return;
+				if (cancelled || completeFired) return;
 				completeFired = true;
 				if (idleTimer) clearTimeout(idleTimer);
+				clearActive();
+				deps.broadcaster.broadcast("chatComplete", { convId, traceId });
+			};
+			const cancel = () => {
+				if (cancelled || completeFired) return;
+				cancelled = true;
+				completeFired = true;
+				if (idleTimer) clearTimeout(idleTimer);
+				clearActive();
+				// Fire chatComplete so the view spins down. No chatError —
+				// cancellation is a deliberate user action, not a failure.
 				deps.broadcaster.broadcast("chatComplete", { convId, traceId });
 			};
 			const armIdle = () => {
 				if (idleTimer) clearTimeout(idleTimer);
 				idleTimer = setTimeout(fireComplete, 1500);
 			};
+			// Pre-cancel any in-flight turn for the same conv (e.g. user
+			// rapidly hitting send) so streams don't interleave.
+			activeChatTurns.get(convId)?.cancel();
+			activeChatTurns.set(convId, { traceId, cancel });
 			void (async () => {
 				try {
 					await traceScope(traceId, async () => {
 						try {
 							await deps.runtime.sendMessage(text, (delta) => {
+								if (cancelled) return;
 								deps.broadcaster.broadcast("chatDelta", { convId, delta, traceId });
 								armIdle();
 							});
 							fireComplete();
 						} catch (err) {
+							if (cancelled) return;
 							if (idleTimer) clearTimeout(idleTimer);
+							clearActive();
 							const message = err instanceof Error ? err.message : String(err);
 							deps.broadcaster.broadcast("chatError", { convId, message, traceId });
 						}
@@ -120,6 +152,10 @@ export function chatRequests(deps: RpcDeps) {
 					err instanceof Error ? err.message : err,
 				);
 			}
+			return { ok: true };
+		},
+		chatCancel: async (params: { convId: string }): Promise<{ ok: true }> => {
+			activeChatTurns.get(params.convId)?.cancel();
 			return { ok: true };
 		},
 		listChatCommands: async (_params: Record<string, never>): Promise<{ commands: ChatCommandInfo[] }> => {
