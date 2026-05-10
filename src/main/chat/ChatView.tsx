@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderId } from "../../shared/index";
 import { rpc } from "../rpc";
-import { onChatComplete, onChatDelta, onChatError } from "../rpc-listeners/chat";
+import { onChatCommandRun, onChatComplete, onChatDelta, onChatError } from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
 
 type Bubble = {
@@ -56,6 +56,11 @@ export function ChatView({
 	const [slashIndex, setSlashIndex] = useState(0);
 	const assistantId = useRef<string | null>(null);
 	const bottomRef = useRef<HTMLDivElement>(null);
+	// Holds the current `send` so listeners attached in a one-shot
+	// useEffect (chatCommandRun) can dispatch through the latest
+	// closure (with up-to-date activeProvider, etc.) without
+	// re-subscribing on every render.
+	const sendRef = useRef<(text: string) => void>(() => {});
 
 	const slashMatches = useMemo(() => {
 		if (!draft.startsWith("/")) return [];
@@ -116,11 +121,25 @@ export function ChatView({
 			setPending(false);
 		});
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
+		// Command-palette injection. The palette emits chatCommandRun
+		// via rpc.send.chatCommandRun; bun fans it out to all windows
+		// (so the chat view picks it up regardless of which window the
+		// palette opened in). `submit: false` parks the command in the
+		// composer for the user to fill in arguments; `submit: true`
+		// fires immediately.
+		const offCommand = onChatCommandRun((msg) => {
+			setDraft(msg.command.text);
+			if (msg.command.submit) {
+				const text = msg.command.text;
+				queueMicrotask(() => sendRef.current(text));
+			}
+		});
 		return () => {
 			offDelta();
 			offComplete();
 			offError();
 			offProvider();
+			offCommand();
 		};
 	}, []);
 
@@ -131,6 +150,12 @@ export function ChatView({
 	useEffect(() => {
 		setSlashIndex(0);
 	}, [slashMatches.length]);
+
+	// Keep the latest `send` available to subscribers attached once
+	// (chatCommandRun) so they dispatch through current state.
+	useEffect(() => {
+		sendRef.current = send;
+	});
 
 	function send(text: string) {
 		const trimmed = text.trim();

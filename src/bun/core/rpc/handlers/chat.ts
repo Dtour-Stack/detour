@@ -1,5 +1,27 @@
+import type { ChatCommandInfo } from "../../../../shared/index";
 import type { RpcDeps } from "../types";
 import { newTraceId, traceScope } from "../../trace";
+
+/**
+ * Native (bun-resident) chat commands the command palette renders.
+ * Skill-derived commands will be appended once the codex-skills loader
+ * is ported (origin/main 88230a81). Aliases let users discover the
+ * canonical name; insertion text is what the palette puts in the chat
+ * composer when picked.
+ */
+const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
+	{ name: "/browser", usage: "/browser <url or search>", description: "Open the agent browser.", insert: "/browser ", aliases: ["/open", "/web", "/internet"], source: "native" },
+	{ name: "/inspect", usage: "/inspect", description: "Read the active browser tab.", insert: "/inspect", aliases: ["/read-page"], source: "native" },
+	{ name: "/script", usage: "/script <javascript>", description: "Run JavaScript in the browser tab.", insert: "/script ", aliases: ["/js"], source: "native" },
+	{ name: "/logins", usage: "/logins [domain]", description: "List saved logins from vault backends.", insert: "/logins ", aliases: ["/passwords"], source: "native" },
+	{ name: "/login", usage: "/login <source> <identifier> [url]", description: "Fill a saved login in the browser.", insert: "/login 1password ", source: "native" },
+	{ name: "/1password", usage: "/1password <identifier> [url]", description: "Fill a 1Password login in the browser.", insert: "/1password ", aliases: ["/op"], source: "native" },
+	{ name: "/codex", usage: "/codex [cwd=/path] <task>", description: "Run a Codex coding subagent and wait for the result.", insert: "/codex ", aliases: ["/task"], source: "native" },
+	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude ", source: "native" },
+	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex ", source: "native" },
+	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude ", source: "native" },
+	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help", aliases: ["/commands"], source: "native" },
+];
 
 /**
  * Chat streaming RPC handler. Replaces the WS `chat:send` path.
@@ -98,6 +120,26 @@ export function chatRequests(deps: RpcDeps) {
 				);
 			}
 			return { ok: true };
+		},
+		listChatCommands: async (_params: Record<string, never>): Promise<{ commands: ChatCommandInfo[] }> => {
+			// Skill-derived commands are deduped after natives so a skill
+			// can't shadow a native by collision (matches origin's
+			// `byName.set` only-if-absent behavior).
+			return { commands: [...NATIVE_CHAT_COMMANDS] };
+		},
+	};
+}
+
+/**
+ * View → bun fire-and-forget messages for the chat group. Currently
+ * only carries the command-palette round-trip — palette posts
+ * chatCommandRun, bun fans it out to every window so the chat view
+ * (whichever window holds it) inserts the command into its composer.
+ */
+export function chatMessages(deps: RpcDeps) {
+	return {
+		chatCommandRun: (payload: { command: { text: string; submit: boolean } }) => {
+			deps.broadcaster.broadcast("chatCommandRun", payload);
 		},
 	};
 }

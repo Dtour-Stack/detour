@@ -4,8 +4,9 @@ import { ChatView } from "./ChatView";
 import { ChannelRail, type HubView } from "./ChannelRail";
 import { ChannelView } from "./ChannelView";
 import { SettingsView } from "../settings/SettingsView";
+import { CommandPalette } from "../command-palette/CommandPalette";
 import { rpc } from "../rpc";
-import { onUiOpenSettings } from "../rpc-listeners/chat";
+import { onUiOpenCommandPalette, onUiOpenSettings } from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
 
 const ACCENT_SWATCHES = [
@@ -47,6 +48,7 @@ export function App() {
 	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
 	const [activeView, setActiveView] = useState<HubView>("chat");
 	const [channels, setChannels] = useState<ChannelStatus[]>([]);
+	const [paletteOpen, setPaletteOpen] = useState(false);
 
 	// Channel rail data — refreshed on a 6s cadence so the icon tone
 	// (online/error/etc) tracks the live channel state.
@@ -79,6 +81,7 @@ export function App() {
 				/* keep defaults */
 			});
 		const offSettings = onUiOpenSettings(() => setDrawerOpen(true));
+		const offPalette = onUiOpenCommandPalette(() => setPaletteOpen((x) => !x));
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		// Active provider for the header chip.
 		void rpc.request.providersList({}).then((ps) => {
@@ -105,9 +108,23 @@ export function App() {
 		const llamaTimer = setInterval(refreshLlama, 4_000);
 		return () => {
 			offSettings();
+			offPalette();
 			offProvider();
 			clearInterval(llamaTimer);
 		};
+	}, []);
+
+	// Cmd/Ctrl+K toggles the command palette globally. Captured at the
+	// window level so it works regardless of which input has focus.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+				e.preventDefault();
+				setPaletteOpen((x) => !x);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
 	}, []);
 
 	// Pin window while drawer is open so click-out / focus loss doesn't dismiss.
@@ -325,6 +342,18 @@ export function App() {
 						</div>
 					</div>
 				)}
+				<CommandPalette
+					open={paletteOpen}
+					onClose={() => setPaletteOpen(false)}
+					onOpenSettings={() => setDrawerOpen(true)}
+					onChatCommand={(command) => {
+						// Round-trip through bun so the chat view picks
+						// up the command via its onChatCommandRun
+						// listener. Keeps behaviour identical regardless
+						// of which window opened the palette.
+						void rpc.send.chatCommandRun({ command });
+					}}
+				/>
 			</main>
 		</div>
 	);

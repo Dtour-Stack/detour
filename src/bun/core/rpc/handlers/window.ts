@@ -1,5 +1,6 @@
 import { runWindowCommand } from "../window-controller-registry";
 import type { RpcDeps } from "../types";
+import type { WindowOpenTarget } from "../../../../shared/index";
 
 /**
  * Window control for the chat popup. The chat feature registers a
@@ -11,8 +12,29 @@ import type { RpcDeps } from "../types";
  *   - POST /api/window/hide   → windowHide
  *   - POST /api/window/pin    → windowPin
  *   - POST /api/window/resize → windowResize
+ *
+ * windowOpen broadcasts a uiOpen* message keyed by target. Each
+ * window's view-side listener handles the message relevant to it
+ * (chat window toggles its drawer for settings/channels; pensieve
+ * window shows itself on uiOpenPensieve; etc.). Targets without a
+ * dedicated window in the current build (e.g. agents, pet) still
+ * broadcast — those features will pick the message up once they
+ * land.
  */
-export function windowRequests(_deps: RpcDeps) {
+
+const WINDOW_OPEN_MESSAGE: Record<WindowOpenTarget, keyof import("../../../../shared/rpc/chat").ChatMessages> = {
+	chat: "uiOpenChat",
+	"command-palette": "uiOpenCommandPalette",
+	settings: "uiOpenSettings",
+	pensieve: "uiOpenPensieve",
+	activity: "uiOpenActivity",
+	channels: "uiOpenChannels",
+	browser: "uiOpenBrowser",
+	agents: "uiOpenAgents",
+	pet: "uiOpenPet",
+};
+
+export function windowRequests(deps: RpcDeps) {
 	return {
 		windowHide: async (_params: Record<string, never>): Promise<{ ok: true }> => {
 			runWindowCommand({ kind: "hide" });
@@ -28,6 +50,13 @@ export function windowRequests(_deps: RpcDeps) {
 				width: Math.max(320, Math.min(2000, Number(params.width) || 0)),
 				height: Math.max(320, Math.min(2000, Number(params.height) || 0)),
 			});
+			return { ok: true };
+		},
+		windowOpen: async (params: { target: WindowOpenTarget }): Promise<{ ok: true }> => {
+			const messageName = WINDOW_OPEN_MESSAGE[params.target];
+			if (messageName) {
+				deps.broadcaster.broadcast(messageName, {});
+			}
 			return { ok: true };
 		},
 	};

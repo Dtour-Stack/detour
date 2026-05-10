@@ -12,6 +12,8 @@
  * the request promise stays open until the turn completes (or errors).
  */
 
+import type { ChatCommandInfo } from "../index";
+
 export type ChatFeedbackRating = 1 | -1;
 
 export type ChatRequests = {
@@ -38,11 +40,40 @@ export type ChatRequests = {
 		};
 		response: { ok: true };
 	};
+	// Returns the catalog the command palette renders (native chat
+	// commands + skill-derived ones once skills are surfaced). Pure
+	// read; no side effects.
+	listChatCommands: {
+		params: Record<string, never>;
+		response: { commands: ChatCommandInfo[] };
+	};
 };
 
 export type ChatMessages = {
 	chatDelta: { convId: string; delta: string; traceId?: string };
 	chatComplete: { convId: string; traceId?: string };
 	chatError: { convId: string; message: string; traceId?: string };
+	// UI navigation broadcasts. Emitted by the windowOpen RPC handler
+	// when the command palette (or anywhere else) requests opening a
+	// named target. Each window listens for the messages relevant to
+	// it — the chat window handles uiOpenSettings/uiOpenChannels by
+	// toggling its drawer/view, the pensieve window handles
+	// uiOpenPensieve by showing/focusing itself, etc.
+	uiOpenChat: Record<string, never>;
+	uiOpenCommandPalette: Record<string, never>;
 	uiOpenSettings: Record<string, never>;
+	uiOpenPensieve: Record<string, never>;
+	uiOpenActivity: Record<string, never>;
+	uiOpenChannels: Record<string, never>;
+	uiOpenBrowser: Record<string, never>;
+	uiOpenAgents: Record<string, never>;
+	uiOpenPet: Record<string, never>;
+	// Bun → chat view broadcast: insert this command into the chat
+	// composer (and optionally submit). Round-trip pattern — the
+	// palette emits chatCommandRun via rpc.send.chatCommandRun, the
+	// bun handler re-broadcasts to every window, and the chat view's
+	// listener inserts into its composer. This way it doesn't matter
+	// whether the palette was opened from the chat window or a sibling
+	// window: behaviour is identical.
+	chatCommandRun: { command: { text: string; submit: boolean } };
 };

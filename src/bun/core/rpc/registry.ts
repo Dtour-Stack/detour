@@ -16,7 +16,7 @@ import { activityRequests } from "./handlers/activity";
 import { authRequests } from "./handlers/auth";
 import { browserRequests } from "./handlers/browser";
 import { channelsRequests } from "./handlers/channels";
-import { chatRequests } from "./handlers/chat";
+import { chatRequests, chatMessages } from "./handlers/chat";
 import { configRequests } from "./handlers/config";
 import { cronRequests } from "./handlers/cron";
 import { debugRequests } from "./handlers/debug";
@@ -100,6 +100,7 @@ export function buildRpcHandlers(deps: RpcDeps) {
 		// ActivityLogService.
 		messages: {
 			...viewMessages(deps),
+			...chatMessages(deps),
 		},
 	};
 }
