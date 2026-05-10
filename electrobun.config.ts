@@ -102,11 +102,17 @@ export default {
 			bundleCEF: false,
 		},
 	},
-	release: {
-		// Required by electrobun.md rules ("release.baseUrl is required for
-		// auto-updates"). Points at the host where canary/stable artifacts
-		// (and update.json + .tar.zst + .patch) will be uploaded. Override
-		// with DETOUR_RELEASE_BASE_URL once the deployment target is known.
-		baseUrl: process.env.DETOUR_RELEASE_BASE_URL ?? "https://detour.ai/releases/",
-	},
+	// release.baseUrl is required for the auto-updater to fetch the
+	// previous version's update.json + tarball when generating an
+	// incremental patch. Set DETOUR_RELEASE_BASE_URL to enable;
+	// otherwise the field is omitted and electrobun skips patch
+	// generation entirely (the .app/.dmg bundle still builds — they
+	// just can't apply over an existing install).
+	//
+	// CI publishes full bundles to GitHub Releases without
+	// patches, so it leaves this unset. Local devs can opt in by
+	// exporting the env var.
+	...(process.env.DETOUR_RELEASE_BASE_URL
+		? { release: { baseUrl: process.env.DETOUR_RELEASE_BASE_URL } }
+		: {}),
 } satisfies ElectrobunConfig;

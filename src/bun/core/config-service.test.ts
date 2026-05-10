@@ -136,7 +136,7 @@ describe("ConfigService", () => {
 		await svc.bootstrap();
 		expect(getPermissionConfig().mode).toBe("off");
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
-		expect((await svc.getModels()).providerPriority).toEqual(["openai", "anthropic", "openrouter"]);
+		expect((await svc.getModels()).providerPriority).toEqual(["openai", "anthropic", "openrouter", "elizacloud"]);
 		setPermissionConfig({ mode: "read", deny: false, allowedPrefixes: [], deniedPrefixes: [] });
 	});
 
