@@ -42,6 +42,7 @@ import type { DebugRequests } from "./debug";
 import type { AgentProjectsRequests } from "./agent-projects";
 import type { GitHubChannelRequests } from "./github-channel";
 import type { TasksRequests, TasksMessages } from "./tasks";
+import type { PetsRequests, PetsMessages } from "./pets";
 
 export type DetourBunRequests =
 	& VaultRequests
@@ -66,7 +67,8 @@ export type DetourBunRequests =
 	& DebugRequests
 	& AgentProjectsRequests
 	& GitHubChannelRequests
-	& TasksRequests;
+	& TasksRequests
+	& PetsRequests;
 
 // All `messages` (both bun→view and view→bun) live in DetourBunMessages.
 // Electrobun's runtime dispatch is purely string-keyed, and the typing
@@ -83,7 +85,8 @@ export type DetourBunMessages =
 	& BrowserMessages
 	& ChatMessages
 	& LogWebviewMessages
-	& TasksMessages;
+	& TasksMessages
+	& PetsMessages;
 
 export type DetourRPC = {
 	bun: RPCSchema<{

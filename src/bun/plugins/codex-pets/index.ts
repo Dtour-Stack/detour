@@ -15,7 +15,7 @@ type JsonObject = { [key: string]: Json };
 type HandlerOptionsLike = Parameters<Handler>[3];
 type HandlerMessage = Parameters<Handler>[1];
 
-type PetSummary = {
+export type PetSummary = {
 	id: string;
 	displayName: string;
 	description: string;
@@ -24,7 +24,7 @@ type PetSummary = {
 	spritesheetPath: string;
 };
 
-type PetListResult = {
+export type PetListResult = {
 	pets: PetSummary[];
 	errors: string[];
 };
@@ -151,7 +151,7 @@ function readPet(dir: string): PetSummary {
 	};
 }
 
-function listPets(): PetListResult {
+export function listCodexPets(): PetListResult {
 	const petsRoot = join(codexHome(), "pets");
 	if (!existsSync(petsRoot)) return { pets: [], errors: [] };
 	const pets: PetSummary[] = [];
@@ -231,7 +231,7 @@ const petHandler: Handler = async (_runtime, message, _state, options, callback)
 	const query =
 		optionString(options, ["pet", "petId", "name", "id"]) ||
 		commandTail(messageText(message), "/pet");
-	const result = listPets();
+	const result = listCodexPets();
 	const selected = query ? result.pets.find((pet) => matchesPet(pet, query)) : undefined;
 	if (query && !selected) {
 		const text =
