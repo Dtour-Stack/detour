@@ -74,8 +74,15 @@ jobs:
         run: bun run build:eliza
 
       - name: Run unit tests
-        # `bun test` discovers *.test.ts under src/ automatically.
-        run: bun test src/
+        # `bun test <arg>` treats the arg as a name filter, not a path
+        # scope — so `bun test src/` matches every test file whose path
+        # contains "src/", including eliza/.../src/. Enumerate our own
+        # test files explicitly to keep the run scoped to flatten code.
+        run: |
+          mapfile -t TESTS < <(find src -name "*.test.ts" -not -path "*/node_modules/*")
+          if [ ${#TESTS[@]} -eq 0 ]; then echo "no tests found"; exit 1; fi
+          echo "running ${#TESTS[@]} test files"
+          bun test "${TESTS[@]}"
 
   verify-assets:
     name: Verify icon + asset pipeline
