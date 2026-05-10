@@ -40,7 +40,7 @@ jobs:
       - name: Compute canary version
         id: version
         run: |
-          BASE=$(node -p "require('./packages/tray/package.json').version")
+          BASE=$(node -p "require('./package.json').version")
           SHA=$(git rev-parse --short HEAD)
           VERSION="${BASE}-canary.${SHA}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
@@ -50,7 +50,7 @@ jobs:
         run: |
           node -e "
             const fs = require('node:fs');
-            const path = 'packages/tray/package.json';
+            const path = 'package.json';
             const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
             pkg.version = '${{ steps.version.outputs.version }}';
             fs.writeFileSync(path, JSON.stringify(pkg, null, '\t') + '\n');
@@ -65,11 +65,9 @@ jobs:
         run: bun run build:eliza
 
       - name: Build canary app
-        working-directory: packages/tray
         run: bun run build:canary
 
       - name: Ad-hoc sign + package artifacts
-        working-directory: packages/tray
         run: |
           BUILD_DIR="build/canary-macos-arm64"
           APP=$(find "$BUILD_DIR" -maxdepth 2 -name "*.app" -type d | head -1)
@@ -80,9 +78,9 @@ jobs:
           # makes the bundle internally consistent so de-quarantined installs
           # don't get translocation false-positives on macOS 14+.
           codesign --force --deep --sign - "$APP"
-          ditto -c -k --keepParent "$APP" "../../Detour-canary.zip"
+          ditto -c -k --keepParent "$APP" "Detour-canary.zip"
           DMG=$(find "$BUILD_DIR" -maxdepth 2 -name "*.dmg" -type f | head -1)
-          if [ -n "$DMG" ]; then cp "$DMG" "../../Detour-canary.dmg"; fi
+          if [ -n "$DMG" ]; then cp "$DMG" "Detour-canary.dmg"; fi
 
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v4

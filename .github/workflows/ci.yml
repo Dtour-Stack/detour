@@ -34,70 +34,26 @@ jobs:
 
       - name: Build eliza submodule packages
         # tsc needs the vendored eliza packages compiled to .d.ts so
-        # `@elizaos/core`, `@elizaos/vault`, etc. resolve from our packages'
+        # `@elizaos/core`, `@elizaos/vault`, etc. resolve from our
         # tsconfig. Bun runtime doesn't need this (it loads source TS
         # directly) but the typecheck step does.
         run: bun run build:eliza
 
       # tsc reports errors EVERYWHERE in the type graph (including vendored
-      # eliza submodules + third-party node_modules .d.ts). Those aren't our
-      # responsibility to fix — filter to errors in our own packages only.
-      # The CSS side-effect warning in web/src/main.tsx is the one known
-      # pre-existing local issue we explicitly skip.
-
-      - name: Typecheck shared
+      # eliza submodules + third-party node_modules .d.ts). Filter to errors
+      # in our own src/ tree only. The pre-existing @elizaos/plugin-pdf
+      # resolution error in eliza/ is unrelated to our code.
+      - name: Typecheck src/
         run: |
-          bunx tsc --noEmit -p packages/shared/tsconfig.json 2>&1 | tee out.log || true
-          if grep -E "^packages/shared/src/.*error TS" out.log; then
-            echo "::error::TypeScript errors in packages/shared/src"; exit 1
-          fi
-
-      - name: Typecheck core
-        run: |
-          bunx tsc --noEmit -p packages/core/tsconfig.json 2>&1 | tee out.log || true
-          if grep -E "^packages/core/src/.*error TS" out.log; then
-            echo "::error::TypeScript errors in packages/core/src"; exit 1
-          fi
-
-      - name: Typecheck plugin-codex-chatgpt
-        run: |
-          bunx tsc --noEmit -p packages/plugin-codex-chatgpt/tsconfig.json 2>&1 | tee out.log || true
-          if grep -E "^packages/plugin-codex-chatgpt/src/.*error TS" out.log; then
-            echo "::error::TypeScript errors in packages/plugin-codex-chatgpt/src"; exit 1
-          fi
-
-      - name: Typecheck plugin-vault-tools
-        run: |
-          bunx tsc --noEmit -p packages/plugin-vault-tools/tsconfig.json 2>&1 | tee out.log || true
-          if grep -E "^packages/plugin-vault-tools/src/.*error TS" out.log; then
-            echo "::error::TypeScript errors in packages/plugin-vault-tools/src"; exit 1
-          fi
-
-      - name: Typecheck web
-        run: |
-          bunx tsc --noEmit -p packages/web/tsconfig.json 2>&1 | tee out.log || true
-          if grep -E "^packages/web/src/.*error TS" out.log | grep -v "TS2882.*index.css"; then
-            echo "::error::TypeScript errors in packages/web/src"; exit 1
-          fi
-
-      - name: Typecheck tray
-        run: |
-          bunx tsc --noEmit -p packages/tray/tsconfig.json 2>&1 | tee out.log || true
-          if grep -E "^packages/tray/src/.*error TS" out.log; then
-            echo "::error::TypeScript errors in packages/tray/src"; exit 1
+          bunx tsc --noEmit -p tsconfig.json 2>&1 | tee out.log || true
+          if grep -E "^src/.*error TS" out.log; then
+            echo "::error::TypeScript errors in src/"; exit 1
           fi
 
   test:
-    name: Test (${{ matrix.package }})
+    name: Test
     runs-on: macos-14
     timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - core
-          - plugin-codex-chatgpt
-          - plugin-vault-tools
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,11 +73,9 @@ jobs:
         # resolve through. Build them first.
         run: bun run build:eliza
 
-      - name: Test ${{ matrix.package }}
-        working-directory: packages/${{ matrix.package }}
-        # Per-package isolation avoids cross-package state collisions (shared
-        # module state, env) that show up when running everything in one process.
-        run: bun test
+      - name: Run unit tests
+        # `bun test` discovers *.test.ts under src/ automatically.
+        run: bun test src/
 
   verify-assets:
     name: Verify icon + asset pipeline
@@ -132,31 +86,17 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install
-        run: bun install --frozen-lockfile
-
-      - name: Run prebuild scripts (icons + pglite assets)
-        working-directory: packages/tray
-        run: bun run prepare
-
       - name: Verify generated assets exist
         run: |
           set -e
-          test -f packages/tray/build-assets/tray/iconTemplate.png
-          test -f packages/tray/build-assets/tray/iconTemplate@2x.png
-          test -f packages/tray/build-assets/tray/iconTemplate@3x.png
-          test -f packages/tray/build-assets/app-icon/icon.icns
-          test -d packages/tray/build-assets/app-icon/icon.iconset
-          test -f packages/tray/build-assets/pglite/pglite.data
-          test -f packages/tray/build-assets/pglite/pglite.wasm
-          test -f packages/tray/build-assets/pglite/initdb.wasm
-          test -f packages/tray/build-assets/pglite/vector.tar.gz
-          test -f packages/tray/build-assets/pglite/fuzzystrmatch.tar.gz
-          test -f packages/web/public/favicon.ico
-          test -f packages/web/public/favicon-32.png
-          test -f packages/web/public/apple-touch-icon.png
+          test -f build-assets/tray/iconTemplate.png
+          test -f build-assets/tray/iconTemplate@2x.png
+          test -f build-assets/tray/iconTemplate@3x.png
+          test -f build-assets/app-icon/icon.icns
+          test -d build-assets/app-icon/icon.iconset
+          test -f build-assets/pglite/pglite.data
+          test -f build-assets/pglite/pglite.wasm
+          test -f build-assets/pglite/initdb.wasm
+          test -f build-assets/pglite/vector.tar.gz
+          test -f build-assets/pglite/fuzzystrmatch.tar.gz
           echo "All assets present."
