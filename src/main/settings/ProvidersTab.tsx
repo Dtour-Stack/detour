@@ -418,16 +418,22 @@ export function ProvidersTab() {
 								<input
 									type="password"
 									placeholder={
-										provider?.hasKey
-											? "•••••••• stored"
-											: vendor.id === "anthropic"
-												? "Paste API key (sk-ant-…) or OAuth code#state"
-												: "Paste API key"
+										drafts[vendor.id]
+											? ""
+											: provider?.hasKey
+												? "•••••••• stored (type to overwrite)"
+												: vendor.id === "anthropic"
+													? "Paste API key (sk-ant-…) or OAuth code#state"
+													: "Paste API key"
 									}
 									value={drafts[vendor.id] ?? ""}
 									onChange={(e) => setDrafts((d) => ({ ...d, [vendor.id]: e.target.value }))}
 								/>
-								{provider?.hasKey || (provider?.oauthAccountCount ?? 0) > 0 ? (
+								{drafts[vendor.id] ? (
+									<button type="button" className="btn small" onClick={() => saveKey(vendor.id)}>
+										Save
+									</button>
+								) : provider?.hasKey || (provider?.oauthAccountCount ?? 0) > 0 ? (
 									<button
 										type="button"
 										className="btn ghost small"

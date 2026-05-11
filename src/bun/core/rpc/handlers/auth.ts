@@ -329,6 +329,8 @@ export function authRequests(deps: RpcDeps) {
 					const data = (await exchange.json()) as { key?: string };
 					if (!data.key) throw new Error("OpenRouter response missing 'key'");
 					await deps.vault.setProviderKey("openrouter", data.key);
+					// Explicitly set OpenRouter as active after PKCE success
+					await deps.vault.setActiveProvider("openrouter");
 					console.log(`[auth] Imported OpenRouter API key via PKCE flow (sessionId=${sessionId})`);
 					// Broadcast SUCCESS before kicking off the rebuild — the UI
 					// only needs the key in the vault to flip "Configured", and
@@ -340,6 +342,11 @@ export function authRequests(deps: RpcDeps) {
 					deps.broadcaster.broadcast("authFlowUpdate", {
 						sessionId,
 						state: { ...initialState, status: "success", endedAt: Date.now() },
+					});
+					// Broadcast providerChanged immediately so the UI updates
+					// without waiting for the rebuild
+					deps.broadcaster.broadcast("providerChanged", {
+						activeProvider: "openrouter",
 					});
 					deps.runtime
 						.rebuild()

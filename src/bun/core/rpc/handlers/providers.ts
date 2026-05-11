@@ -91,6 +91,9 @@ export function providersRequests(deps: RpcDeps) {
 					.catch(() => {});
 			}
 			const runtimeProvider = deps.runtime.getCurrentProvider();
+			const vaultActiveProvider = await deps.vault.getActiveProvider();
+			// Use vault's active provider if runtime hasn't built yet, otherwise use runtime
+			const activeProvider = runtimeProvider ?? vaultActiveProvider;
 			const oauthCounts: Partial<Record<ProviderId, number>> = {};
 			for (const [providerId, oauthProvider] of Object.entries(OAUTH_PROVIDER_FOR)) {
 				try {
@@ -103,7 +106,7 @@ export function providersRequests(deps: RpcDeps) {
 			}
 			return list.map((p) => ({
 				...p,
-				active: runtimeProvider === p.id,
+				active: activeProvider === p.id,
 				oauthAccountCount: oauthCounts[p.id] ?? 0,
 			}));
 		},
