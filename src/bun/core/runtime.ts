@@ -600,6 +600,11 @@ export class RuntimeService {
 			} catch (err) {
 				const error = err instanceof Error ? err : new Error(String(err));
 				if (emitted) throw error;
+				// Don't failover on transient errors — a 429 or 503 just
+				// means the upstream is temporarily busy. Rebuilding with a
+				// different provider causes config churn and crash loops.
+				const msg = error.message;
+				if (/\b429\b/.test(msg) || /\brate.?limit/i.test(msg) || /\b503\b/.test(msg) || /\btimeout\b/i.test(msg)) throw error;
 				lastError = error;
 				failedAttemptIds.add(state.attemptId);
 				console.warn(`[runtime] provider attempt failed; trying fallback: ${state.attemptId}`, error.message);
@@ -901,6 +906,13 @@ export class RuntimeService {
 			} catch (err) {
 				if (provider || !MODEL_FAILOVER_TYPES.has(String(modelType))) throw err;
 				const error = err instanceof Error ? err : new Error(String(err));
+				// Don't failover on transient errors (429 rate-limit, 503
+				// temporarily unavailable, network timeouts). These mean
+				// "slow down / try again later", not "provider is broken".
+				// Silently switching providers on a 429 causes the user's
+				// chosen provider to reset and triggers rebuild loops.
+				const msg = error.message;
+				if (/\b429\b/.test(msg) || /\brate.?limit/i.test(msg) || /\b503\b/.test(msg) || /\btimeout\b/i.test(msg)) throw err;
 				runtime.logger.warn(
 					{
 						src: "runtime",

@@ -103,6 +103,12 @@ let warnedTruncatedInput = false;
 export const embeddingOpenAIPlugin: Plugin = {
 	name: "embedding-openai",
 	description: "OpenAI text-embedding-3-small (or configured) embeddings, separate from chat provider",
+	// Higher priority ensures this plugin's TEXT_EMBEDDING handler wins
+	// over the LLM provider's (e.g. OpenRouter's) TEXT_EMBEDDING handler.
+	// Without this, plugin registration order determines the winner, and
+	// the LLM plugin registers first — sending embedding requests to
+	// OpenRouter instead of the local llama-server.
+	priority: 10,
 	models: {
 		[ModelType.TEXT_EMBEDDING]: async (
 			runtime: IAgentRuntime,
