@@ -388,7 +388,6 @@ export type ModelConfig = {
 	elizaCloudNano: string;
 	elizaCloudMega: string;
 	elizaCloudResponseHandler: string;
-	providerPriority: ProviderId[];
 };
 
 export type WindowConfig = {

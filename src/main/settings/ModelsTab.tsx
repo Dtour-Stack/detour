@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse, ProviderId } from "../../shared/index";
+import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse } from "../../shared/index";
 import { rpc } from "../rpc";
 
 const CODEX_MODELS = [
@@ -15,13 +15,6 @@ const CODEX_MODELS = [
 	"gpt-5.1-codex-mini",
 	"codex-mini-latest",
 ];
-
-const PROVIDER_LABELS: Record<ProviderId, string> = {
-	openai: "OpenAI",
-	anthropic: "Anthropic",
-	openrouter: "OpenRouter",
-	elizacloud: "ElizaOS Cloud",
-};
 
 const selectStyle = {
 	width: "100%",
@@ -135,17 +128,6 @@ export function ModelsTab() {
 		}
 	}
 
-	function reorder(idx: number, dir: -1 | 1) {
-		if (!cfg) return;
-		const next = [...cfg.providerPriority];
-		const swap = next[idx + dir];
-		const cur = next[idx];
-		if (swap === undefined || cur === undefined) return;
-		next[idx + dir] = cur;
-		next[idx] = swap;
-		void save({ ...cfg, providerPriority: next });
-	}
-
 	if (cfgError) {
 		return (
 			<div>
@@ -173,7 +155,8 @@ export function ModelsTab() {
 		<div>
 			<h3 style={{ margin: "0 0 4px" }}>Models &amp; routing</h3>
 			<p className="hint">
-				Model overrides for each elizaOS model bucket + provider fallback order for chat.
+				Per-bucket model overrides for the active provider. The provider itself is picked in
+				Settings → Providers — it's used directly, no implicit fallback to another provider.
 			</p>
 
 			<div className="card">
@@ -268,32 +251,6 @@ export function ModelsTab() {
 						onChange={(value) => save({ ...cfg, openRouterImage: value })}
 					/>
 				</div>
-			</div>
-
-			<div className="card">
-				<label>Provider fallback order</label>
-				<div className="hint" style={{ marginTop: 4, marginBottom: 8 }}>
-					The active provider is tried first; this order is used after that.
-				</div>
-				{cfg.providerPriority.map((p, idx) => (
-					<div className="row" key={p} style={{ marginBottom: 4, padding: 6, background: idx === 0 ? "var(--accent-soft)" : "transparent", borderRadius: "var(--radius-sm)" }}>
-						<span style={{ flex: 1, fontSize: 12 }}>
-							<strong>{idx + 1}.</strong> {PROVIDER_LABELS[p] ?? p}
-						</span>
-						<button
-							type="button"
-							className="btn ghost small"
-							disabled={idx === 0 || saving}
-							onClick={() => reorder(idx, -1)}
-						>↑</button>
-						<button
-							type="button"
-							className="btn ghost small"
-							disabled={idx === cfg.providerPriority.length - 1 || saving}
-							onClick={() => reorder(idx, 1)}
-						>↓</button>
-					</div>
-				))}
 			</div>
 
 			{saving && <div className="hint">Saving…</div>}

@@ -86,7 +86,6 @@ describe("ConfigService", () => {
 		expect(m.codexSmall).toBe("gpt-5.2");
 		expect(m.codexImage).toBe("gpt-5.2");
 		expect(m.openRouterTextLarge).toBe("openrouter/free");
-		expect(m.providerPriority).toEqual(["openai", "anthropic", "openrouter", "elizacloud"]);
 	});
 
 	test("setModels applies env vars so plugin-codex picks them up", async () => {
@@ -106,7 +105,6 @@ describe("ConfigService", () => {
 			elizaCloudNano: "",
 			elizaCloudMega: "",
 			elizaCloudResponseHandler: "",
-			providerPriority: ["openai", "anthropic", "openrouter", "elizacloud"],
 		});
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
 		expect(process.env.CODEX_MODEL_SMALL).toBe("gpt-5.4-mini");
@@ -130,13 +128,11 @@ describe("ConfigService", () => {
 				codexLarge: "gpt-5.5",
 				codexSmall: "gpt-5.5",
 				codexImage: "gpt-5.5",
-				providerPriority: ["openai-codex"],
 			}),
 		}));
 		await svc.bootstrap();
 		expect(getPermissionConfig().mode).toBe("off");
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
-		expect((await svc.getModels()).providerPriority).toEqual(["openai", "anthropic", "openrouter", "elizacloud"]);
 		setPermissionConfig({ mode: "read", deny: false, allowedPrefixes: [], deniedPrefixes: [] });
 	});
 

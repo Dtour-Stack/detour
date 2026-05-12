@@ -273,7 +273,7 @@ export function ProvidersTab() {
 		<div>
 			<h3 style={{ margin: "0 0 4px" }}>Providers</h3>
 			<p className="hint">
-				Connect once via OAuth or paste an API key. The active provider is tried first for chat.
+				Connect once via OAuth or paste an API key. The active provider is what chat uses — there's no implicit fallback to another provider.
 			</p>
 			{error && <div className="banner error">{error}</div>}
 

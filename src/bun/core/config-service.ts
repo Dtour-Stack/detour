@@ -38,7 +38,6 @@ const DEFAULT_MODELS: ModelConfig = {
 	elizaCloudNano: "",
 	elizaCloudMega: "",
 	elizaCloudResponseHandler: "",
-	providerPriority: ["openai", "anthropic", "openrouter", "elizacloud"],
 };
 
 const DEFAULT_WINDOW: WindowConfig = {
@@ -162,14 +161,12 @@ export class ConfigService {
 			elizaCloudNano: modelString(raw, "elizaCloudNano"),
 			elizaCloudMega: modelString(raw, "elizaCloudMega"),
 			elizaCloudResponseHandler: modelString(raw, "elizaCloudResponseHandler"),
-			providerPriority: this.providerPriority(raw.providerPriority),
 		};
 	}
 
 	async setModels(next: ModelConfig): Promise<void> {
-		const sanitized = { ...next, providerPriority: this.providerPriority(next.providerPriority) };
-		await this.writeJson(KEY_MODELS, sanitized);
-		this.applyModels(sanitized);
+		await this.writeJson(KEY_MODELS, next);
+		this.applyModels(next);
 	}
 
 	private applyModels(cfg: ModelConfig): void {
@@ -200,12 +197,6 @@ export class ConfigService {
 		} else {
 			delete process.env[name];
 		}
-	}
-
-	private providerPriority(value: unknown): ModelConfig["providerPriority"] {
-		return Array.isArray(value) && value.length > 0
-			? this.cleanProviderPriority(value)
-			: DEFAULT_MODELS.providerPriority;
 	}
 
 	// ── Window ─────────────────────────────────────────────────────────
@@ -246,19 +237,6 @@ export class ConfigService {
 
 	private parseMode(value: unknown): AgentVaultMode {
 		return value === "off" || value === "read" || value === "read-write" ? value : "read";
-	}
-
-	private cleanProviderPriority(raw: unknown[]): ModelConfig["providerPriority"] {
-		const values = raw.flatMap((value) => {
-			if (value === "anthropic-subscription" || value === "anthropic-api" || value === "anthropic") return ["anthropic" as const];
-			if (value === "openai-codex" || value === "openai-api" || value === "openai") return ["openai" as const];
-			if (value === "openrouter-api" || value === "openrouter") return ["openrouter" as const];
-			return [];
-		});
-		const merged = [...values, ...DEFAULT_MODELS.providerPriority].filter((value, index, array) =>
-			array.indexOf(value) === index,
-		);
-		return merged.length > 0 ? merged : DEFAULT_MODELS.providerPriority;
 	}
 
 	private sanitizeChronicler(raw: Record<string, unknown>): ChroniclerConfig {

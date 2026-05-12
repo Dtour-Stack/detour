@@ -5,8 +5,6 @@ import {
 	type Character,
 	type Content,
 	createCharacter,
-	type ModelParamsMap,
-	type ModelResultMap,
 	type Memory,
 	type Plugin,
 	provisionAgent,
@@ -330,20 +328,7 @@ type ProviderAttempt = {
 
 type BuildAttemptOptions = {
 	channels: boolean;
-	modelFailover: boolean;
 };
-
-const DEFAULT_PROVIDER_PRIORITY: ProviderId[] = ["openai", "anthropic", "openrouter", "elizacloud"];
-const MODEL_FAILOVER_TYPES = new Set<string>([
-	"TEXT_NANO",
-	"TEXT_SMALL",
-	"TEXT_MEDIUM",
-	"TEXT_LARGE",
-	"TEXT_MEGA",
-	"RESPONSE_HANDLER",
-	"ACTION_PLANNER",
-	"TEXT_COMPLETION",
-]);
 
 type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
 
@@ -351,13 +336,9 @@ export class RuntimeService {
 	private current: RuntimeState | null = null;
 	/**
 	 * Serializes every path that calls `build()` / `activateState` so
-	 * overlapping `getOrBuild`, `rebuild`, and `rebuildSkipping` cannot
-	 * interleave (stale vault snapshot vs fresh `current`, or two builds
-	 * racing on `current`). Replaces the old `buildPromise` coalescer,
-	 * which still allowed `rebuildSkipping` to run in parallel with an
-	 * in-flight `getOrBuild` and could return a stale `current` after
-	 * `rebuild()` drained a promise whose `finally` had already nulled
-	 * `buildPromise` but left `current` set.
+	 * overlapping `getOrBuild` and `rebuild` cannot interleave (stale
+	 * vault snapshot vs fresh `current`, or two builds racing on
+	 * `current`). Replaces the old `buildPromise` coalescer.
 	 */
 	private buildSerializeTail: Promise<unknown> = Promise.resolve();
 
@@ -563,14 +544,6 @@ export class RuntimeService {
 		});
 	}
 
-	private async rebuildSkipping(blockedAttemptIds: ReadonlySet<string>): Promise<RuntimeState | null> {
-		return this.enqueueSerializedBuild(async () => {
-			await this.stopCurrentRuntime();
-			const state = await this.build(blockedAttemptIds);
-			return this.activateState(state);
-		});
-	}
-
 	private async stopCurrentRuntime(): Promise<void> {
 		if (!this.current) return;
 		try {
@@ -591,53 +564,33 @@ export class RuntimeService {
 		return this.current?.providerId ?? null;
 	}
 
+	/**
+	 * Deliver one chat turn through the chosen provider.
+	 *
+	 * Single-shot — no silent rebuild-and-retry-with-a-different-provider
+	 * loop. If `build()` already walked the active provider's credential
+	 * variants and none worked, the user sees one explicit error in chat
+	 * (e.g. "Active provider 'openai' failed: Codex OAuth expired | API
+	 * key …") instead of the runtime quietly swapping to a different
+	 * provider behind their back. Same for `deliverMessage` errors: they
+	 * propagate, the planner / DPE-fallback layer in core handles the
+	 * user-facing reply.
+	 */
 	async sendMessage(
 		text: string,
 		onDelta: (delta: string) => void,
 	): Promise<void> {
+		const state = await this.getOrBuild();
+		if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
 		const slashEarly = nativeSlashCommand(text);
-		if (slashEarly) {
-			const state = await this.getOrBuild();
-			if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
-			if (slashEarly.kind === "prompt") {
-				// Skill-rendered prompt: route through the regular chat
-				// pipeline (LLM + tools) by replacing the user's text
-				// and falling out of the slash branch.
-				await this.deliverMessage(state, slashEarly.text, onDelta, /* asNativeSlash */ false);
-				return;
-			}
-			await this.deliverMessage(state, text, onDelta);
+		if (slashEarly?.kind === "prompt") {
+			// Skill-rendered prompt: route through the regular chat
+			// pipeline (LLM + tools) by replacing the user's text
+			// and falling out of the slash branch.
+			await this.deliverMessage(state, slashEarly.text, onDelta, /* asNativeSlash */ false);
 			return;
 		}
-		const failedAttemptIds = new Set<string>();
-		let lastError: Error | null = null;
-		while (true) {
-			const state = failedAttemptIds.size === 0
-				? await this.getOrBuild()
-				: await this.rebuildSkipping(failedAttemptIds);
-			if (!state) {
-				throw lastError ?? new Error("No LLM provider configured. Add an API key in Settings.");
-			}
-			let emitted = false;
-			try {
-				await this.deliverMessage(state, text, (delta) => {
-					if (delta.length > 0) emitted = true;
-					onDelta(delta);
-				});
-				return;
-			} catch (err) {
-				const error = err instanceof Error ? err : new Error(String(err));
-				if (emitted) throw error;
-				// Don't failover on transient errors — a 429 or 503 just
-				// means the upstream is temporarily busy. Rebuilding with a
-				// different provider causes config churn and crash loops.
-				const msg = error.message;
-				if (/\b429\b/.test(msg) || /\brate.?limit/i.test(msg) || /\b503\b/.test(msg) || /\btimeout\b/i.test(msg)) throw error;
-				lastError = error;
-				failedAttemptIds.add(state.attemptId);
-				console.warn(`[runtime] provider attempt failed; trying fallback: ${state.attemptId}`, error.message);
-			}
-		}
+		await this.deliverMessage(state, text, onDelta);
 	}
 
 	private async deliverMessage(
@@ -769,10 +722,27 @@ export class RuntimeService {
 		}
 	}
 
-	private async build(blockedAttemptIds: ReadonlySet<string> = new Set()): Promise<RuntimeState | null> {
+	/**
+	 * Build a live runtime for the user's chosen provider.
+	 *
+	 * Walks the active provider's credential variants (e.g. Codex OAuth
+	 * then OPENAI_API_KEY for `openai`, or multiple OAuth accounts) and
+	 * returns the first one that initialises cleanly. Does NOT walk to a
+	 * different provider — that decision is the user's, not ours.
+	 *
+	 * - Returns `null` when no provider is selected (or the chosen one
+	 *   has zero usable credentials). Callers surface the
+	 *   "No LLM provider configured" message in the UI.
+	 * - Throws when the chosen provider has credentials but they all
+	 *   failed to initialise (expired OAuth, bad key, plugin throw).
+	 *   The error names the provider explicitly so the user knows
+	 *   exactly what to fix.
+	 */
+	private async build(): Promise<RuntimeState | null> {
 		await this.vault.loadKeysIntoEnv();
-		const attempts = (await this.providerAttempts()).filter((attempt) => !blockedAttemptIds.has(attempt.id));
+		const attempts = await this.providerAttempts();
 		if (attempts.length === 0) return null;
+		const activeProvider = attempts[0]!.providerId;
 		const errors: string[] = [];
 		for (const attempt of attempts) {
 			try {
@@ -781,12 +751,15 @@ export class RuntimeService {
 				errors.push(`${attempt.label}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
-		throw new Error(`All configured LLM providers failed: ${errors.join(" | ")}`);
+		throw new Error(
+			`Active provider '${activeProvider}' failed: ${errors.join(" | ")}. ` +
+			`Reconnect in Settings → Providers, or pick a different provider.`,
+		);
 	}
 
 	private async buildAttempt(
 		attempt: ProviderAttempt,
-		options: BuildAttemptOptions = { channels: true, modelFailover: true },
+		options: BuildAttemptOptions = { channels: true },
 	): Promise<RuntimeState> {
 		await attempt.prepare();
 		const llmPlugin = await PROVIDER_PLUGINS[attempt.runtimeProvider]();
@@ -806,7 +779,6 @@ export class RuntimeService {
 			await runtime.initialize();
 			installDiscordMentionAliasPatch(runtime);
 			installDpeFallbackPatch(runtime);
-			if (options.modelFailover) this.installModelFailover(runtime, attempt.id);
 			if (options.channels) {
 				await this.waitForOwnerBind(runtime);
 				await this.registerChannelPlugins(runtime, channelResolved.plugins);
@@ -918,77 +890,6 @@ export class RuntimeService {
 		} catch (err) {
 			console.warn("[runtime] orchestrator bridge wiring failed:", err instanceof Error ? err.message : err);
 		}
-	}
-
-	private installModelFailover(runtime: AgentRuntime, currentAttemptId: string): void {
-		const original = runtime.useModel.bind(runtime);
-		runtime.useModel = (async <
-			T extends keyof ModelParamsMap,
-			R = ModelResultMap[T],
-		>(
-			modelType: T,
-			params: ModelParamsMap[T],
-			provider?: string,
-		): Promise<R> => {
-			try {
-				return await original(modelType, params, provider);
-			} catch (err) {
-				if (provider || !MODEL_FAILOVER_TYPES.has(String(modelType))) throw err;
-				const error = err instanceof Error ? err : new Error(String(err));
-				// Don't failover on transient errors (429 rate-limit, 503
-				// temporarily unavailable, network timeouts). These mean
-				// "slow down / try again later", not "provider is broken".
-				// Silently switching providers on a 429 causes the user's
-				// chosen provider to reset and triggers rebuild loops.
-				const msg = error.message;
-				if (/\b429\b/.test(msg) || /\brate.?limit/i.test(msg) || /\b503\b/.test(msg) || /\btimeout\b/i.test(msg)) throw err;
-				runtime.logger.warn(
-					{
-						src: "runtime",
-						attemptId: currentAttemptId,
-						modelType: String(modelType),
-						error: error.message,
-					},
-					"Model provider failed; trying configured fallback",
-				);
-				return await this.useFallbackModel<T, R>(
-					new Set([currentAttemptId]),
-					modelType,
-					params,
-					error,
-				);
-			}
-		}) as AgentRuntime["useModel"];
-	}
-
-	private async useFallbackModel<
-		T extends keyof ModelParamsMap,
-		R = ModelResultMap[T],
-	>(
-		failedAttemptIds: Set<string>,
-		modelType: T,
-		params: ModelParamsMap[T],
-		firstError: Error,
-	): Promise<R> {
-		const errors = [firstError.message];
-		const attempts = await this.providerAttempts();
-		for (const attempt of attempts) {
-			if (failedAttemptIds.has(attempt.id)) continue;
-			let state: RuntimeState | null = null;
-			try {
-				state = await this.buildAttempt(attempt, {
-					channels: false,
-					modelFailover: false,
-				});
-				return await state.runtime.useModel<T, R>(modelType, params);
-			} catch (err) {
-				failedAttemptIds.add(attempt.id);
-				errors.push(`${attempt.label}: ${err instanceof Error ? err.message : String(err)}`);
-			} finally {
-				if (state) await state.runtime.stop().catch(() => {});
-			}
-		}
-		throw new Error(`All configured LLM providers failed: ${errors.join(" | ")}`);
 	}
 
 	private async buildCharacter(): Promise<Character> {
@@ -1281,13 +1182,19 @@ export class RuntimeService {
 		return attempts;
 	}
 
+	/**
+	 * The chosen provider, period. There is no fallback chain to other
+	 * providers — pick one, that's what runs. If the user hasn't picked
+	 * one, returns `[]` and `build()` throws "No LLM provider configured".
+	 *
+	 * Within a single provider we still walk multiple credentials (e.g.
+	 * Codex OAuth then OPENAI_API_KEY for `openai`, or several OAuth
+	 * accounts) — those are equivalent credentials for the same chosen
+	 * backend, not a different provider.
+	 */
 	private async providerOrder(): Promise<ProviderId[]> {
 		const activeProvider = await this.vault.getActiveProvider();
-		const priority = this.config ? (await this.config.getModels()).providerPriority : DEFAULT_PROVIDER_PRIORITY;
-		return [activeProvider, ...priority, ...DEFAULT_PROVIDER_PRIORITY].filter(
-			(provider, index, list): provider is ProviderId =>
-				provider !== null && list.indexOf(provider) === index,
-		);
+		return activeProvider ? [activeProvider] : [];
 	}
 
 	private async providerApiKey(provider: ProviderId, envKey: string): Promise<string | null> {
