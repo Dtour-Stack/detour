@@ -66,6 +66,25 @@ export interface PostOptions {
 	meta?: Record<string, unknown>;
 	/** True (default for messages/notifications) → fire INTERACTION_RECEIVED. */
 	prompt?: boolean;
+	/**
+	 * If true, before creating a new item, look for an existing item with
+	 * the same `source` whose effective status is still `pending` or
+	 * `acting`. If found:
+	 *   - `acting`: skip the post entirely — the previous fire is still
+	 *     in flight, no point stacking another.
+	 *   - `pending`: reuse it. Refresh `time` and `body`, flip status
+	 *     back to `acting`, and re-fire the agent prompt (this is the
+	 *     natural retry on the next tick of whatever scheduler called us).
+	 *   - terminal (`acted`/`acknowledged`/`dismissed`): fall through and
+	 *     create a brand-new item.
+	 *
+	 * Purpose: stops periodic posters (cron jobs in particular) from
+	 * stacking dozens of identical pending items when the agent can't
+	 * service them quickly (model 429, network blip, downstream failure).
+	 * Without dedup we observed a single 5-minute cron spawn 200+ pending
+	 * inbox rows that all said the same thing.
+	 */
+	dedupeBySource?: boolean;
 }
 
 export interface ListOptions {
@@ -289,6 +308,97 @@ export class InboxService {
 	}
 
 	async post(opts: PostOptions): Promise<InboxItem> {
+		// Source-based dedup. See PostOptions.dedupeBySource for full
+		// rationale; in short, this is what stops cron from spamming the
+		// inbox with identical pending items every tick when the agent is
+		// failing or slow. We serialize the lookup-and-mutate under the
+		// item lock so two concurrent posters can't both miss each other
+		// and create the duplicate we're trying to avoid.
+		if (opts.dedupeBySource && opts.source) {
+			const sourceKey = opts.source;
+			return this.itemLocks.run(sourceKey, async () => {
+				const existing = this.findLatestActiveBySource(sourceKey);
+				if (!existing) return this.createNewItem(opts);
+				const status = this.statusOverrides.get(existing.id) ?? existing.status;
+
+				// `acting` means the previous fire is still running. Don't
+				// disturb it — skip this post entirely. The in-flight call
+				// will eventually settle to `acted` or `pending` and a later
+				// tick can handle the next refresh.
+				if (status === "acting") {
+					logger.debug(
+						{ src: "inbox", id: existing.id, source: sourceKey },
+						"inbox dedup: existing item still acting — skipping new post",
+					);
+					return this.withRuntimeState(existing);
+				}
+
+				// `pending` means either (a) the previous attempt failed or
+				// (b) we never tried to prompt. Refresh body/title/time on
+				// the existing row, and if the caller wants a prompt fired,
+				// flip the row to `acting` and fire it — same shape as the
+				// new-item path but reusing the row.
+				if (status === "pending") {
+					const refreshed: InboxItem = {
+						...existing,
+						time: Date.now(),
+						title: opts.title,
+						body: opts.body,
+						prompted: false,
+					};
+					const idx = this.buffer.findIndex((i) => i.id === existing.id);
+					if (idx >= 0) this.buffer[idx] = refreshed;
+					// In-memory entry already replaced; only persist the
+					// updated row so it survives restart. NOT `append()` —
+					// that would double-list the item in the buffer.
+					this.persistLogEntry(refreshed);
+					logger.debug(
+						{ src: "inbox", id: refreshed.id, source: sourceKey },
+						"inbox dedup: refreshed pending item in place of duplicate post",
+					);
+					const shouldPrompt = opts.prompt ?? (refreshed.kind === "notification" || refreshed.kind === "task");
+					if (shouldPrompt) {
+						this.setStatus(refreshed.id, "acting");
+						const inheritedTrace = getTraceId() ?? newTraceId();
+						await traceScope(inheritedTrace, () =>
+							this.promptAgent(refreshed).catch((err) => {
+								logger.debug(
+									{ src: "inbox", err: err instanceof Error ? err.message : err },
+									"agent prompt failed on dedup-refresh",
+								);
+							}),
+						);
+					}
+					return this.withRuntimeState(refreshed);
+				}
+
+				// Terminal (`acted`/`acknowledged`/`dismissed`) — that work
+				// is done. A fresh tick from the same source is a fresh job
+				// and gets a fresh row.
+				return this.createNewItem(opts);
+			});
+		}
+
+		return this.createNewItem(opts);
+	}
+
+	/**
+	 * Find the most recently-posted item with this source whose effective
+	 * status is still active (pending or acting). Walks the buffer back-
+	 * to-front so we don't have to scan everything for the common case.
+	 */
+	private findLatestActiveBySource(source: string): InboxItem | null {
+		for (let i = this.buffer.length - 1; i >= 0; i -= 1) {
+			const candidate = this.buffer[i];
+			if (!candidate) continue;
+			if (candidate.source !== source) continue;
+			const effective = this.statusOverrides.get(candidate.id) ?? candidate.status;
+			if (effective === "pending" || effective === "acting") return candidate;
+		}
+		return null;
+	}
+
+	private async createNewItem(opts: PostOptions): Promise<InboxItem> {
 		const id = `inbox-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 		const item: InboxItem = {
 			id,
@@ -332,8 +442,19 @@ export class InboxService {
 	private append(item: InboxItem): void {
 		this.buffer.push(item);
 		if (this.buffer.length > RING_CAP) this.buffer.shift();
+		this.persistLogEntry(item);
+	}
+
+	/**
+	 * Append a JSONL entry to the on-disk log WITHOUT touching the in-
+	 * memory buffer. Used by the dedup-refresh path, which has already
+	 * mutated the existing buffer entry in place and only needs to make
+	 * the change durable for crash recovery (loadHistory replays the log
+	 * latest-wins per id).
+	 */
+	private persistLogEntry(entry: unknown): void {
 		try {
-			appendFileSync(this.logPath, `${JSON.stringify(item)}\n`, { mode: 0o600 });
+			appendFileSync(this.logPath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
 		} catch (err) {
 			logger.debug({ src: "inbox", err: err instanceof Error ? err.message : err }, "append failed");
 		}

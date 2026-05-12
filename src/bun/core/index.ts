@@ -175,6 +175,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 				body: job.prompt,
 				source: `cron:${job.id}`,
 				prompt: true,
+				// Dedup by source so a job that ticks every 5-10 minutes
+				// doesn't stack hundreds of identical pending inbox items
+				// when the agent is failing or slow. If the previous tick is
+				// still acting, the new fire is skipped; if it's pending
+				// (last attempt failed), it's refreshed and re-prompted.
+				dedupeBySource: true,
 			}),
 		);
 	});
