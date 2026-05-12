@@ -1,6 +1,5 @@
 import type { RpcDeps } from "../types";
 import type { PortlessSnapshot } from "../../portless";
-import { invokeFirstViewRequest } from "../view-invoker";
 
 /**
  * Phantom Portal env (matches Portal UI: **Allowed Origins** + **Redirect URLs**):
@@ -133,19 +132,5 @@ export function phantomRequests(deps: RpcDeps) {
 			const { portalAllowedOrigins, portalRedirectUrls } = buildPortalHints(redirectUrl, dev);
 			return { appId, redirectUrl, portalAllowedOrigins, portalRedirectUrls };
 		},
-
-		phantomGetWalletStatus: async () =>
-			invokeFirstViewRequest("phantomViewGetWalletStatus", {}),
-
-		phantomSolanaSignAndSend: async (params: { serializedTransactionBase64: string }) =>
-			invokeFirstViewRequest("phantomViewSolanaSignAndSend", params),
-
-		phantomEvmSendTransaction: async (params: {
-			to: `0x${string}`;
-			value?: string;
-			data?: `0x${string}`;
-			gas?: string;
-			chainId?: string;
-		}) => invokeFirstViewRequest("phantomViewEvmSendTransaction", params),
 	};
 }

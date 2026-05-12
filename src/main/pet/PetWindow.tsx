@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CodexPetActivity, CodexPetAnimationState, CodexPetSummary, WindowOpenTarget } from "../../shared/index";
 import { rpc } from "../rpc";
-import { onPetState } from "../rpc-listeners/pets";
 import { onUiOpenPet } from "../rpc-listeners/chat";
 
 type AnimationSpec = {
@@ -134,14 +133,10 @@ export function PetWindow() {
 		const offOpen = onUiOpenPet(() => {
 			void refreshActive();
 		});
-		const offState = onPetState((msg) => {
-			setManualState(msg.state);
-		});
 		return () => {
 			cancelled = true;
 			clearInterval(activityTimer);
 			offOpen();
-			offState();
 		};
 	}, []);
 

@@ -1,9 +1,7 @@
 /**
- * Dev-only diagnostic RPC, replacing the last two HTTP endpoints:
+ * Dev-only diagnostic RPC:
  *
  *   POST /api/debug/embedding → debugEmbedding (LocalAI tab probe)
- *   POST /api/debug/action    → debugAction (gated to dev .app builds;
- *                               override via DETOUR_ALLOW_DEBUG_API=1)
  */
 
 export type DebugEmbeddingResult = {
@@ -21,21 +19,9 @@ export type DebugEmbeddingResult = {
 	writeResult: { ok: boolean; memoryId?: string; error?: string } | null;
 };
 
-export type DebugActionResult = {
-	ok: true;
-	action: string;
-	durationMs: number;
-	emits: { text: string; action: string }[];
-	result: unknown;
-};
-
 export type DebugRequests = {
 	debugEmbedding: {
 		params: { text?: string; storeAs?: string };
 		response: DebugEmbeddingResult;
-	};
-	debugAction: {
-		params: { name: string; options?: Record<string, unknown> };
-		response: DebugActionResult;
 	};
 };

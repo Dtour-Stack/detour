@@ -24,7 +24,6 @@ import type {
 	PensieveMemoryTree,
 	PensievePersonDetail,
 	PensievePromptVariable,
-	PensieveRelationshipSummary,
 	PensieveTemplateDetail,
 	PensieveTemplateRenderResult,
 	PensieveTemplateSummary,
@@ -151,10 +150,6 @@ export type PensieveRequests = {
 		params: Record<string, never>;
 		response: ChroniclerStatus;
 	};
-	pensieveChroniclerGetConfig: {
-		params: Record<string, never>;
-		response: ChroniclerConfig;
-	};
 	pensieveChroniclerSetConfig: {
 		params: Partial<ChroniclerConfig>;
 		response: ChroniclerConfig;
@@ -180,35 +175,6 @@ export type PensieveRequests = {
 	pensievePersonTrackSet: {
 		params: { id: string; tracked: boolean };
 		response: PensievePersonDetail;
-	};
-	pensievePersonsMerge: {
-		params: { primaryId: string; secondaryIds: string[] };
-		response: PensievePersonDetail;
-	};
-	pensieveRelationshipsList: {
-		params: { entityIds?: string[]; tags?: string[]; limit?: number };
-		response: PensieveRelationshipSummary[];
-	};
-	pensieveRelationshipCreate: {
-		params: {
-			sourceEntityId: string;
-			targetEntityId: string;
-			tags?: string[];
-			metadata?: Record<string, unknown>;
-		};
-		response: void;
-	};
-	pensieveRelationshipUpdate: {
-		params: {
-			source: string;
-			target: string;
-			patch: { tags?: string[]; metadata?: Record<string, unknown> };
-		};
-		response: void;
-	};
-	pensieveRelationshipDelete: {
-		params: { source: string; target: string };
-		response: void;
 	};
 
 	// --- Graph -----------------------------------------------------------

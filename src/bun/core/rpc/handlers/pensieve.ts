@@ -31,7 +31,6 @@ import type {
 	PensieveMemoryTree,
 	PensievePersonDetail,
 	PensievePromptVariable,
-	PensieveRelationshipSummary,
 	PensieveTemplateDetail,
 	PensieveTemplateRenderResult,
 	PensieveTemplateSummary,
@@ -375,12 +374,6 @@ export function pensieveRequests(deps: RpcDeps) {
 			return pensieve.chronicler.status();
 		},
 
-		pensieveChroniclerGetConfig: async (
-			_params: Record<string, never>,
-		): Promise<ChroniclerConfig> => {
-			return pensieve.chronicler.getConfig();
-		},
-
 		pensieveChroniclerSetConfig: async (
 			params: Partial<ChroniclerConfig>,
 		): Promise<ChroniclerConfig> => {
@@ -454,110 +447,6 @@ export function pensieveRequests(deps: RpcDeps) {
 			const detail = await pensieve.relationships.setTracked(params.id as never, params.tracked);
 			if (!detail) throw new Error("track update failed");
 			return detail;
-		},
-
-		pensievePersonsMerge: async (params: {
-			primaryId: string;
-			secondaryIds: string[];
-		}): Promise<PensievePersonDetail> => {
-			const detail = await pensieve.relationships.mergeEntities(
-				params.primaryId as never,
-				params.secondaryIds as never[],
-			);
-			if (!detail) throw new Error("merge failed");
-			return detail;
-		},
-
-		pensieveRelationshipsList: async (params: {
-			entityIds?: string[];
-			tags?: string[];
-			limit?: number;
-		}): Promise<PensieveRelationshipSummary[]> => {
-			const ids = (params.entityIds ?? []) as never[];
-			const tags = params.tags ?? [];
-			const limit = params.limit ?? 200;
-			return pensieve.relationships.listRelationships(ids, tags, limit);
-		},
-
-		pensieveRelationshipCreate: async (params: {
-			sourceEntityId: string;
-			targetEntityId: string;
-			tags?: string[];
-			metadata?: Record<string, unknown>;
-		}): Promise<void> => {
-			let success = false;
-			let errMsg: string | undefined;
-			try {
-				success = await pensieve.relationships.create({
-					sourceEntityId: params.sourceEntityId as never,
-					targetEntityId: params.targetEntityId as never,
-					...(params.tags ? { tags: params.tags } : {}),
-					...(params.metadata ? { metadata: params.metadata } : {}),
-				});
-			} catch (err) {
-				errMsg = errMessage(err);
-			}
-			pensieveAudit({
-				action: "relationship.create",
-				target: `${params.sourceEntityId}↔${params.targetEntityId}`,
-				success,
-				...(errMsg ? { error: errMsg } : {}),
-				caller: "ui-pensieve",
-				ts: Date.now(),
-			});
-			if (!success) throw new Error(errMsg ?? "create failed");
-		},
-
-		pensieveRelationshipUpdate: async (params: {
-			source: string;
-			target: string;
-			patch: { tags?: string[]; metadata?: Record<string, unknown> };
-		}): Promise<void> => {
-			let success = false;
-			let errMsg: string | undefined;
-			try {
-				success = await pensieve.relationships.update(
-					params.source as never,
-					params.target as never,
-					params.patch,
-				);
-			} catch (err) {
-				errMsg = errMessage(err);
-			}
-			pensieveAudit({
-				action: "relationship.update",
-				target: `${params.source}↔${params.target}`,
-				success,
-				...(errMsg ? { error: errMsg } : {}),
-				caller: "ui-pensieve",
-				ts: Date.now(),
-			});
-			if (!success) throw new Error(errMsg ?? "update failed");
-		},
-
-		pensieveRelationshipDelete: async (params: {
-			source: string;
-			target: string;
-		}): Promise<void> => {
-			let success = false;
-			let errMsg: string | undefined;
-			try {
-				success = await pensieve.relationships.remove(
-					params.source as never,
-					params.target as never,
-				);
-			} catch (err) {
-				errMsg = errMessage(err);
-			}
-			pensieveAudit({
-				action: "relationship.delete",
-				target: `${params.source}↔${params.target}`,
-				success,
-				...(errMsg ? { error: errMsg } : {}),
-				caller: "ui-pensieve",
-				ts: Date.now(),
-			});
-			if (!success) throw new Error(errMsg ?? "delete failed");
 		},
 
 		// ── Graph ──────────────────────────────────────────────────────

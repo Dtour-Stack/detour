@@ -3,12 +3,17 @@ import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "../..
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
-const REGISTRIES: { key: keyof Pick<ActivityRuntimeSnapshot, "actions" | "providers" | "evaluators" | "services" | "plugins">; label: string }[] = [
+/**
+ * The Plugins tab is canonical for plugin contributions (see
+ * PluginsPane). Runtime pane only mirrors the live in-process
+ * registries (actions, providers, evaluators, services) so they stay
+ * non-overlapping.
+ */
+const REGISTRIES: { key: keyof Pick<ActivityRuntimeSnapshot, "actions" | "providers" | "evaluators" | "services">; label: string }[] = [
 	{ key: "actions", label: "Actions" },
 	{ key: "providers", label: "Providers" },
 	{ key: "evaluators", label: "Evaluators" },
 	{ key: "services", label: "Services" },
-	{ key: "plugins", label: "Plugins" },
 ];
 
 function ItemRow({ item }: { item: ActivityRuntimeRegistryItem }) {
@@ -43,8 +48,12 @@ export function RuntimePane() {
 				<div><strong>{data.agentName ?? "agent"}</strong> {data.agentId && <span className="hint">({data.agentId.slice(0, 8)})</span>}</div>
 				<div className="hint" style={{ marginTop: 4 }}>
 					{data.counts.actions} actions · {data.counts.providers} providers ·{" "}
-					{data.counts.evaluators} evaluators · {data.counts.services} services ·{" "}
-					{data.counts.plugins} plugins
+					{data.counts.evaluators} evaluators · {data.counts.services} services
+					{data.counts.plugins > 0 && (
+						<>
+							{" "}· <span style={{ opacity: 0.7 }}>{data.counts.plugins} plugins (see Plugins tab)</span>
+						</>
+					)}
 				</div>
 			</div>
 			{REGISTRIES.map(({ key, label }) => {

@@ -1,11 +1,10 @@
 import type { Memory, UUID } from "@elizaos/core";
-import type { DebugActionResult, DebugEmbeddingResult } from "../../../../shared/rpc/debug";
+import type { DebugEmbeddingResult } from "../../../../shared/rpc/debug";
 import type { RpcDeps } from "../types";
 
 /**
  * Dev-only diagnostic handlers. Replaces:
  *   POST /api/debug/embedding (LocalAI tab probe)
- *   POST /api/debug/action    (gated to Detour-dev.app)
  */
 
 type DebugEmbeddingRuntime = {
@@ -77,32 +76,5 @@ export function debugRequests(deps: RpcDeps) {
 			};
 		},
 
-		debugAction: async (
-			params: { name: string; options?: Record<string, unknown> },
-		): Promise<DebugActionResult> => {
-			const isDevBundle = typeof process.execPath === "string" && process.execPath.includes("Detour-dev.app/");
-			const allowOverride = process.env.DETOUR_ALLOW_DEBUG_API === "1";
-			if (!isDevBundle && !allowOverride) throw new Error("debug API disabled in this build");
-			if (!params.name) throw new Error("missing 'name'");
-			const state = await deps.runtime.getOrBuild();
-			if (!state) throw new Error("runtime not built — no LLM provider configured");
-			const live = deps.runtime.peek();
-			if (!live) throw new Error("runtime not live");
-			const liveActions = (live as unknown as { actions?: Array<{ name: string; handler: (...a: unknown[]) => unknown }> }).actions ?? [];
-			const action = liveActions.find((a) => a.name === params.name);
-			if (!action) throw new Error(`action '${params.name}' not registered on runtime`);
-			const emits: { text: string; action: string }[] = [];
-			const callback = async (p: { text: string; action: string }) => { emits.push({ text: p.text, action: p.action }); return []; };
-			const fakeMemory = {
-				id: "00000000-0000-0000-0000-000000000000",
-				entityId: "00000000-0000-0000-0000-000000000001",
-				roomId: "00000000-0000-0000-0000-000000000002",
-				content: { text: "" },
-			};
-			const fakeState = { values: {}, data: {}, text: "" };
-			const t0 = Date.now();
-			const result = await action.handler(live, fakeMemory, fakeState, params.options ?? {}, callback);
-			return { ok: true, action: params.name, durationMs: Date.now() - t0, emits, result };
-		},
 	};
 }

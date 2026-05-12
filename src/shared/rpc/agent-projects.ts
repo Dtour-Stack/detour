@@ -114,10 +114,6 @@ export type AgentProjectsRequests = {
 		params: { slug: string };
 		response: { files: AgentProjectGitFileStatus[]; branch: string | null };
 	};
-	agentProjectGitDiff: {
-		params: { slug: string; path: string; staged?: boolean };
-		response: { diff: string };
-	};
 	agentProjectGitCommit: {
 		params: { slug: string; message: string };
 		response: { sha: string };
@@ -146,8 +142,7 @@ export type AgentProjectsRequests = {
 	 * Start a real HTTP preview for a project. Static + carrot projects
 	 * boot an in-process Bun.serve over the project dir; the registry
 	 * registers it with portless so the URL is stable across restarts.
-	 * Nextjs throws — agent should run `bun dev` itself and then call
-	 * agentProjectRegisterPreviewPort with the bound port.
+	 * Nextjs is expected to run `bun dev` itself.
 	 */
 	agentProjectStartPreview: {
 		params: { slug: string };
@@ -156,25 +151,6 @@ export type AgentProjectsRequests = {
 	agentProjectStopPreview: {
 		params: { slug: string };
 		response: { ok: true };
-	};
-	agentProjectRegisterPreviewPort: {
-		params: { slug: string; port: number };
-		response: { ok: true; url: string; hostname: string };
-	};
-	agentProjectListPreviews: {
-		params: Record<string, never>;
-		response: {
-			previews: Array<{ slug: string; url: string; port: number; hostname: string; kind: string; startedAt: number }>;
-		};
-	};
-	/**
-	 * Create a new GitHub repo (under the agent's PAT identity) and push
-	 * the project's git history to it. Updates project.json with the
-	 * repo URL. Returns html_url + clone_url.
-	 */
-	agentProjectPublishGitHub: {
-		params: { slug: string; repoName?: string; isPrivate?: boolean; description?: string };
-		response: { ok: true; htmlUrl: string; cloneUrl: string; owner: string; name: string };
 	};
 };
 

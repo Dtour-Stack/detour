@@ -27,6 +27,7 @@
 import { readFileSync } from "node:fs";
 import type { Action, ActionResult, Handler, IAgentRuntime, Plugin, Provider, ProviderResult, State, Memory } from "@elizaos/core";
 import { getSkillsDir, loadSkillsFromDir, stripFrontmatter, type Skill } from "@elizaos/skills";
+import { listCodexSkills } from "../../core/codex-skills";
 
 /** Names of skills the detour agent should expose. Matches dir name
  * under `<skillsRoot>/skills/<name>/SKILL.md`. */
@@ -75,30 +76,42 @@ function trimDesc(s: string | undefined | null, max = 180): string {
 
 // ── AGENT_SKILL_CATALOG provider ───────────────────────────────────────
 
-function renderCatalog(skills: Map<string, Skill>): string {
-	if (skills.size === 0) return "";
+function renderCatalog(skills: Map<string, Skill>, codexSkillCount: number): string {
+	if (skills.size === 0 && codexSkillCount === 0) return "";
 	const lines: string[] = [];
 	lines.push("# Skills available");
 	lines.push("");
-	lines.push("Curated procedural references. Each is a step-by-step guide for a specific task. To read a skill in full before acting on it, call SKILL_LOAD with its name.");
+	lines.push("Curated procedural references. Each is a step-by-step guide for a specific task. To read a bundled skill in full before acting on it, call SKILL_LOAD with its name.");
 	lines.push("");
 	const ordered = Array.from(skills.values()).sort((a, b) => a.name.localeCompare(b.name));
 	for (const s of ordered) {
 		lines.push(`- **${s.name}** — ${trimDesc(s.description)}`);
+	}
+	if (codexSkillCount > 0) {
+		lines.push("");
+		lines.push(
+			`Additionally, ${codexSkillCount} Codex SKILL.md workflow(s) are installed locally (e.g. design, crypto, ops). Call CODEX_SKILLS_LIST to see them, then CODEX_SKILL_READ with a name to load one.`,
+		);
 	}
 	return lines.join("\n");
 }
 
 export const skillCatalogProvider: Provider = {
 	name: "AGENT_SKILL_CATALOG",
-	description: "List of curated procedural skills the agent can load on demand via SKILL_LOAD.",
+	description: "List of curated procedural skills the agent can load on demand via SKILL_LOAD or CODEX_SKILL_READ.",
 	descriptionCompressed: "skill catalog (load on demand).",
 	position: -45,
 	get: async (_runtime: IAgentRuntime, _m: Memory, _s: State): Promise<ProviderResult> => {
 		const skills = loadCatalog();
+		let codexSkillCount = 0;
+		try {
+			codexSkillCount = listCodexSkills().length;
+		} catch {
+			/* codex skill discovery failures shouldn't suppress the bundled catalog */
+		}
 		return {
-			text: renderCatalog(skills),
-			values: { skillCount: skills.size },
+			text: renderCatalog(skills, codexSkillCount),
+			values: { skillCount: skills.size, codexSkillCount },
 		};
 	},
 };

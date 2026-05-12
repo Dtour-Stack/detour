@@ -1,8 +1,6 @@
 import type { AuthFlowState } from "../../../../shared/index";
 import type { AuthAccountSummary } from "../../../../shared/rpc/auth";
 import {
-	ALL_PROVIDER_IDS,
-	PROVIDER_ENV,
 	type AccountCredentialProvider,
 	type SubscriptionProvider,
 } from "../../auth";
@@ -101,16 +99,6 @@ export function looksLikeAnthropicOAuthCode(input: string): boolean {
  */
 export function authRequests(deps: RpcDeps) {
 	return {
-		authListProviders: async (
-			_params: Record<string, never>,
-		): Promise<{ subscription: string[]; direct: string[]; all: string[] }> => {
-			return {
-				subscription: ["anthropic-subscription", "openai-codex"],
-				direct: Object.keys(PROVIDER_ENV),
-				all: [...ALL_PROVIDER_IDS],
-			};
-		},
-
 		authListAccounts: async (
 			_params: Record<string, never>,
 		): Promise<Record<string, AuthAccountSummary[]>> => {
@@ -175,12 +163,6 @@ export function authRequests(deps: RpcDeps) {
 				authUrl: handle.authUrl,
 				needsCodeSubmission: handle.needsCodeSubmission,
 			};
-		},
-
-		authGetFlow: async (params: { sessionId: string }): Promise<AuthFlowState> => {
-			const state = deps.auth.getFlowState(params.sessionId);
-			if (!state) throw new Error("flow not found");
-			return state as AuthFlowState;
 		},
 
 		authCancelFlow: async (params: { sessionId: string }): Promise<{ ok: true }> => {

@@ -27,10 +27,6 @@ export type AuthAccountSummary = {
 };
 
 export type AuthRequests = {
-	authListProviders: {
-		params: Record<string, never>;
-		response: { subscription: string[]; direct: string[]; all: string[] };
-	};
 	authListAccounts: {
 		params: Record<string, never>;
 		response: Record<string, AuthAccountSummary[]>;
@@ -50,10 +46,6 @@ export type AuthRequests = {
 			authUrl: string;
 			needsCodeSubmission: boolean;
 		};
-	};
-	authGetFlow: {
-		params: { sessionId: string };
-		response: AuthFlowState;
 	};
 	authCancelFlow: {
 		params: { sessionId: string };

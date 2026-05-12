@@ -9,34 +9,8 @@
 import { useCallback, useState } from "react";
 import type { ActivityTasksSnapshot } from "../../shared/index";
 import { rpc } from "../rpc";
+import { TaskRow } from "./task-row";
 import { usePoller } from "./usePoller";
-
-function fmtTime(ts?: number): string {
-	if (!ts) return "—";
-	const ms = ts < 1e12 ? ts * 1000 : ts;
-	return new Date(ms).toLocaleString();
-}
-
-function fmtRelative(ts?: number): string {
-	if (!ts) return "—";
-	const ms = ts < 1e12 ? ts * 1000 : ts;
-	const diff = ms - Date.now();
-	const abs = Math.abs(diff);
-	const sign = diff < 0 ? "-" : "+";
-	if (abs < 60_000) return `${sign}${Math.round(abs / 1000)}s`;
-	if (abs < 3_600_000) return `${sign}${Math.round(abs / 60_000)}m`;
-	if (abs < 86_400_000) return `${sign}${Math.round(abs / 3_600_000)}h`;
-	return `${sign}${Math.round(abs / 86_400_000)}d`;
-}
-
-function fmtInterval(ms?: number): string {
-	if (!ms) return "—";
-	if (ms < 1000) return "<1s";
-	if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-	if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-	if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
-	return `${Math.round(ms / 86_400_000)}d`;
-}
 
 export function TasksPane() {
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -120,84 +94,51 @@ export function TasksPane() {
 						<div className="empty">No tasks scheduled.</div>
 					) : (
 						<div className="pensieve-task-list">
-							{data.tasks.map((t) => {
-								const recurring = typeof t.updateInterval === "number";
-								const orphaned = !t.hasWorker;
-								return (
-									<div
-										key={t.id}
-										className={`pensieve-task-row ${t.paused ? "paused" : ""} ${orphaned ? "orphaned" : ""}`}
-									>
-										<div className="pensieve-task-row-header">
-											<span className="pensieve-task-name">{t.name}</span>
-											{recurring ? (
-												<span className="badge info">every {fmtInterval(t.updateInterval)}</span>
-											) : (
-												<span className="badge muted">one-shot</span>
-											)}
-											{t.paused && <span className="badge warn">paused</span>}
-											{orphaned && <span className="badge err">no worker</span>}
-											{t.failureCount > 0 && (
-												<span className="badge err">{t.failureCount} fails</span>
-											)}
-											<span style={{ flex: 1 }} />
-											<div className="pensieve-task-actions">
+							{data.tasks.map((t) => (
+								<TaskRow
+									key={t.id}
+									task={t}
+									actions={
+										<>
+											<button
+												type="button"
+												className="link"
+												disabled={busyId === t.id}
+												onClick={() => act(t.id, "run")}
+											>
+												run now
+											</button>
+											{t.paused ? (
 												<button
 													type="button"
 													className="link"
 													disabled={busyId === t.id}
-													onClick={() => act(t.id, "run")}
+													onClick={() => act(t.id, "resume")}
 												>
-													run now
+													resume
 												</button>
-												{t.paused ? (
-													<button
-														type="button"
-														className="link"
-														disabled={busyId === t.id}
-														onClick={() => act(t.id, "resume")}
-													>
-														resume
-													</button>
-												) : (
-													<button
-														type="button"
-														className="link"
-														disabled={busyId === t.id}
-														onClick={() => act(t.id, "pause")}
-													>
-														pause
-													</button>
-												)}
+											) : (
 												<button
 													type="button"
-													className="link danger"
+													className="link"
 													disabled={busyId === t.id}
-													onClick={() => act(t.id, "delete")}
+													onClick={() => act(t.id, "pause")}
 												>
-													delete
+													pause
 												</button>
-											</div>
-										</div>
-										{t.description && (
-											<div className="pensieve-task-description">{t.description}</div>
-										)}
-										<div className="pensieve-task-meta">
-											{t.tags.length > 0 && (
-												<span className="hint">tags: {t.tags.join(", ")}</span>
 											)}
-											<span className="hint">last: {fmtTime(t.lastExecuted)}</span>
-											{recurring && (
-												<span className="hint">next: {fmtTime(t.nextRunAt)} ({fmtRelative(t.nextRunAt)})</span>
-											)}
-										</div>
-										{t.lastError && (
-											<div className="banner error" style={{ marginTop: 6, fontSize: 11 }}>{t.lastError}</div>
-										)}
-										<div className="pensieve-trajectory-id">{t.id}</div>
-									</div>
-								);
-							})}
+											<button
+												type="button"
+												className="link danger"
+												disabled={busyId === t.id}
+												onClick={() => act(t.id, "delete")}
+											>
+												delete
+											</button>
+										</>
+									}
+								/>
+							))}
 						</div>
 					)}
 				</section>

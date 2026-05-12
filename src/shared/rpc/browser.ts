@@ -1,6 +1,5 @@
 import type {
 	BrowserCommand,
-	BrowserCommandInput,
 	BrowserCommandResult,
 } from "../index";
 
@@ -9,11 +8,6 @@ export type BrowserRequests = {
 	browserCommandsList: {
 		params: { after?: string; since?: number };
 		response: { commands: BrowserCommand[] };
-	};
-	// POST /api/browser/commands → { command: BrowserCommand }
-	browserCommandQueue: {
-		params: BrowserCommandInput;
-		response: { command: BrowserCommand };
 	};
 	// POST /api/browser/commands/<id>/result → { result: BrowserCommandResult }
 	browserCommandReport: {

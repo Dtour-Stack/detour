@@ -1,6 +1,5 @@
 import type {
 	BrowserCommand,
-	BrowserCommandInput,
 	BrowserCommandResult,
 } from "../../../../shared/index";
 import type { RpcDeps } from "../types";
@@ -24,8 +23,6 @@ import type { RpcDeps } from "../types";
 const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
 
 type BrowserControl = {
-	enqueue(command: BrowserCommandInput): BrowserCommand;
-	enqueueAndWait(command: BrowserCommandInput, timeoutMs?: number): Promise<BrowserCommandResult>;
 	list(opts: { after?: string; since?: number }): BrowserCommand[];
 	report(commandId: string, result: Omit<BrowserCommandResult, "time">): BrowserCommandResult;
 };
@@ -37,11 +34,10 @@ function getBrowserControl(): BrowserControl {
 	}
 	const control = value as Partial<BrowserControl>;
 	if (
-		typeof control.enqueue !== "function"
-		|| typeof control.list !== "function"
+		typeof control.list !== "function"
 		|| typeof control.report !== "function"
 	) {
-		throw new Error("BROWSER_CONTROL_GLOBAL is missing list/report/enqueue methods");
+		throw new Error("BROWSER_CONTROL_GLOBAL is missing list/report methods");
 	}
 	return control as BrowserControl;
 }
@@ -55,11 +51,6 @@ export function browserRequests(_deps: RpcDeps) {
 				...(typeof params.since === "number" ? { since: params.since } : {}),
 			});
 			return { commands };
-		},
-		browserCommandQueue: async (params: BrowserCommandInput): Promise<{ command: BrowserCommand }> => {
-			const control = getBrowserControl();
-			const command = control.enqueue(params);
-			return { command };
 		},
 		browserCommandReport: async (params: {
 			commandId: string;

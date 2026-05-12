@@ -18,7 +18,6 @@ import { browserRequests } from "./handlers/browser";
 import { channelsRequests } from "./handlers/channels";
 import { chatRequests, chatMessages } from "./handlers/chat";
 import { configRequests } from "./handlers/config";
-import { cronRequests } from "./handlers/cron";
 import { debugRequests } from "./handlers/debug";
 import { externalRequests } from "./handlers/external";
 import { gatewayRequests } from "./handlers/gateway";
@@ -29,7 +28,6 @@ import { ownerBindRequests } from "./handlers/owner-bind";
 import { pensieveRequests } from "./handlers/pensieve";
 import { portlessRequests } from "./handlers/portless";
 import { providersRequests } from "./handlers/providers";
-import { routingRequests } from "./handlers/routing";
 import { vaultRequests } from "./handlers/vault";
 import { viewMessages } from "./handlers/log";
 import { windowRequests } from "./handlers/window";
@@ -97,10 +95,8 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...windowRequests(deps),
 			...externalRequests(deps),
 			...osRequests(deps),
-			...routingRequests(deps),
 			...channelsRequests(deps),
 			...portlessRequests(deps),
-			...cronRequests(deps),
 			...ownerBindRequests(deps),
 			...inboxRequests(deps),
 			...gatewayRequests(deps),

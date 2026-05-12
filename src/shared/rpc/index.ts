@@ -29,10 +29,8 @@ import type { LlamaRequests } from "./llama";
 import type { WindowRequests } from "./window";
 import type { ExternalRequests } from "./external";
 import type { OsRequests } from "./os";
-import type { RoutingRequests } from "./routing";
 import type { ChannelsRequests } from "./channels";
 import type { PortlessRequests } from "./portless";
-import type { CronRequests } from "./cron";
 import type { OwnerBindRequests } from "./owner-bind";
 import type { InboxRequests } from "./inbox";
 import type { GatewayRequests } from "./gateway";
@@ -57,10 +55,8 @@ export type DetourBunRequests =
 	& WindowRequests
 	& ExternalRequests
 	& OsRequests
-	& RoutingRequests
 	& ChannelsRequests
 	& PortlessRequests
-	& CronRequests
 	& OwnerBindRequests
 	& InboxRequests
 	& GatewayRequests

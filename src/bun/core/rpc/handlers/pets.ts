@@ -29,18 +29,6 @@ const PET_ATLAS = {
 	height: 1872,
 } as const;
 
-const PET_STATES = new Set<CodexPetAnimationState>([
-	"idle",
-	"running-right",
-	"running-left",
-	"waving",
-	"jumping",
-	"failed",
-	"waiting",
-	"running",
-	"review",
-]);
-
 const STATE_OVERRIDE_TTL_MS = 9_000;
 
 type PetStateOverride = { state: CodexPetAnimationState; expiresAt: number };
@@ -97,9 +85,6 @@ function currentPetState(): CodexPetAnimationState {
 
 export function petsRequests(deps: RpcDeps) {
 	return {
-		petList: async (_params: Record<string, never>): Promise<CodexPetsResponse> => {
-			return petsResponse();
-		},
 		petActive: async (
 			_params: Record<string, never>,
 		): Promise<{ pet: CodexPetSummary | null; state: CodexPetAnimationState }> => {
@@ -132,23 +117,6 @@ export function petsRequests(deps: RpcDeps) {
 				},
 				updatedAt: Date.now(),
 			};
-		},
-		petSetState: async (params: {
-			state: CodexPetAnimationState;
-			reason?: string;
-		}): Promise<{ state: CodexPetAnimationState }> => {
-			if (!PET_STATES.has(params.state)) {
-				throw new Error("invalid pet animation state");
-			}
-			activePetStateOverride = {
-				state: params.state,
-				expiresAt: Date.now() + STATE_OVERRIDE_TTL_MS,
-			};
-			deps.broadcaster.broadcast("petState", {
-				state: params.state,
-				...(params.reason ? { reason: params.reason } : {}),
-			});
-			return { state: currentPetState() };
 		},
 	};
 }

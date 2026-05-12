@@ -6,7 +6,14 @@
  * into the first live webview's `phantomView*` handlers → Phantom hooks.
  */
 
-/** Bun-side: config + signing entrypoints (agent / tools call these). */
+/**
+ * Bun-side: Portal config the wallet view needs at boot.
+ *
+ * Signing entrypoints are NOT exposed as bun requests — agents call them
+ * via `invokeFirstViewRequest("phantomView…", …)` (see
+ * src/bun/plugins/phantom-wallet-tools), which talks directly to the
+ * first live webview's `phantomView*` handlers.
+ */
 export type PhantomBunRequests = {
 	phantomGetPortalConfig: {
 		params: Record<string, never>;
@@ -18,28 +25,6 @@ export type PhantomBunRequests = {
 			/** Paste into Phantom Portal → Redirect URLs (exact callback URLs). */
 			portalRedirectUrls: string[];
 		};
-	};
-	phantomGetWalletStatus: {
-		params: Record<string, never>;
-		response: {
-			connected: boolean;
-			solanaAddress: string | null;
-			ethereumAddress: string | null;
-		};
-	};
-	phantomSolanaSignAndSend: {
-		params: { serializedTransactionBase64: string };
-		response: { signature: string };
-	};
-	phantomEvmSendTransaction: {
-		params: {
-			to: `0x${string}`;
-			value?: string;
-			data?: `0x${string}`;
-			gas?: string;
-			chainId?: string;
-		};
-		response: { hash: string };
 	};
 };
 

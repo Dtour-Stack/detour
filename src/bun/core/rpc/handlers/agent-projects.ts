@@ -16,7 +16,7 @@ import type {
 	WorkspaceIDEAvailability,
 	WorkspaceIDEId,
 } from "../../../../shared/rpc/agent-projects";
-import { createAgentProject, importAgentProject, publishProjectToGitHub } from "../../agent-projects-core";
+import { createAgentProject, importAgentProject } from "../../agent-projects-core";
 import type { RpcDeps } from "../types";
 
 /**
@@ -313,17 +313,6 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 			return { files: parseStatus(status.stdout), branch };
 		},
 
-		agentProjectGitDiff: async (
-			{ slug, path, staged = false }: { slug: string; path: string; staged?: boolean },
-		): Promise<{ diff: string }> => {
-			const args = staged
-				? ["diff", "--cached", "--no-color", "--", path]
-				: ["diff", "--no-color", "--", path];
-			const r = await spawnGit(projectDir(slug), args);
-			if (r.exitCode !== 0 && r.stderr) throw new Error(r.stderr.trim());
-			return { diff: r.stdout };
-		},
-
 		agentProjectGitCommit: async ({ slug, message }: { slug: string; message: string }): Promise<{ sha: string }> => {
 			const dir = projectDir(slug);
 			const trimmed = message.trim();
@@ -391,42 +380,6 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 		agentProjectStopPreview: async ({ slug }: { slug: string }) => {
 			await _deps.previewServers.stop(slug);
 			return { ok: true as const };
-		},
-
-		agentProjectRegisterPreviewPort: async ({ slug, port }: { slug: string; port: number }) => {
-			const state = _deps.previewServers.registerExternalPort(slug, port);
-			return { ok: true as const, url: state.url, hostname: state.hostname };
-		},
-
-		agentProjectListPreviews: async (_p: Record<string, never>) => {
-			return {
-				previews: _deps.previewServers.list().map((s) => ({
-					slug: s.slug,
-					url: s.url,
-					port: s.port,
-					hostname: s.hostname,
-					kind: s.kind,
-					startedAt: s.startedAt,
-				})),
-			};
-		},
-
-		// ── GitHub publish (uses GITHUB_AGENT_PAT) ─────────────────────
-
-		agentProjectPublishGitHub: async (
-			{ slug, repoName, isPrivate, description }: { slug: string; repoName?: string; isPrivate?: boolean; description?: string },
-		) => {
-			const meta = readMeta(slug);
-			if (!meta) throw new Error(`project not found: ${slug}`);
-			const v = await _deps.vault.vault();
-			const pat =
-				(await v.has("GITHUB_AGENT_PAT") ? await v.get("GITHUB_AGENT_PAT") : "")
-				|| (await v.has("GITHUB_TOKEN") ? await v.get("GITHUB_TOKEN") : "");
-			if (!pat) {
-				throw new Error("No GITHUB_AGENT_PAT (or GITHUB_TOKEN) configured. Wire it in Settings → Channels → GitHub → Agent identity.");
-			}
-			const result = await publishProjectToGitHub({ slug, meta, repoName, isPrivate, description, pat });
-			return { ok: true as const, ...result };
 		},
 
 		// Settings UI calls this to open the Workspace window. The kernel
