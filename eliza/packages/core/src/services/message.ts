@@ -11,7 +11,10 @@ import {
 	getTaskCompletionCacheKey,
 	type TaskCompletionAssessment,
 } from "../features/advanced-capabilities/evaluators/task-completion";
-import { looksLikeNonActionableChatter } from "../features/basic-capabilities/providers/non-actionable-chatter";
+import {
+	looksLikeLightweightSocialTurn,
+	looksLikeNonActionableChatter,
+} from "../features/basic-capabilities/providers/non-actionable-chatter";
 import { logger } from "../logger";
 import {
 	imageDescriptionTemplate,
@@ -26,6 +29,10 @@ import {
 	getModelStreamChunkDeliveryDepth,
 	runWithStreamingContext,
 } from "../streaming-context";
+import {
+	getPlannerReplyContext,
+	PLANNER_REPLY_CONTEXT_SNAPSHOT_STATE_KEY,
+} from "../planner-reply-context";
 import {
 	runWithTrajectoryContext,
 	setTrajectoryPurpose,
@@ -643,6 +650,12 @@ const CORE_RESPONSE_STATE_PROVIDERS = [
 	"PROVIDERS",
 ];
 
+const LIGHTWEIGHT_SOCIAL_STATE_PROVIDERS = [
+	"ENTITIES",
+	"CHARACTER",
+	"RECENT_MESSAGES",
+];
+
 const STRUCTURED_RESPONSE_STATE_PROVIDERS = ["ACTIONS", "PROVIDERS"];
 const FOCUSED_PROVIDER_REPLY_STATE_PROVIDERS = ["CHARACTER", "RECENT_MESSAGES"];
 
@@ -663,6 +676,19 @@ function composeResponseState(
 		? [...CORE_RESPONSE_STATE_PROVIDERS, "CONTEXT_BENCH"]
 		: CORE_RESPONSE_STATE_PROVIDERS;
 	return runtime.composeState(message, providers, true, skipCache);
+}
+
+function composeLightweightSocialState(
+	runtime: IAgentRuntime,
+	message: Memory,
+	skipCache = false,
+): Promise<State> {
+	return runtime.composeState(
+		message,
+		LIGHTWEIGHT_SOCIAL_STATE_PROVIDERS,
+		true,
+		skipCache,
+	);
 }
 
 function composeStructuredResponseState(
@@ -706,6 +732,26 @@ function composeFocusedProviderReplyState(
 	);
 }
 
+/**
+ * Copy current planner-reply ALS context into `state.values` so
+ * `dynamicPromptExecFromState` (and Detour's DPE patch) can still see
+ * source/addressed after internal awaits or non-ALS environments.
+ */
+function attachPlannerReplyContextSnapshot(state: State): State {
+	const snap = getPlannerReplyContext();
+	if (!snap) return state;
+	return {
+		...state,
+		values: {
+			...(state.values ?? {}),
+			[PLANNER_REPLY_CONTEXT_SNAPSHOT_STATE_KEY]: {
+				source: snap.source,
+				addressed: snap.addressed,
+			},
+		},
+	};
+}
+
 function ensureActionStateValues(
 	runtime: IAgentRuntime,
 	message: Memory,
@@ -723,7 +769,7 @@ function ensureActionStateValues(
 			: null;
 
 	if (currentActionNames && currentDescriptions) {
-		return state;
+		return attachPlannerReplyContextSnapshot(state);
 	}
 
 	const actionProviderEntry =
@@ -781,17 +827,17 @@ function ensureActionStateValues(
 	}
 
 	if (!actionNames && !actionsWithDescriptions) {
-		return state;
+		return attachPlannerReplyContextSnapshot(state);
 	}
 
-	return {
+	return attachPlannerReplyContextSnapshot({
 		...state,
 		values: {
 			...(state.values ?? {}),
 			...(actionNames ? { actionNames } : {}),
 			...(actionsWithDescriptions ? { actionsWithDescriptions } : {}),
 		},
-	};
+	});
 }
 
 /**
@@ -880,6 +926,15 @@ function resolvePromptAttachments(
 	});
 
 	return resolved.length > 0 ? resolved : undefined;
+}
+
+/** Default retries for ACTION_PLANNER in single-shot response; override with `ACTION_PLANNER_MAX_RETRIES` (1–6). */
+function resolveDefaultActionPlannerMaxRetries(runtime: IAgentRuntime): number {
+	const raw = runtime.getSetting("ACTION_PLANNER_MAX_RETRIES");
+	if (raw === undefined || raw === null || raw === "") return 3;
+	const n = Number.parseInt(String(raw), 10);
+	if (!Number.isFinite(n)) return 3;
+	return Math.max(1, Math.min(n, 6));
 }
 
 /**
@@ -985,6 +1040,35 @@ interface StrategyResult {
 	mode: StrategyMode;
 }
 
+const LIGHTWEIGHT_SOCIAL_REPLY_TEMPLATE = `task: Write the next short conversational reply for {{agentName}}.
+
+context:
+{{providers}}
+
+rules[6]:
+- answer only the user's latest lightweight social message
+- preserve relationship and channel context in the tone when recent conversation makes that appropriate
+- do not offer to inspect, search, schedule, send, remember, or change anything
+- do not mention tools, actions, providers, memory, or internal context
+- keep greetings, thanks, acknowledgements, and laughter to one short natural sentence
+- return only the reply text`;
+
+const CONVERSATION_ONLY_REPLY_TEMPLATE = `task: Write the next conversational reply for {{agentName}}.
+
+context:
+{{providers}}
+
+rules[7]:
+- answer only the user's latest conversational, reflective, or advice-seeking message
+- preserve relationship and channel context when recent conversation makes that appropriate
+- do not inspect, search, schedule, send, remember, route, or change external state
+- do not mention tools, actions, providers, memory, or internal context
+- give advice only from the conversation context and the character's voice
+- keep the reply concise, usually one to three sentences
+- return only the reply text`;
+
+type ConversationOnlyReplyKind = "lightweight-social" | "non-actionable-chat";
+
 /**
  * True when a plugin registered at least one core text delegate (chat / planning).
  * Embeddings-only (local-ai) and TTS do not count — without a matching delegate,
@@ -1004,6 +1088,32 @@ export function hasTextGenerationHandler(runtime: IAgentRuntime): boolean {
 		if (runtime.getModel(String(k))) return true;
 	}
 	return false;
+}
+
+function selectLightweightSocialModel(
+	runtime: IAgentRuntime,
+): TextGenerationModelType | null {
+	const candidates: TextGenerationModelType[] = [
+		ModelType.TEXT_SMALL,
+		ModelType.RESPONSE_HANDLER,
+		ModelType.TEXT_NANO,
+		ModelType.TEXT_LARGE,
+	];
+	return candidates.find((modelType) => runtime.getModel(modelType)) ?? null;
+}
+
+function cleanLightweightSocialReply(text: string): string {
+	const cleaned = text
+		.replace(/<think>[\s\S]*?<\/redacted_thinking>/gi, "")
+		.trim();
+	const parsed = /^(thought|text)\s*:/i.test(cleaned)
+		? parseToonKeyValue<{ text?: string }>(cleaned)
+		: null;
+	const reply =
+		typeof parsed?.text === "string" && parsed.text.trim().length > 0
+			? parsed.text.trim()
+			: cleaned;
+	return truncateToCompleteSentence(reply, 500).trim();
 }
 
 /**
@@ -2107,7 +2217,7 @@ export function shouldRunMetadataActionRescue(
 	return true;
 }
 
-function shouldAttemptActionRescue(
+export function shouldAttemptActionRescue(
 	runtime: Pick<IAgentRuntime, "actions">,
 	message: Memory,
 	state: State,
@@ -2121,6 +2231,10 @@ function shouldAttemptActionRescue(
 	}
 
 	if (hasNonPassiveAction(responseContent)) {
+		return false;
+	}
+
+	if (hasExplicitReplyIntent(responseContent)) {
 		return false;
 	}
 
@@ -3327,7 +3441,9 @@ export class DefaultMessageService implements IMessageService {
 						: undefined;
 
 				const opts: ResolvedMessageOptions = {
-					maxRetries: options?.maxRetries ?? 3,
+					maxRetries:
+						options?.maxRetries ??
+						resolveDefaultActionPlannerMaxRetries(runtime),
 					timeoutDuration: options?.timeoutDuration ?? 60 * 60 * 1000, // 1 hour
 					useMultiStep:
 						options?.useMultiStep ??
@@ -3557,6 +3673,161 @@ export class DefaultMessageService implements IMessageService {
 		);
 	}
 
+	private getConversationOnlyReplyKind(
+		runtime: IAgentRuntime,
+		message: Memory,
+		room: Room | undefined,
+		mentionContext: MentionContext | undefined,
+		isAutonomous: boolean,
+	): ConversationOnlyReplyKind | null {
+		if (isAutonomous) {
+			return null;
+		}
+		if ((message.content.attachments?.length ?? 0) > 0) {
+			return null;
+		}
+		const kind = looksLikeLightweightSocialTurn(message)
+			? "lightweight-social"
+			: looksLikeNonActionableChatter(message)
+				? "non-actionable-chat"
+				: null;
+		if (!kind) {
+			return null;
+		}
+		const responseDecision = this.shouldRespond(
+			runtime,
+			message,
+			room,
+			mentionContext,
+		);
+		return responseDecision.shouldRespond && responseDecision.skipEvaluation
+			? kind
+			: null;
+	}
+
+	private async tryConversationOnlyReply(
+		runtime: IAgentRuntime,
+		message: Memory,
+		callback: HandlerCallback | undefined,
+		responseId: UUID,
+		runId: UUID,
+		startTime: number,
+		opts: ResolvedMessageOptions,
+		kind: ConversationOnlyReplyKind,
+	): Promise<MessageProcessingResult | null> {
+		const modelType = selectLightweightSocialModel(runtime);
+		if (!modelType) {
+			return null;
+		}
+
+		const state = await composeLightweightSocialState(runtime, message);
+		const prompt = composePromptFromState({
+			state,
+			template:
+				kind === "lightweight-social"
+					? LIGHTWEIGHT_SOCIAL_REPLY_TEMPLATE
+					: CONVERSATION_ONLY_REPLY_TEMPLATE,
+		});
+
+		let result: string;
+		try {
+			const modelResult = await runtime.useModel(modelType, { prompt });
+			if (typeof modelResult !== "string") {
+				return null;
+			}
+			result = modelResult;
+		} catch (error) {
+			runtime.logger.warn(
+				{
+					src: "service:message",
+					kind,
+					modelType,
+					error: error instanceof Error ? error.message : String(error),
+				},
+				"Conversation-only reply generation failed",
+			);
+			return null;
+		}
+
+		const text = cleanLightweightSocialReply(result);
+		if (!text) {
+			return null;
+		}
+
+		const currentResponseId = latestResponseIds
+			.get(runtime.agentId)
+			?.get(message.roomId);
+		if (currentResponseId !== responseId && !opts.keepExistingResponses) {
+			await this.emitRunEnded(runtime, runId, message, startTime, "replaced");
+			return {
+				didRespond: false,
+				responseContent: null,
+				responseMessages: [],
+				state,
+				mode: "none",
+				skipEvaluation: true,
+				reason: "replaced",
+			};
+		}
+
+		const responseContent: Content = {
+			thought:
+				kind === "lightweight-social"
+					? "Lightweight social reply"
+					: "Conversation-only reply",
+			actions: ["REPLY"],
+			providers: [],
+			text,
+			simple: true,
+			responseId,
+			...(message.id ? { inReplyTo: createUniqueUuid(runtime, message.id) } : {}),
+		};
+		await runtime.applyPipelineHooks(
+			"outgoing_before_deliver",
+			outgoingPipelineHookContext(responseContent, {
+				source:
+					kind === "lightweight-social"
+						? "lightweight-social"
+						: "conversation-only",
+				roomId: message.roomId,
+				message,
+				responseId,
+			}),
+		);
+
+		const responseMemory: Memory = {
+			id: responseId,
+			entityId: runtime.agentId,
+			agentId: runtime.agentId,
+			content: responseContent,
+			roomId: message.roomId,
+			createdAt: Date.now(),
+		};
+		await runtime.createMemory(responseMemory, "messages");
+		await this.emitMessageSent(
+			runtime,
+			responseMemory,
+			message.content.source ?? "messageHandler",
+		);
+		if (callback) {
+			await callback(responseContent);
+		}
+		await this.emitRunEnded(runtime, runId, message, startTime, "completed");
+
+		return {
+			didRespond: true,
+			responseContent,
+			responseMessages: [responseMemory],
+			state,
+			mode: "simple",
+			skipEvaluation: true,
+			reason:
+				kind === "lightweight-social"
+					? "lightweight-social-turn"
+					: "conversation-only-turn",
+		};
+	}
+
 	/**
 	 * Internal message processing implementation
 	 */
@@ -3736,10 +4007,6 @@ export class DefaultMessageService implements IMessageService {
 			message.content.attachments,
 		);
 
-		// Compose initial state (after incoming hooks so providers/actions text matches this turn)
-		let state = await composeResponseState(runtime, message);
-		state = attachAvailableContexts(state, runtime);
-
 		const metadata =
 			typeof message.content.metadata === "object" &&
 			message.content.metadata !== null
@@ -3748,6 +4015,33 @@ export class DefaultMessageService implements IMessageService {
 		const isAutonomous = metadata?.isAutonomous === true;
 		const autonomyMode =
 			typeof metadata?.autonomyMode === "string" ? metadata.autonomyMode : null;
+
+		const conversationOnlyReplyKind = this.getConversationOnlyReplyKind(
+			runtime,
+			message,
+			room ?? undefined,
+			mentionContext,
+			isAutonomous,
+		);
+		if (conversationOnlyReplyKind) {
+			const socialResult = await this.tryConversationOnlyReply(
+				runtime,
+				message,
+				callback,
+				responseId,
+				runId,
+				startTime,
+				opts,
+				conversationOnlyReplyKind,
+			);
+			if (socialResult) {
+				return socialResult;
+			}
+		}
+
+		// Compose initial state (after incoming hooks so providers/actions text matches this turn)
+		let state = await composeResponseState(runtime, message);
+		state = attachAvailableContexts(state, runtime);
 
 		await runtime.applyPipelineHooks(
 			"pre_should_respond",
@@ -6627,7 +6921,7 @@ Return TOON only with the continuation in the text field, starting immediately a
 				}
 
 				const cleaned = response
-					.replace(/<think>[\s\S]*?<\/think>/g, "")
+					.replace(/<think>[\s\S]*?<\/redacted_thinking>/gi, "")
 					.trim();
 				const looksStructuredReply =
 					/^TOON\b/i.test(cleaned) || /^(thought|text)\s*:/i.test(cleaned);

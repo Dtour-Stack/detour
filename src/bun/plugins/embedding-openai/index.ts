@@ -132,7 +132,7 @@ export const embeddingOpenAIPlugin: Plugin = {
 				warnedTruncatedInput = true;
 				logger.warn(
 					{ src: "embedding-openai", inputChars: text.length, maxChars },
-					"embedding input exceeded configured limit — truncating before OpenAI request",
+					"embedding input exceeded configured limit — truncating before HTTP request",
 				);
 			}
 

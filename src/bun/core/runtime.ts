@@ -51,6 +51,7 @@ import { capabilitiesPlugin } from "../plugins/capabilities/index";
 import { portlessToolsPlugin } from "../plugins/portless-tools/index";
 import { agentSkillsPlugin } from "../plugins/agent-skills/index";
 import { agentPublicLogPlugin } from "../plugins/agent-public-log/index";
+import { phantomWalletToolsPlugin } from "../plugins/phantom-wallet-tools/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
 // build can fail on first install; if the dist isn't there the plugin
 // stays null. Service start() failures are absorbed by the wrapper below
@@ -348,7 +349,27 @@ type AfterBuildHook = (state: RuntimeState) => Promise<void> | void;
 
 export class RuntimeService {
 	private current: RuntimeState | null = null;
-	private buildPromise: Promise<RuntimeState | null> | null = null;
+	/**
+	 * Serializes every path that calls `build()` / `activateState` so
+	 * overlapping `getOrBuild`, `rebuild`, and `rebuildSkipping` cannot
+	 * interleave (stale vault snapshot vs fresh `current`, or two builds
+	 * racing on `current`). Replaces the old `buildPromise` coalescer,
+	 * which still allowed `rebuildSkipping` to run in parallel with an
+	 * in-flight `getOrBuild` and could return a stale `current` after
+	 * `rebuild()` drained a promise whose `finally` had already nulled
+	 * `buildPromise` but left `current` set.
+	 */
+	private buildSerializeTail: Promise<unknown> = Promise.resolve();
+
+	private enqueueSerializedBuild<T>(fn: () => Promise<T>): Promise<T> {
+		const job = this.buildSerializeTail.then(() => fn());
+		this.buildSerializeTail = job.then(
+			() => undefined,
+			() => undefined,
+		);
+		return job;
+	}
+
 	private afterBuildHooks: AfterBuildHook[] = [];
 
 	/**
@@ -393,15 +414,11 @@ export class RuntimeService {
 	}
 
 	async getOrBuild(): Promise<RuntimeState | null> {
-		if (this.current) return this.current;
-		if (!this.buildPromise) {
-			this.buildPromise = this.build()
-				.then((state) => this.activateState(state))
-				.finally(() => {
-					this.buildPromise = null;
-				});
-		}
-		return this.buildPromise;
+		return this.enqueueSerializedBuild(async () => {
+			if (this.current) return this.current;
+			const state = await this.build();
+			return this.activateState(state);
+		});
 	}
 
 	private async activateState(state: RuntimeState | null): Promise<RuntimeState | null> {
@@ -532,15 +549,26 @@ export class RuntimeService {
 		console.log("[runtime] discord pairing left to eliza's DiscordOwnerPairingService (no race observed)");
 	}
 
+	/**
+	 * Replaces the live `AgentRuntime` (SQL init, plugin init, Pensieve hooks).
+	 * Triggered by credential/provider/config RPC paths and a debounced channel
+	 * reload — not on a timer. `electrobun dev --watch` restarts the whole host
+	 * separately; that can look like repeated init in logs during active dev.
+	 */
 	async rebuild(): Promise<RuntimeState | null> {
-		await this.stopCurrentRuntime();
-		return this.getOrBuild();
+		return this.enqueueSerializedBuild(async () => {
+			await this.stopCurrentRuntime();
+			const state = await this.build();
+			return this.activateState(state);
+		});
 	}
 
 	private async rebuildSkipping(blockedAttemptIds: ReadonlySet<string>): Promise<RuntimeState | null> {
-		await this.stopCurrentRuntime();
-		const state = await this.build(blockedAttemptIds);
-		return this.activateState(state);
+		return this.enqueueSerializedBuild(async () => {
+			await this.stopCurrentRuntime();
+			const state = await this.build(blockedAttemptIds);
+			return this.activateState(state);
+		});
 	}
 
 	private async stopCurrentRuntime(): Promise<void> {
@@ -767,6 +795,7 @@ export class RuntimeService {
 			? await this.resolveChannelPlugins()
 			: { plugins: [], settings: {} as Record<string, string> };
 		const settings = await this.buildRuntimeSettings(channelResolved.settings);
+		this.mergeEmbeddingSettingsIntoCharacter(character, settings);
 		const runtime = new AgentRuntime({
 			character,
 			plugins: this.basePlugins(llmPlugin),
@@ -994,9 +1023,28 @@ export class RuntimeService {
 			EMBEDDING_DIMENSION: "384",
 			OPENAI_EMBEDDING_DIMENSIONS: "384",
 		};
-		settings.TELEGRAM_AUTO_REPLY ??= "true";
+		if (
+			settings.VALIDATION_LEVEL === undefined &&
+			process.env.VALIDATION_LEVEL === undefined
+		) {
+			settings.VALIDATION_LEVEL = "progressive";
+		}
 		settings.DISCORD_AUTO_REPLY ??= "true";
+		settings.TELEGRAM_AUTO_REPLY ??= "true";
 		settings.DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS ??= "false";
+		// elizaOS: `lifeOpsPassiveConnectorsEnabled()` is true when
+		// ELIZA_LIFEOPS_PASSIVE_CONNECTORS / LIFEOPS_PASSIVE_CONNECTORS are unset.
+		// Plugin-telegram then forces ingest-only (no auto-reply) even when
+		// TELEGRAM_AUTO_REPLY is true. Detour is an interactive tray agent, not a
+		// lifeops ingest worker — default to active connectors unless env explicitly opts in.
+		if (
+			settings.ELIZA_LIFEOPS_PASSIVE_CONNECTORS === undefined &&
+			settings.LIFEOPS_PASSIVE_CONNECTORS === undefined &&
+			process.env.ELIZA_LIFEOPS_PASSIVE_CONNECTORS === undefined &&
+			process.env.LIFEOPS_PASSIVE_CONNECTORS === undefined
+		) {
+			settings.ELIZA_LIFEOPS_PASSIVE_CONNECTORS = "false";
+		}
 		// Per-agent sandbox dir for plugin-coding-tools. The plugin itself
 		// is blocklist-based (denies user-private + system paths) and
 		// otherwise allows any absolute path; the agent reads this setting
@@ -1045,6 +1093,41 @@ export class RuntimeService {
 		if (process.env.OPENAI_EMBEDDING_API_KEY) {
 			settings.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY;
 		}
+		if (process.env.OPENAI_EMBEDDING_MODEL) {
+			settings.OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL;
+		}
+		if (process.env.OPENAI_EMBEDDING_DIMENSIONS) {
+			settings.OPENAI_EMBEDDING_DIMENSIONS = process.env.OPENAI_EMBEDDING_DIMENSIONS;
+		}
+	}
+
+	/** Keys mirrored onto `character.settings` so they override DB-persisted agent settings.
+	 *
+	 * Eliza `getSetting()` resolves `character.settings` before constructor `settings`
+	 * (`this.settings`). After `initialize()`, the DB merge is `{ ...db, ...character }`,
+	 * so values we place on the initial character still win over stale `OPENAI_EMBEDDING_*`
+	 * rows in the agent row — which otherwise pointed the embedding plugin at the cloud
+	 * even when `startCore` had set `process.env` for local llama-server. */
+	private static readonly EMBEDDING_SETTING_KEYS = [
+		"OPENAI_EMBEDDING_URL",
+		"OPENAI_EMBEDDING_API_KEY",
+		"OPENAI_EMBEDDING_MODEL",
+		"OPENAI_EMBEDDING_DIMENSIONS",
+		"OPENAI_EMBEDDING_MAX_CHARS",
+	] as const;
+
+	private mergeEmbeddingSettingsIntoCharacter(character: Character, settings: Record<string, string>): void {
+		const base =
+			character.settings && typeof character.settings === "object" && !Array.isArray(character.settings)
+				? { ...character.settings }
+				: {};
+		for (const key of RuntimeService.EMBEDDING_SETTING_KEYS) {
+			const v = settings[key];
+			if (typeof v === "string" && v.length > 0) {
+				(base as Record<string, string>)[key] = v;
+			}
+		}
+		character.settings = base;
 	}
 
 	private async loadXSettings(settings: Record<string, string>): Promise<void> {
@@ -1085,6 +1168,7 @@ export class RuntimeService {
 			portlessToolsPlugin,
 			agentSkillsPlugin,
 			agentPublicLogPlugin,
+			phantomWalletToolsPlugin,
 			...(agentOrchestratorPlugin ? [agentOrchestratorPlugin] : []),
 			// cronToolsPlugin: replaced by `cron-tools` carrot loaded via the
 			// carrot bridge — see core/index.ts and src/bun/core/carrots/. The

@@ -26,6 +26,7 @@ export {
 export * from "./lifeops-passive-connectors";
 export * from "./logger";
 export * from "./memory";
+export * from "./planner-reply-context";
 export * from "./prompts";
 export * from "./roles";
 export * from "./runtime";

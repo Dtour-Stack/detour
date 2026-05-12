@@ -3,11 +3,9 @@
  * RPC handler in handlers/window.ts invoke the chat feature's window
  * controller without coupling to the ApiServer's private state.
  *
- * The chat feature wires this up alongside the legacy
- * `apiServer.setWindowController(...)` so both transports (HTTP /api/window/*
- * and typed RPC windowHide/Pin/Resize) drive the same controller. When the
- * HTTP routes are deleted in Phase 2, the chat feature can stop calling
- * setWindowController.
+ * The HTTP /api/window/* routes have been deleted; this is now the sole
+ * dispatch path for hide/pin/resize. The chat feature still calls
+ * setWindowControllerForRpc on boot to register its handler.
  */
 
 import type { WindowCommand, WindowController } from "../api/server";

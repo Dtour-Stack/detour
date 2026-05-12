@@ -447,6 +447,27 @@ export function pensieveRequests(deps: RpcDeps) {
 			return detail;
 		},
 
+		pensievePersonTrackSet: async (params: {
+			id: string;
+			tracked: boolean;
+		}): Promise<PensievePersonDetail> => {
+			const detail = await pensieve.relationships.setTracked(params.id as never, params.tracked);
+			if (!detail) throw new Error("track update failed");
+			return detail;
+		},
+
+		pensievePersonsMerge: async (params: {
+			primaryId: string;
+			secondaryIds: string[];
+		}): Promise<PensievePersonDetail> => {
+			const detail = await pensieve.relationships.mergeEntities(
+				params.primaryId as never,
+				params.secondaryIds as never[],
+			);
+			if (!detail) throw new Error("merge failed");
+			return detail;
+		},
+
 		pensieveRelationshipsList: async (params: {
 			entityIds?: string[];
 			tags?: string[];

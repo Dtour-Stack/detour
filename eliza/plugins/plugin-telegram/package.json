@@ -44,7 +44,7 @@
     "vitest": "^4.0.0"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup --no-dts && tsc -p tsconfig.build.json",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",

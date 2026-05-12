@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { clearSkillsDirCache } from "@elizaos/skills";
 import { ActivityService } from "./activity";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
@@ -35,7 +36,7 @@ export type CoreHandle = {
 	api: ApiServer;
 	portless: PortlessService;
 	rpcDeps: RpcDeps;
-	stop: () => void;
+	stop: () => Promise<void>;
 };
 
 /**
@@ -75,8 +76,42 @@ function ensureUsefulPath(): void {
 	process.env.PATH = merged.join(":");
 }
 
+/**
+ * Point @elizaos/skills at the repo's bundled skills before any runtime
+ * import resolves paths (Electrobun / packaged layouts may not match
+ * resolver heuristics). Clears the resolver cache so a later `getSkillsDir()`
+ * picks up the override.
+ */
+function ensureBundledSkillsEnv(): void {
+	if (process.env.ELIZAOS_BUNDLED_SKILLS_DIR?.trim()) {
+		return;
+	}
+	const candidates: string[] = [
+		join(import.meta.dir, "..", "..", "..", "eliza", "packages", "skills", "skills"),
+	];
+	if (typeof process.execPath === "string" && process.execPath.length > 0) {
+		const ex = dirname(process.execPath);
+		candidates.push(
+			join(ex, "..", "Resources", "app", "node_modules", "@elizaos", "skills", "skills"),
+			join(ex, "..", "Resources", "app", "eliza", "packages", "skills", "skills"),
+			join(ex, "node_modules", "@elizaos", "skills", "skills"),
+		);
+	}
+	for (const dir of candidates) {
+		if (!existsSync(dir)) continue;
+		process.env.ELIZAOS_BUNDLED_SKILLS_DIR = dir;
+		try {
+			clearSkillsDirCache();
+		} catch {
+			/* non-fatal if skills package not linked in a minimal build */
+		}
+		return;
+	}
+}
+
 export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	ensureUsefulPath();
+	ensureBundledSkillsEnv();
 	process.env.PGLITE_DATA_DIR = opts.pgliteDataDir;
 	// Anchor @elizaos/vault + auth at the canonical Detour data dir (~/.detour).
 	// `<ELIZA_STATE_DIR>/auth/` is a SYMLINK to ~/.eliza/auth/, so eliza's
@@ -290,7 +325,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		api,
 		portless,
 		rpcDeps,
-		stop: () => {
+		stop: async () => {
 			discordObservations.stop();
 			improvement.stop();
 			activity.stop();
@@ -299,7 +334,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			api.stop();
 			llama.stop();
 			carrotManager.stopAll();
-			void previewServers.stopAll();
+			await previewServers.stopAll();
 			portless.stop();
 		},
 	};

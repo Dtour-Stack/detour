@@ -177,6 +177,14 @@ export type PensieveRequests = {
 		params: { id: string };
 		response: PensievePersonDetail;
 	};
+	pensievePersonTrackSet: {
+		params: { id: string; tracked: boolean };
+		response: PensievePersonDetail;
+	};
+	pensievePersonsMerge: {
+		params: { primaryId: string; secondaryIds: string[] };
+		response: PensievePersonDetail;
+	};
 	pensieveRelationshipsList: {
 		params: { entityIds?: string[]; tags?: string[]; limit?: number };
 		response: PensieveRelationshipSummary[];

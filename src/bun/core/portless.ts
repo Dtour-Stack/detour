@@ -20,6 +20,8 @@ const DEFAULT_TLD = "localhost";
 export interface PortlessSnapshot {
 	running: boolean;
 	proxyPort: number;
+	/** True when deferring to standalone portless on HTTPS (typically :443). */
+	proxyHttps: boolean;
 	tld: string;
 	routes: RouteMapping[];
 	bindError?: string | null;
@@ -161,6 +163,7 @@ export class PortlessService {
 		return {
 			running: this.externalProxyDetected || (this.server !== null && this.bindError === null),
 			proxyPort: this.proxyPort,
+			proxyHttps: this.externalProxyDetected && this.externalProxyTls,
 			tld: this.tld,
 			routes: this.store.loadRoutes(),
 			bindError: this.bindError,

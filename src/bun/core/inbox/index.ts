@@ -31,6 +31,7 @@ import { join } from "node:path";
 import type { ChannelGatewayService, GatewayMessage } from "../channels/gateway";
 import type { RuntimeService } from "../runtime";
 import { getTraceId, newTraceId, traceScope } from "../trace";
+import { KeyedAsyncLock } from "../async-lock";
 
 const RING_CAP = 1000;
 const INBOX_TAG = "inbox";
@@ -143,6 +144,10 @@ export class InboxService {
 	private readonly buffer: InboxItem[] = [];
 	private readonly statusOverrides = new Map<string, InboxStatus>();
 	private readonly replyTexts = new Map<string, string>();
+	/** Per-inbox-item lock — prevents concurrent `act(id)` calls from
+	 * flipping status "pending → acting → pending" out of order, and
+	 * keeps the JSONL audit trail in causal order per item. */
+	private readonly itemLocks = new KeyedAsyncLock();
 
 	constructor(
 		private readonly runtimeService: RuntimeService,
@@ -544,22 +549,24 @@ export class InboxService {
 	}
 
 	async act(id: string): Promise<InboxItem | null> {
-		const item = this.buffer.find((i) => i.id === id);
-		if (!item) return null;
-		const current = this.statusOverrides.get(id) ?? item.status;
-		if (current === "acting" || current === "acted" || current === "dismissed") return this.withRuntimeState(item);
-		this.setStatus(id, "acting");
-		const inheritedTrace = getTraceId() ?? newTraceId();
-		await traceScope(inheritedTrace, () =>
-			this.promptAgent(item).catch((err) => {
-				this.updateStatus(id, "pending");
-				logger.warn(
-					{ src: "inbox", err: err instanceof Error ? err.message : err },
-					"agent action of inbox item failed",
-				);
-			}),
-		);
-		return this.withRuntimeState(item);
+		return this.itemLocks.run(id, async () => {
+			const item = this.buffer.find((i) => i.id === id);
+			if (!item) return null;
+			const current = this.statusOverrides.get(id) ?? item.status;
+			if (current === "acting" || current === "acted" || current === "dismissed") return this.withRuntimeState(item);
+			this.setStatus(id, "acting");
+			const inheritedTrace = getTraceId() ?? newTraceId();
+			await traceScope(inheritedTrace, () =>
+				this.promptAgent(item).catch((err) => {
+					this.updateStatus(id, "pending");
+					logger.warn(
+						{ src: "inbox", err: err instanceof Error ? err.message : err },
+						"agent action of inbox item failed",
+					);
+				}),
+			);
+			return this.withRuntimeState(item);
+		});
 	}
 
 	stats(): { total: number; pending: number; byKind: Record<string, number> } {

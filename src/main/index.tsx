@@ -8,6 +8,7 @@ import { BrowserView } from "./browser/BrowserView";
 import { PortlessView } from "./portless/PortlessView";
 import { WorkspaceView } from "./workspace/WorkspaceView";
 import { PetWindow } from "./pet/PetWindow";
+import { DetourPhantomRoot } from "./wallet/DetourPhantomRoot";
 import "./index.css";
 
 // Per-window view selection: each window opens a distinct HTML wrapper
@@ -33,4 +34,8 @@ const root =
 	view === "pet" ? <PetWindow /> :
 	<App />;
 
-createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);
+createRoot(document.getElementById("root")!).render(
+	<StrictMode>
+		<DetourPhantomRoot>{root}</DetourPhantomRoot>
+	</StrictMode>,
+);

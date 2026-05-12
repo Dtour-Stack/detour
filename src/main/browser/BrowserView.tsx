@@ -44,6 +44,7 @@ type BrowserWebviewEvent = Event & {
 const DEFAULT_URL = "https://www.google.com";
 const PARTITION = "detour-agent-browser";
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
+const NAVIGATION_RULES = ["^*", "https://*", "http://*", "about:blank"];
 
 const DETOUR_BROWSER_PRELOAD_SCRIPT = `
 (() => {
@@ -51,7 +52,19 @@ const DETOUR_BROWSER_PRELOAD_SCRIPT = `
     try {
       if (typeof window.__electrobunSendToHost === "function") {
         window.__electrobunSendToHost(payload);
+        return;
       }
+      const bridge = window.__electrobunEventBridge || window.__electrobunInternalBridge;
+      if (!bridge || typeof bridge.postMessage !== "function") return;
+      bridge.postMessage(JSON.stringify({
+        id: "webviewEvent",
+        type: "message",
+        payload: {
+          id: window.__electrobunWebviewId,
+          eventName: "host-message",
+          detail: JSON.stringify(payload)
+        }
+      }));
     } catch {}
   };
   const cloneable = (value) => {
@@ -66,18 +79,22 @@ const DETOUR_BROWSER_PRELOAD_SCRIPT = `
       }
     }
   };
-  window.__detourBrowserExec = (requestId, script) => {
-    let value;
-    try {
-      value = (0, eval)(script);
-    } catch (error) {
-      send({ type: "__detourBrowserExecResult", requestId, ok: false, error: error && error.message ? String(error.message) : String(error) });
-      return;
+  Object.defineProperty(window, "__detourBrowserExec", {
+    configurable: false,
+    writable: false,
+    value: (requestId, requestToken, script) => {
+      let value;
+      try {
+        value = (0, eval)(script);
+      } catch (error) {
+        send({ type: "__detourBrowserExecResult", requestId, requestToken, ok: false, error: error && error.message ? String(error.message) : String(error) });
+        return;
+      }
+      Promise.resolve(value)
+        .then((result) => send({ type: "__detourBrowserExecResult", requestId, requestToken, ok: true, result: cloneable(result) }))
+        .catch((error) => send({ type: "__detourBrowserExecResult", requestId, requestToken, ok: false, error: error && error.message ? String(error.message) : String(error) }));
     }
-    Promise.resolve(value)
-      .then((result) => send({ type: "__detourBrowserExecResult", requestId, ok: true, result: cloneable(result) }))
-      .catch((error) => send({ type: "__detourBrowserExecResult", requestId, ok: false, error: error && error.message ? String(error.message) : String(error) }));
-  };
+  });
 })();
 `;
 
@@ -107,10 +124,15 @@ function makeId(): string {
 	return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function makeExecToken(): string {
+	return globalThis.crypto?.randomUUID?.() ?? makeId();
+}
+
 function normalizeUrl(input: string): string {
 	const trimmed = input.trim();
 	if (!trimmed) return DEFAULT_URL;
-	if (/^(https?:|file:|about:)/i.test(trimmed)) return trimmed;
+	if (/^https?:/i.test(trimmed)) return trimmed;
+	if (/^about:blank$/i.test(trimmed)) return "about:blank";
 	if (/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/.*)?$/i.test(trimmed)) {
 		return `https://${trimmed}`;
 	}
@@ -207,6 +229,7 @@ function BrowserWebview(props: {
 		className: props.active ? "agent-browser-webview active" : "agent-browser-webview inactive",
 		src: props.tab.url,
 		partition: PARTITION,
+		sandbox: true,
 		preload: DETOUR_BROWSER_PRELOAD_SCRIPT,
 	});
 }
@@ -271,6 +294,7 @@ export function BrowserView() {
 	const pendingExecs = useRef(new Map<number, {
 		resolve: (result: { ok: boolean; result?: unknown; error?: string }) => void;
 		timer: ReturnType<typeof setTimeout>;
+		token: string;
 	}>());
 	const activeTabIdRef = useRef(activeTabId);
 
@@ -381,14 +405,15 @@ export function BrowserView() {
 		if (!view) return Promise.resolve({ ok: false, error: "Browser tab is not mounted." });
 		execCounter.current += 1;
 		const requestId = execCounter.current;
+		const token = makeExecToken();
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
 				if (!pendingExecs.current.delete(requestId)) return;
 				resolve({ ok: false, error: `Browser script timed out after ${timeoutMs}ms` });
 			}, timeoutMs);
-			pendingExecs.current.set(requestId, { resolve, timer });
+			pendingExecs.current.set(requestId, { resolve, timer, token });
 			view.executeJavascript?.(
-				`window.__detourBrowserExec(${JSON.stringify(requestId)}, ${JSON.stringify(script)})`,
+				`window.__detourBrowserExec(${JSON.stringify(requestId)}, ${JSON.stringify(token)}, ${JSON.stringify(script)})`,
 			);
 		});
 	}, []);
@@ -547,7 +572,7 @@ export function BrowserView() {
 		}
 		if (webviews.current.get(id) === element) return;
 		webviews.current.set(id, element);
-		element.setNavigationRules?.(["^https://*", "^http://*"]);
+		element.setNavigationRules?.(NAVIGATION_RULES);
 		const onReady = () => {
 			patchTab(id, { loading: false });
 			refreshNavState(id);
@@ -559,9 +584,14 @@ export function BrowserView() {
 		};
 		const onHostMessage = (event: Event) => {
 			const detail = hostMessageDetail(event);
-			if (!detail || detail.type !== "__detourBrowserExecResult" || typeof detail.requestId !== "number") return;
+			if (
+				!detail
+				|| detail.type !== "__detourBrowserExecResult"
+				|| typeof detail.requestId !== "number"
+				|| typeof detail.requestToken !== "string"
+			) return;
 			const pending = pendingExecs.current.get(detail.requestId);
-			if (!pending) return;
+			if (!pending || pending.token !== detail.requestToken) return;
 			pendingExecs.current.delete(detail.requestId);
 			clearTimeout(pending.timer);
 			pending.resolve({

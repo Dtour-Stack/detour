@@ -6112,7 +6112,10 @@ ${section_end}`;
 			}
 
 			// Clean response (remove <think> blocks)
-			const cleanResponse = response.replace(/<think>[\s\S]*?<\/think>/g, "");
+			const cleanResponse = response.replace(
+				/<think>[\s\S]*?<\/redacted_thinking>/gi,
+				"",
+			);
 
 			let responseContent: Record<string, unknown> | null = null;
 			let parseErrorMessage: string | undefined;

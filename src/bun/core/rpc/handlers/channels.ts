@@ -108,10 +108,60 @@ async function validateXCredential(key: string, trimmed: string): Promise<Creden
 	return { ok: true };
 }
 
+async function validateTelegramAllowedChats(_key: string, trimmed: string): Promise<CredentialValidationResult> {
+	try {
+		const parsed = JSON.parse(trimmed) as unknown;
+		if (!Array.isArray(parsed)) {
+			return { ok: false, error: "TELEGRAM_ALLOWED_CHATS must be a JSON array of chat id strings, e.g. [\"-1001234567890\"]" };
+		}
+		for (const item of parsed) {
+			if (typeof item !== "string" || item.trim().length === 0) {
+				return { ok: false, error: "TELEGRAM_ALLOWED_CHATS: each entry must be a non-empty string chat id" };
+			}
+		}
+		return { ok: true };
+	} catch {
+		return { ok: false, error: "TELEGRAM_ALLOWED_CHATS must be valid JSON (array of strings)" };
+	}
+}
+
+async function validateTelegramApiRoot(_key: string, trimmed: string): Promise<CredentialValidationResult> {
+	try {
+		const u = new URL(trimmed);
+		if (u.protocol !== "http:" && u.protocol !== "https:") {
+			return { ok: false, error: "TELEGRAM_API_ROOT must be an http(s) URL" };
+		}
+		return { ok: true };
+	} catch {
+		return { ok: false, error: "TELEGRAM_API_ROOT must be a valid URL (e.g. https://api.telegram.org)" };
+	}
+}
+
+async function validateBooleanSetting(_key: string, trimmed: string): Promise<CredentialValidationResult> {
+	const n = trimmed.toLowerCase();
+	if (["true", "false", "1", "0", "yes", "no", "on", "off"].includes(n)) return { ok: true };
+	return { ok: false, error: "Expected true or false (or 1/0, yes/no, on/off)" };
+}
+
+async function validatePositiveIntMs(_key: string, trimmed: string): Promise<CredentialValidationResult> {
+	const n = Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(n) || n < 60_000) {
+		return { ok: false, error: "CONTINUOUS_IMPROVEMENT_INTERVAL_MS must be an integer ≥ 60000 (1 minute), in milliseconds" };
+	}
+	if (n > 24 * 60 * 60_000) {
+		return { ok: false, error: "CONTINUOUS_IMPROVEMENT_INTERVAL_MS must be ≤ 86400000 (24 hours)" };
+	}
+	return { ok: true };
+}
+
 const CREDENTIAL_VALIDATORS: Record<string, CredentialValidator> = {
 	DISCORD_API_TOKEN: (_key, trimmed) => validateDiscordCredential(trimmed),
 	DISCORD_BOT_TOKEN: (_key, trimmed) => validateDiscordCredential(trimmed),
 	TELEGRAM_BOT_TOKEN: (_key, trimmed) => validateTelegramCredential(trimmed),
+	TELEGRAM_ALLOWED_CHATS: validateTelegramAllowedChats,
+	TELEGRAM_API_ROOT: validateTelegramApiRoot,
+	CONTINUOUS_IMPROVEMENT_ENABLED: validateBooleanSetting,
+	CONTINUOUS_IMPROVEMENT_INTERVAL_MS: validatePositiveIntMs,
 	GITHUB_TOKEN: (_key, trimmed) => validateGitHubCredential(trimmed),
 	GITHUB_USER_PAT: (_key, trimmed) => validateGitHubCredential(trimmed),
 	GITHUB_AGENT_PAT: (_key, trimmed) => validateGitHubCredential(trimmed),
@@ -123,7 +173,10 @@ const CREDENTIAL_VALIDATORS: Record<string, CredentialValidator> = {
 
 async function validateChannelCredential(key: string, value: string): Promise<CredentialValidationResult> {
 	const trimmed = value.trim();
-	if (trimmed.length === 0) return { ok: false, error: `${key} is empty` };
+	if (trimmed.length === 0) {
+		if (key === "TELEGRAM_ALLOWED_CHATS") return { ok: true };
+		return { ok: false, error: `${key} is empty` };
+	}
 	const validate = CREDENTIAL_VALIDATORS[key];
 	return validate ? validate(key, trimmed) : { ok: true };
 }

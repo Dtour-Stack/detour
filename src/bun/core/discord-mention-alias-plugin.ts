@@ -9,11 +9,8 @@ import type {
 	Plugin,
 	State,
 } from "@elizaos/core";
-import { createUniqueUuid, EventType } from "@elizaos/core";
-import {
-	generatePlainTextReply,
-	runWithPlannerFallbackContext,
-} from "./dpe-fallback-plugin";
+import { ChannelType, createUniqueUuid, EventType, runWithPlannerReplyContext } from "@elizaos/core";
+import { generatePlainTextReply } from "./dpe-fallback-plugin";
 import { discordContextForMessage } from "./discord-context-provider";
 
 const DEFAULT_ALIASES = ["Detour", "Detour Squirrel", "detour_squirrel"];
@@ -173,6 +170,32 @@ function isAddressedDiscordMessage(runtime: IAgentRuntime, message: Memory): boo
 		mentionContext?.isReply === true ||
 		mentionsAlias(message.content.text, configuredAliases(runtime))
 	);
+}
+
+function isTelegramMessage(message: Memory): boolean {
+	if (message.content.source === "telegram") return true;
+	const meta = message.metadata;
+	if (!meta || typeof meta !== "object" || Array.isArray(meta)) return false;
+	const bag = meta as Record<string, unknown>;
+	return (
+		bag.source === "telegram"
+		|| bag.provider === "telegram"
+		|| bag.telegram !== undefined
+		|| bag.telegramChatId !== undefined
+	);
+}
+
+function isAddressedTelegramMessage(runtime: IAgentRuntime, message: Memory): boolean {
+	if (!isTelegramMessage(message)) return false;
+	if (message.content.channelType === ChannelType.DM) return true;
+	const mentionContext = message.content.mentionContext;
+	if (mentionContext?.isMention === true || mentionContext?.isReply === true) return true;
+	const botSetting = runtime.getSetting("TELEGRAM_BOT_USERNAME");
+	const botUsername = typeof botSetting === "string" ? botSetting.trim().replace(/^@/, "") : "";
+	const aliases = [...configuredAliases(runtime), botUsername].filter(
+		(item): item is string => typeof item === "string" && item.trim().length > 0,
+	);
+	return mentionsAlias(message.content.text, aliases);
 }
 
 function fallbackConversation(message: Memory): string {
@@ -655,7 +678,11 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 		options?: MessageProcessingOptions,
 	): Promise<MessageProcessingResult> => {
 		const marked = markMention(callRuntime, message);
-		const addressed = marked || isAddressedDiscordMessage(callRuntime, message);
+		const telegram = isTelegramMessage(message);
+		const addressed = telegram
+			? isAddressedTelegramMessage(callRuntime, message)
+			: marked || isAddressedDiscordMessage(callRuntime, message);
+		const plannerSource = telegram ? "telegram" : "discord";
 		let emittedVisibleContent = false;
 		let fallbackEmitted = false;
 		const trackingCallback: HandlerCallback | undefined = callback
@@ -666,9 +693,11 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 					return memories;
 				}
 			: undefined;
-		const original = runWithPlannerFallbackContext(
-			{ source: "discord", addressed },
-			() => handleMessage(callRuntime, message, trackingCallback, options),
+		const original = Promise.resolve(
+			runWithPlannerReplyContext(
+				{ source: plannerSource, addressed },
+				() => handleMessage(callRuntime, message, trackingCallback, options),
+			),
 		);
 
 		try {
@@ -681,7 +710,7 @@ export function installDiscordMentionAliasPatch(runtime: IAgentRuntime): void {
 			if (result === "timeout") {
 				if (!callback) return await original;
 				fallbackEmitted = true;
-				void original.catch((error) => logLateHandlerFailure(callRuntime, message, error));
+				void original.catch((error: unknown) => logLateHandlerFailure(callRuntime, message, error));
 				const fallback = await emitDiscordFallbackReply(callRuntime, message, callback, "timeout");
 				if (!fallback) {
 					return {

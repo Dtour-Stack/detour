@@ -407,6 +407,20 @@ export class TelegramService extends Service {
 
     if (botToken) {
       const active = ACTIVE_TELEGRAM_POLLERS.get(botToken);
+      // Same Telegraf instance already owns this token (e.g. TelegramService.start()
+      // retry loop after getMe or setup failed). A second bot.launch() starts another
+      // getUpdates long-poll on the same token → Telegram 409 "only one bot instance".
+      if (active?.bot === bot) {
+        logger.debug(
+          {
+            src: 'plugin:telegram',
+            agentId: this.runtime.agentId,
+          },
+          'Telegram poller already active for this bot instance; skipping duplicate launch',
+        );
+        await bot.telegram.getMe();
+        return;
+      }
       if (active && active.bot !== bot) {
         logger.warn(
           {
@@ -429,8 +443,8 @@ export class TelegramService extends Service {
           );
         }
         ACTIVE_TELEGRAM_POLLERS.delete(botToken);
-        // Give Telegram a brief moment to release long-poll ownership.
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        // Long-poll release on Telegram's side can lag behind bot.stop().
+        await new Promise((resolve) => setTimeout(resolve, 1200));
       }
     }
 

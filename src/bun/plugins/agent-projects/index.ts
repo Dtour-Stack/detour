@@ -45,7 +45,7 @@
 
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { BrowserWindow, Screen } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Screen } from "electrobun/bun";
 import type { Action, ActionResult, Handler, IAgentRuntime, Plugin } from "@elizaos/core";
 import {
 	createAgentProject,
@@ -110,6 +110,11 @@ function pickEnum<T extends string>(opts: Record<string, unknown> | undefined, k
 
 function caller(runtime: IAgentRuntime): string {
 	return runtime.character?.name ? `agent:${runtime.character.name}` : "agent";
+}
+
+function previewPartition(slug: string): string {
+	const safeSlug = slug.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+	return `persist:detour-preview-${safeSlug}`;
 }
 
 function getApiKey(runtime: IAgentRuntime): string | null {
@@ -297,24 +302,39 @@ const openHandler: Handler = async (runtime, _message, _state, options, callback
 	try {
 		const win = new BrowserWindow({
 			title: `Preview — ${meta.name}`,
-			url,
+			url: null,
+			html: null,
 			renderer: "native",
 			titleBarStyle: "default",
 			transparent: false,
 			passthrough: false,
-			hidden: false,
+			hidden: true,
 			sandbox: true,
 			navigationRules: null,
 			frame: { x, y, width, height },
 		});
+		win.webview.remove();
+		const previewView = new BrowserView({
+			url,
+			html: null,
+			preload: null,
+			viewsRoot: null,
+			renderer: "native",
+			partition: previewPartition(slug),
+			frame: { x: 0, y: 0, width, height },
+			windowId: win.id,
+			navigationRules: null,
+			sandbox: true,
+		});
+		win.webviewId = previewView.id;
 		// `sandbox: true` disables RPC + blocks OOPIFs — sufficient
 		// isolation for previewing untrusted agent-built content. We
 		// additionally restrict navigation to the project dir; last
-		// match wins, "^*" = block. Per-project storage partitioning
-		// would require a separate BrowserView creation path.
+		// match wins, "^*" = block.
 		try {
-			win.webview.setNavigationRules(["^*", `file://${dir}/*`]);
+			previewView.setNavigationRules(["^*", `file://${dir}/*`]);
 		} catch { /* best-effort */ }
+		win.show();
 	} catch (err) {
 		return fail(`Failed to open preview window: ${err instanceof Error ? err.message : String(err)}`);
 	}

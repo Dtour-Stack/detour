@@ -1,7 +1,36 @@
 import Electrobun, { Utils } from "electrobun/bun";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+/**
+ * Electrobun often launches the Bun entry without Bun CLI’s automatic `.env`
+ * merge. Load repo-root `.env` here; only sets keys that are still unset so
+ * a parent shell can override.
+ */
+function loadRootDotEnv(): void {
+	const path = join(import.meta.dir, "..", "..", ".env");
+	if (!existsSync(path)) return;
+	const text = readFileSync(path, "utf8");
+	for (const line of text.split(/\r?\n/)) {
+		const t = line.trim();
+		if (!t || t.startsWith("#")) continue;
+		const eq = t.indexOf("=");
+		if (eq <= 0) continue;
+		const key = t.slice(0, eq).trim();
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+		let val = t.slice(eq + 1).trim();
+		if (
+			(val.startsWith('"') && val.endsWith('"')) ||
+			(val.startsWith("'") && val.endsWith("'"))
+		) {
+			val = val.slice(1, -1);
+		}
+		if (process.env[key] === undefined) process.env[key] = val;
+	}
+}
+
+loadRootDotEnv();
 
 console.log("[main] starting");
 
@@ -16,31 +45,31 @@ console.log("[main] starting");
 //   1. A detached watchdog process that polls our pid and SIGKILLs llama
 //      when we die — see LlamaServerService.spawnWatchdog().
 //   2. A pidfile-based reaper at next startup — see LlamaServerService.reapOrphan().
-type ShutdownHook = () => void;
+type ShutdownHook = () => void | Promise<void>;
 const shutdownHooks: ShutdownHook[] = [];
-let cleanupRan = false;
-const runCleanup = (label: string) => {
-	if (cleanupRan) return;
-	cleanupRan = true;
+let cleanupPromise: Promise<void> | null = null;
+const runCleanup = (label: string): Promise<void> => {
+	if (cleanupPromise) return cleanupPromise;
 	console.log(`[main] cleanup (${label})`);
-	for (const hook of shutdownHooks) {
-		try { hook(); } catch { /* best-effort */ }
-	}
+	cleanupPromise = (async () => {
+		for (const hook of shutdownHooks) {
+			try { await hook(); } catch { /* best-effort */ }
+		}
+	})();
+	return cleanupPromise;
 };
-Electrobun.events.on("before-quit", () => runCleanup("before-quit"));
-process.prependListener("SIGINT", () => { runCleanup("SIGINT"); Utils.quit(); });
-process.prependListener("SIGTERM", () => { runCleanup("SIGTERM"); Utils.quit(); });
-process.prependListener("SIGHUP", () => { runCleanup("SIGHUP"); Utils.quit(); });
-process.prependListener("exit", () => runCleanup("exit"));
+Electrobun.events.on("before-quit", async () => { await runCleanup("before-quit"); });
+process.prependListener("SIGINT", () => { void runCleanup("SIGINT").finally(() => Utils.quit()); });
+process.prependListener("SIGTERM", () => { void runCleanup("SIGTERM").finally(() => Utils.quit()); });
+process.prependListener("SIGHUP", () => { void runCleanup("SIGHUP").finally(() => Utils.quit()); });
+process.prependListener("exit", () => { void runCleanup("exit"); });
 process.prependListener("uncaughtException", (err) => {
 	console.error("[main] uncaughtException:", err);
-	runCleanup("uncaughtException");
-	Utils.quit();
+	void runCleanup("uncaughtException").finally(() => Utils.quit());
 });
 process.prependListener("unhandledRejection", (err) => {
 	console.error("[main] unhandledRejection:", err);
-	runCleanup("unhandledRejection");
-	Utils.quit();
+	void runCleanup("unhandledRejection").finally(() => Utils.quit());
 });
 
 // Detour's canonical home dir. Everything in core/cli/plugins hardcodes

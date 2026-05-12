@@ -29,6 +29,7 @@ import { EventType, logger, type IAgentRuntime, type Memory, type UUID } from "@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { KeyedAsyncLock } from "../async-lock";
 
 const RING_BUFFER_CAP = 2000;
 const PERSISTED_LIST_CAP = 5000;
@@ -88,11 +89,26 @@ interface RelationshipShape {
 
 interface RuntimeGraphShape {
 	agentId: string;
+	getService?: (serviceType: string) => unknown;
 	upsertEntities?: (entities: Array<{ id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }>) => Promise<void>;
 	createEntity?: (entity: { id: string; agentId?: string; names: string[]; metadata?: Record<string, unknown> }) => Promise<boolean>;
 	getRelationshipsByPairs?: (pairs: Array<{ sourceEntityId: string; targetEntityId: string }>) => Promise<Array<RelationshipShape | null>>;
 	createRelationships?: (rels: Array<{ sourceEntityId: string; targetEntityId: string; tags?: string[]; metadata?: Record<string, unknown> }>) => Promise<string[]>;
 	updateRelationships?: (rels: RelationshipShape[]) => Promise<void>;
+}
+
+interface RelationshipsServiceShape {
+	upsertIdentity?: (
+		entityId: UUID,
+		identity: {
+			platform: string;
+			handle: string;
+			verified?: boolean;
+			confidence: number;
+			source?: string;
+		},
+		evidenceMessageIds?: UUID[],
+	) => Promise<void>;
 }
 
 function resolveStateDir(): string {
@@ -283,7 +299,13 @@ export class ChannelGatewayService {
 	private readonly buffer: GatewayMessage[] = [];
 	private identities = new Map<string, IdentityRecord>();
 	private currentRuntime: IAgentRuntime | null = null;
-	private relationshipLocks = new Map<string, Promise<void>>();
+	/** Per-pair lock for relationship upserts — replaces the ad-hoc
+	 * relationship lock map. Same KeyedAsyncLock used by cron / inbox. */
+	private readonly relationshipLocks = new KeyedAsyncLock();
+	/** Per-handle lock so concurrent `record()` calls for the same
+	 * `${channel}:${handle}` cannot lose entityIds / messageCount updates
+	 * in the in-memory `identities` Map. */
+	private readonly identityLocks = new KeyedAsyncLock();
 
 	constructor() {
 		this.stateDir = join(resolveStateDir(), "gateway");
@@ -333,8 +355,9 @@ export class ChannelGatewayService {
 			const { entry, message } = parsed;
 			this.append(entry);
 			if (entry.externalHandle && entry.entityId) {
-				this.recordIdentity(entry.channel, entry.externalHandle, entry.entityId as UUID, entry.time);
+				await this.recordIdentity(entry.channel, entry.externalHandle, entry.entityId as UUID, entry.time);
 				if (direction === "in") await this.upsertObservedRelationship(entry, message);
+				if (direction === "in") await this.upsertObservedIdentity(entry, message);
 			}
 		} catch (err) {
 			logger.debug(
@@ -420,32 +443,35 @@ export class ChannelGatewayService {
 		}
 	}
 
-	private recordIdentity(
+	private async recordIdentity(
 		channel: GatewayChannel,
 		handle: string,
 		entityId: UUID,
 		now: number,
-	): void {
+	): Promise<void> {
 		const key = `${channel}:${handle}`;
-		const existing = this.identities.get(key);
-		if (!existing) {
-			this.identities.set(key, {
-				channel,
-				handle,
-				entityIds: [String(entityId)],
-				firstSeen: now,
-				lastSeen: now,
-				messageCount: 1,
-			});
-		} else {
+		await this.identityLocks.run(key, async () => {
+			const existing = this.identities.get(key);
+			if (!existing) {
+				this.identities.set(key, {
+					channel,
+					handle,
+					entityIds: [String(entityId)],
+					firstSeen: now,
+					lastSeen: now,
+					messageCount: 1,
+				});
+				this.saveIdentities();
+				return;
+			}
 			if (!existing.entityIds.includes(String(entityId))) {
 				existing.entityIds.push(String(entityId));
 			}
 			existing.lastSeen = now;
 			existing.messageCount += 1;
-		}
-		// Throttle disk writes — only persist on every Nth update or after 30s.
-		if (!existing || existing.messageCount % 10 === 0) this.saveIdentities();
+			// Throttle disk writes — only persist on every Nth update.
+			if (existing.messageCount % 10 === 0) this.saveIdentities();
+		});
 	}
 
 	private async upsertObservedRelationship(entry: GatewayMessage, memory: Memory): Promise<void> {
@@ -460,14 +486,35 @@ export class ChannelGatewayService {
 		);
 	}
 
+	private async upsertObservedIdentity(entry: GatewayMessage, memory: Memory): Promise<void> {
+		if (!entry.externalHandle || !entry.entityId || entry.channel === "unknown") return;
+		const runtime = this.currentRuntime as unknown as RuntimeGraphShape | null;
+		const service = runtime?.getService?.("relationships") as RelationshipsServiceShape | undefined;
+		if (typeof service?.upsertIdentity !== "function") return;
+		const evidenceMessageIds =
+			typeof memory.id === "string" && memory.id.length > 0 ? [memory.id as UUID] : [];
+		try {
+			await service.upsertIdentity(
+				entry.entityId as UUID,
+				{
+					platform: entry.channel,
+					handle: entry.externalHandle,
+					verified: true,
+					confidence: 0.95,
+					source: "channels:gateway",
+				},
+				evidenceMessageIds,
+			);
+		} catch (err) {
+			logger.debug(
+				{ src: "channels:gateway", err: err instanceof Error ? err.message : err, channel: entry.channel },
+				"identity upsert failed",
+			);
+		}
+	}
+
 	private async withRelationshipLock(agentId: string, entityId: string, fn: () => Promise<void>): Promise<void> {
-		const key = `${agentId}:${entityId}`;
-		const previous = this.relationshipLocks.get(key) ?? Promise.resolve();
-		const next = previous.then(fn, fn).finally(() => {
-			if (this.relationshipLocks.get(key) === next) this.relationshipLocks.delete(key);
-		});
-		this.relationshipLocks.set(key, next);
-		await next;
+		await this.relationshipLocks.run(`${agentId}:${entityId}`, fn);
 	}
 
 	private async upsertObservedEntity(

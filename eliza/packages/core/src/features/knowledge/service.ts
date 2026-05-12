@@ -213,7 +213,7 @@ export class KnowledgeService extends Service {
 			maxChars: 2000,
 		}) as UUID;
 
-		logger.info(
+		logger.debug(
 			`Processing "${options.originalFilename}" (${options.contentType})`,
 		);
 
@@ -224,7 +224,7 @@ export class KnowledgeService extends Service {
 				(existingDocument.metadata?.type === MemoryType.DOCUMENT ||
 					existingDocument.metadata?.type === MemoryType.CUSTOM)
 			) {
-				logger.info(`"${options.originalFilename}" already exists - skipping`);
+				logger.debug(`"${options.originalFilename}" already exists - skipping`);
 
 				const fragments = await this.runtime.getMemories({
 					tableName: "knowledge",
@@ -600,7 +600,7 @@ export class KnowledgeService extends Service {
 
 	async processCharacterKnowledge(items: string[]): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 1000));
-		logger.info(`Processing ${items.length} character knowledge items`);
+		logger.debug(`Processing ${items.length} character knowledge items`);
 
 		const processingPromises = items.map(async (item) => {
 			await this.knowledgeProcessingSemaphore.acquire();

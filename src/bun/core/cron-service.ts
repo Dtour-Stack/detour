@@ -20,6 +20,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { logger, type IAgentRuntime, type Task, type UUID } from "@elizaos/core";
+import { KeyedAsyncLock, SerialAsyncLock } from "./async-lock";
 
 const CRON_DIR = join(homedir(), ".detour");
 const CRON_FILE = join(CRON_DIR, "cron.json");
@@ -83,6 +84,16 @@ export class CronService {
 	private runtime: IAgentRuntime | null = null;
 	private defaultsSeededAt: number | undefined;
 	private readonly self: string;
+	/** Serialize mutations on a single job (createElizaTask + persist + audit).
+	 * Without this, two concurrent `updateJob`s on the same id can both
+	 * spawn eliza Tasks while the in-place mutation of the Map entry races,
+	 * orphaning one task and writing inconsistent `taskId` to disk. */
+	private readonly jobLocks = new KeyedAsyncLock();
+	/** Serialize the cron.json file writer — sync writeFileSync is atomic
+	 * per call, but interleaved write→read→write sequences from other
+	 * services on the same dir aren't. The serial lock keeps persistence
+	 * order matching mutation order. */
+	private readonly persistLock = new SerialAsyncLock();
 
 	constructor() {
 		this.self = `cron:${process.pid}`;
@@ -139,7 +150,7 @@ export class CronService {
 		};
 		this.jobs.set(id, job);
 		this.defaultsSeededAt = now;
-		this.persist();
+		void this.persist();
 		this.audit({ action: "seed-default", jobId: id, ts: now, by: "system" });
 		logger.info({ src: "cron", jobId: id }, "seeded default 'Check X mentions' cron job");
 	}
@@ -197,31 +208,33 @@ export class CronService {
 		// Reconcile: every persisted job that's enabled should have a Task row.
 		for (const job of this.jobs.values()) {
 			if (!job.enabled) continue;
-			let needsTask = !job.taskId;
-			if (job.taskId && r.getTask) {
-				const task = await r.getTask(job.taskId as UUID).catch((err) => {
-					logger.warn({ src: "cron", jobId: job.id, taskId: job.taskId, err: err instanceof Error ? err.message : err }, "task mirror lookup failed");
-					return undefined;
-				});
-				if (task === null) {
-					job.taskId = undefined;
-					needsTask = true;
+			await this.jobLocks.run(job.id, async () => {
+				let needsTask = !job.taskId;
+				if (job.taskId && r.getTask) {
+					const task = await r.getTask(job.taskId as UUID).catch((err) => {
+						logger.warn({ src: "cron", jobId: job.id, taskId: job.taskId, err: err instanceof Error ? err.message : err }, "task mirror lookup failed");
+						return undefined;
+					});
+					if (task === null) {
+						job.taskId = undefined;
+						needsTask = true;
+					}
 				}
-			}
-			const parsed = this.parsed(job);
-			if (parsed && (!job.nextRunAt || job.nextRunAt < Date.now())) {
-				job.nextRunAt = this.computeNextRun(parsed, Date.now());
-			}
-			if (needsTask) {
-				try {
-					const taskId = await this.createElizaTask(job);
-					job.taskId = taskId;
-				} catch (err) {
-					logger.warn({ src: "cron", jobId: job.id, err: err instanceof Error ? err.message : err }, "create eliza task failed");
+				const parsed = this.parsed(job);
+				if (parsed && (!job.nextRunAt || job.nextRunAt < Date.now())) {
+					job.nextRunAt = this.computeNextRun(parsed, Date.now());
 				}
-			}
+				if (needsTask) {
+					try {
+						const taskId = await this.createElizaTask(job);
+						job.taskId = taskId;
+					} catch (err) {
+						logger.warn({ src: "cron", jobId: job.id, err: err instanceof Error ? err.message : err }, "create eliza task failed");
+					}
+				}
+			});
 		}
-		this.persist();
+		await this.persist();
 	}
 
 	listJobs(): CronJob[] {
@@ -241,97 +254,105 @@ export class CronService {
 			throw new Error("Cron job requires a non-empty prompt");
 		}
 		const id = crypto.randomUUID();
-		const now = Date.now();
-		const job: CronJob = {
-			id,
-			name: input.name ?? input.schedule,
-			schedule: input.schedule,
-			prompt: input.prompt,
-			enabled: input.enabled !== false,
-			createdAt: now,
-			createdBy: input.createdBy ?? "user",
-			updatedAt: now,
-			runCount: 0,
-			nextRunAt: this.computeNextRun(parsed, now),
-		};
-		this.jobs.set(id, job);
-		this.parsedCache.set(id, parsed);
-		if (job.enabled && this.runtime) {
-			try {
-				job.taskId = await this.createElizaTask(job);
-			} catch (err) {
-				logger.warn({ src: "cron", jobId: id, err: err instanceof Error ? err.message : err }, "task mirror failed");
+		return this.jobLocks.run(id, async () => {
+			const now = Date.now();
+			const job: CronJob = {
+				id,
+				name: input.name ?? input.schedule,
+				schedule: input.schedule,
+				prompt: input.prompt,
+				enabled: input.enabled !== false,
+				createdAt: now,
+				createdBy: input.createdBy ?? "user",
+				updatedAt: now,
+				runCount: 0,
+				nextRunAt: this.computeNextRun(parsed, now),
+			};
+			this.jobs.set(id, job);
+			this.parsedCache.set(id, parsed);
+			if (job.enabled && this.runtime) {
+				try {
+					job.taskId = await this.createElizaTask(job);
+				} catch (err) {
+					logger.warn({ src: "cron", jobId: id, err: err instanceof Error ? err.message : err }, "task mirror failed");
+				}
 			}
-		}
-		this.persist();
-		this.audit({ action: "create", jobId: id, ts: now, by: job.createdBy });
-		return job;
+			await this.persist();
+			this.audit({ action: "create", jobId: id, ts: now, by: job.createdBy });
+			return job;
+		});
 	}
 
 	async updateJob(id: string, patch: CronJobUpdate): Promise<CronJob | null> {
-		const job = this.jobs.get(id);
-		if (!job) return null;
-		if (patch.schedule !== undefined) {
-			const parsed = this.parseSchedule(patch.schedule);
-			if (!parsed) throw new Error(`Invalid schedule: ${patch.schedule}`);
-			job.schedule = patch.schedule;
-			this.parsedCache.set(id, parsed);
-			job.nextRunAt = this.computeNextRun(parsed, Date.now());
-		}
-		if (patch.prompt !== undefined) job.prompt = patch.prompt;
-		if (patch.name !== undefined) job.name = patch.name;
-		if (patch.enabled !== undefined) job.enabled = patch.enabled;
-		job.updatedAt = Date.now();
-		// Sync mirror task — easier to delete + recreate than patch in place.
-		if (this.runtime && job.taskId) {
-			try {
-				await (this.runtime as unknown as { deleteTask: (id: UUID) => Promise<void> }).deleteTask(job.taskId as UUID);
-			} catch { /* row may already be gone */ }
-			job.taskId = undefined;
-		}
-		if (this.runtime && job.enabled) {
-			try {
-				job.taskId = await this.createElizaTask(job);
-			} catch (err) {
-				logger.warn({ src: "cron", jobId: id, err: err instanceof Error ? err.message : err }, "task mirror update failed");
+		return this.jobLocks.run(id, async () => {
+			const job = this.jobs.get(id);
+			if (!job) return null;
+			if (patch.schedule !== undefined) {
+				const parsed = this.parseSchedule(patch.schedule);
+				if (!parsed) throw new Error(`Invalid schedule: ${patch.schedule}`);
+				job.schedule = patch.schedule;
+				this.parsedCache.set(id, parsed);
+				job.nextRunAt = this.computeNextRun(parsed, Date.now());
 			}
-		}
-		this.persist();
-		this.audit({ action: "update", jobId: id, ts: Date.now(), patch });
-		return job;
+			if (patch.prompt !== undefined) job.prompt = patch.prompt;
+			if (patch.name !== undefined) job.name = patch.name;
+			if (patch.enabled !== undefined) job.enabled = patch.enabled;
+			job.updatedAt = Date.now();
+			// Sync mirror task — easier to delete + recreate than patch in place.
+			if (this.runtime && job.taskId) {
+				try {
+					await (this.runtime as unknown as { deleteTask: (id: UUID) => Promise<void> }).deleteTask(job.taskId as UUID);
+				} catch { /* row may already be gone */ }
+				job.taskId = undefined;
+			}
+			if (this.runtime && job.enabled) {
+				try {
+					job.taskId = await this.createElizaTask(job);
+				} catch (err) {
+					logger.warn({ src: "cron", jobId: id, err: err instanceof Error ? err.message : err }, "task mirror update failed");
+				}
+			}
+			await this.persist();
+			this.audit({ action: "update", jobId: id, ts: Date.now(), patch });
+			return job;
+		});
 	}
 
 	async deleteJob(id: string): Promise<boolean> {
-		const job = this.jobs.get(id);
-		if (!job) return false;
-		if (this.runtime && job.taskId) {
-			try {
-				await (this.runtime as unknown as { deleteTask: (id: UUID) => Promise<void> }).deleteTask(job.taskId as UUID);
-			} catch { /* best-effort */ }
-		}
-		this.jobs.delete(id);
-		this.parsedCache.delete(id);
-		this.persist();
-		this.audit({ action: "delete", jobId: id, ts: Date.now() });
-		return true;
+		return this.jobLocks.run(id, async () => {
+			const job = this.jobs.get(id);
+			if (!job) return false;
+			if (this.runtime && job.taskId) {
+				try {
+					await (this.runtime as unknown as { deleteTask: (id: UUID) => Promise<void> }).deleteTask(job.taskId as UUID);
+				} catch { /* best-effort */ }
+			}
+			this.jobs.delete(id);
+			this.parsedCache.delete(id);
+			await this.persist();
+			this.audit({ action: "delete", jobId: id, ts: Date.now() });
+			return true;
+		});
 	}
 
 	private async fire(job: CronJob): Promise<void> {
-		const now = Date.now();
-		try {
-			if (this.dispatch) await this.dispatch(job);
-			job.lastRunAt = now;
-			job.runCount += 1;
-			delete job.lastError;
-			this.audit({ action: "fire", jobId: job.id, ts: now });
-		} catch (err) {
-			job.lastError = err instanceof Error ? err.message : String(err);
-			logger.warn({ src: "cron", jobId: job.id, err: job.lastError }, "cron job dispatch failed");
-			this.audit({ action: "fire-failed", jobId: job.id, ts: now, error: job.lastError });
-		}
-		const parsed = this.parsed(job);
-		if (parsed) job.nextRunAt = this.computeNextRun(parsed, now + 1);
-		this.persist();
+		await this.jobLocks.run(job.id, async () => {
+			const now = Date.now();
+			try {
+				if (this.dispatch) await this.dispatch(job);
+				job.lastRunAt = now;
+				job.runCount += 1;
+				delete job.lastError;
+				this.audit({ action: "fire", jobId: job.id, ts: now });
+			} catch (err) {
+				job.lastError = err instanceof Error ? err.message : String(err);
+				logger.warn({ src: "cron", jobId: job.id, err: job.lastError }, "cron job dispatch failed");
+				this.audit({ action: "fire-failed", jobId: job.id, ts: now, error: job.lastError });
+			}
+			const parsed = this.parsed(job);
+			if (parsed) job.nextRunAt = this.computeNextRun(parsed, now + 1);
+			await this.persist();
+		});
 	}
 
 	private async createElizaTask(job: CronJob): Promise<string> {
@@ -416,18 +437,24 @@ export class CronService {
 		}
 	}
 
-	private persist(): void {
-		try {
-			if (!existsSync(CRON_DIR)) mkdirSync(CRON_DIR, { recursive: true });
-			const store: CronStore = {
-				version: 1,
-				jobs: Array.from(this.jobs.values()),
-				...(this.defaultsSeededAt ? { defaultsSeededAt: this.defaultsSeededAt } : {}),
-			};
-			writeFileSync(CRON_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
-		} catch (err) {
-			logger.warn({ src: "cron", err: err instanceof Error ? err.message : err }, "cron persist failed");
-		}
+	private persist(): Promise<void> {
+		// Serialize the actual writer so two near-simultaneous mutations don't
+		// race on the read→write cycle. The Map snapshot inside `run()` is
+		// taken at the moment the lock fires, so each persisted file reflects
+		// the state after that mutation completed.
+		return this.persistLock.run(async () => {
+			try {
+				if (!existsSync(CRON_DIR)) mkdirSync(CRON_DIR, { recursive: true });
+				const store: CronStore = {
+					version: 1,
+					jobs: Array.from(this.jobs.values()),
+					...(this.defaultsSeededAt ? { defaultsSeededAt: this.defaultsSeededAt } : {}),
+				};
+				writeFileSync(CRON_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
+			} catch (err) {
+				logger.warn({ src: "cron", err: err instanceof Error ? err.message : err }, "cron persist failed");
+			}
+		});
 	}
 
 	private audit(record: Record<string, unknown>): void {

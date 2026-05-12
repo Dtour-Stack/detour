@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { logger } from "../logger";
 import type { Component, Entity, Relationship } from "../types/environment";
+import type { Memory, MemoryMetadata } from "../types/memory";
 import type {
 	ChannelType,
 	JsonValue,
@@ -108,6 +109,8 @@ export interface ContactInfo {
 	lastInteractionAt?: string;
 	relationshipGoal?: RelationshipGoal;
 	relationshipStatus: RelationshipStatus;
+	trackingEnabled: boolean;
+	trackedAt?: string;
 }
 
 /** Max interactions kept in contact component to avoid unbounded growth. */
@@ -181,6 +184,8 @@ function contactInfoToMetadata(contactInfo: ContactInfo): Metadata {
 		lastInteractionAt: contactInfo.lastInteractionAt,
 		relationshipGoal: contactInfo.relationshipGoal as unknown as MetadataValue,
 		relationshipStatus: contactInfo.relationshipStatus,
+		trackingEnabled: contactInfo.trackingEnabled,
+		trackedAt: contactInfo.trackedAt,
 	};
 }
 
@@ -310,7 +315,61 @@ function metadataToContactInfo(data: Metadata): ContactInfo {
 				: undefined,
 		relationshipGoal: parseRelationshipGoal(data.relationshipGoal),
 		relationshipStatus: parseRelationshipStatus(data.relationshipStatus),
+		trackingEnabled: data.trackingEnabled === true,
+		trackedAt: typeof data.trackedAt === "string" ? data.trackedAt : undefined,
 	};
+}
+
+function mergeUniqueStrings(...groups: Array<Iterable<string> | undefined>): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const group of groups) {
+		if (!group) continue;
+		for (const value of group) {
+			const trimmed = value.trim();
+			if (!trimmed || seen.has(trimmed)) continue;
+			seen.add(trimmed);
+			out.push(trimmed);
+		}
+	}
+	return out;
+}
+
+function metadataStringValues(
+	customFields: Record<string, JsonValue>,
+	keys: string[],
+): string[] {
+	const out: string[] = [];
+	for (const key of keys) {
+		const value = customFields[key];
+		if (typeof value === "string") {
+			out.push(value);
+		} else if (Array.isArray(value)) {
+			for (const item of value) {
+				if (typeof item === "string") out.push(item);
+			}
+		}
+	}
+	return out;
+}
+
+function normalizeLookupValue(value: string): string {
+	return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function textMentionsTerm(text: string, term: string): boolean {
+	const normalizedText = normalizeLookupValue(text);
+	const normalizedTerm = normalizeLookupValue(term).replace(/^@+/, "");
+	if (normalizedTerm.length < 3) return false;
+	if (normalizedTerm.includes("@") || normalizedTerm.includes("+") || normalizedTerm.includes(".")) {
+		return normalizedText.includes(normalizedTerm);
+	}
+	const pattern = new RegExp(`(^|\\b)@?${escapeRegExp(normalizedTerm)}(\\b|$)`, "i");
+	return pattern.test(normalizedText);
 }
 
 export interface RelationshipAnalytics {
@@ -708,12 +767,43 @@ export class RelationshipsService extends Service {
 
 		// Load existing contact info from components
 		await this.loadContactInfoFromComponents();
+		if (typeof this.runtime.registerPipelineHook === "function") {
+			this.runtime.registerPipelineHook({
+				id: "relationships:tracked-contact-memory",
+				phase: "after_memory_persisted",
+				schedule: "serial",
+				mutatesPrimary: false,
+				handler: async (_runtime, ctx) => {
+					if (ctx.phase !== "after_memory_persisted") return;
+					try {
+						await this.captureTrackedContactMemory(
+							ctx.memory,
+							ctx.tableName,
+							ctx.memoryId,
+						);
+					} catch (err) {
+						logger.warn(
+							{
+								src: "relationships:tracked-contact-memory",
+								err: err instanceof Error ? err.message : err,
+							},
+							"[RelationshipsService] tracked contact capture failed",
+						);
+					}
+				},
+			});
+		}
 
 		// Service initialized
 		logger.info("[RelationshipsService] Initialized successfully");
 	}
 
 	async stop(): Promise<void> {
+		if (typeof this.runtime?.unregisterPipelineHook === "function") {
+			this.runtime.unregisterPipelineHook(
+				"relationships:tracked-contact-memory",
+			);
+		}
 		// Clean up caches
 		this.contactInfoCache.clear();
 		this.analyticsCache.clear();
@@ -784,6 +874,7 @@ export class RelationshipsService extends Service {
 			handles: [],
 			interactions: [],
 			relationshipStatus: "active",
+			trackingEnabled: false,
 		};
 
 		// Save as component
@@ -915,11 +1006,31 @@ export class RelationshipsService extends Service {
 		return true;
 	}
 
+	async setContactTracking(
+		entityId: UUID,
+		trackingEnabled: boolean,
+	): Promise<ContactInfo> {
+		const existing =
+			(await this.getContact(entityId)) ??
+			(await this.addContact(entityId, ["contact"]));
+		const updated = await this.updateContact(entityId, {
+			trackingEnabled,
+			trackedAt: trackingEnabled
+				? existing.trackedAt ?? new Date().toISOString()
+				: undefined,
+		});
+		if (!updated) {
+			throw new Error(`Contact ${entityId} not found`);
+		}
+		return updated;
+	}
+
 	async searchContacts(criteria: {
 		categories?: string[];
 		tags?: string[];
 		searchTerm?: string;
 		privacyLevel?: string;
+		trackingEnabled?: boolean;
 	}): Promise<ContactInfo[]> {
 		const results: ContactInfo[] = [];
 
@@ -942,6 +1053,10 @@ export class RelationshipsService extends Service {
 			// Check privacy level
 			if (criteria.privacyLevel) {
 				matches = matches && contactInfo.privacyLevel === criteria.privacyLevel;
+			}
+
+			if (typeof criteria.trackingEnabled === "boolean") {
+				matches = matches && contactInfo.trackingEnabled === criteria.trackingEnabled;
 			}
 
 			if (matches) {
@@ -1446,6 +1561,121 @@ export class RelationshipsService extends Service {
 		return interaction;
 	}
 
+	private async captureTrackedContactMemory(
+		memory: Memory,
+		tableName: string,
+		memoryId: UUID,
+	): Promise<void> {
+		const trackedContacts = Array.from(this.contactInfoCache.values()).filter(
+			(contact) => contact.trackingEnabled,
+		);
+		if (trackedContacts.length === 0) return;
+
+		const text = typeof memory.content?.text === "string" ? memory.content.text : "";
+		const matches: Array<{ contact: ContactInfo; entity: Entity | null; bySender: boolean }> = [];
+		for (const contact of trackedContacts) {
+			const entity = await this.runtime.getEntityById(contact.entityId);
+			const bySender = await this.memoryBelongsToContact(memory, contact);
+			const byMention = text.length > 0 && this.memoryMentionsContact(text, contact, entity);
+			if (bySender || byMention) {
+				matches.push({ contact, entity, bySender });
+			}
+		}
+		if (matches.length === 0) return;
+
+		const trackedContactEntityIds = mergeUniqueStrings(
+			matches.map((match) => match.contact.entityId),
+		);
+		const trackedContactNames = mergeUniqueStrings(
+			matches.flatMap((match) => match.entity?.names ?? []),
+			matches.map((match) => getContactDisplayName(match.contact)).filter(
+				(name): name is string => Boolean(name),
+			),
+		);
+		const latest = await this.runtime.getMemoryById(memoryId);
+		const memoryForMeta = latest ?? memory;
+		const existingMetadata =
+			memoryForMeta.metadata && typeof memoryForMeta.metadata === "object"
+				? { ...(memoryForMeta.metadata as Record<string, unknown>) }
+				: {};
+		const existingTags = Array.isArray(existingMetadata.tags)
+			? existingMetadata.tags.filter((tag): tag is string => typeof tag === "string")
+			: [];
+		await this.runtime.updateMemory({
+			id: memoryId,
+			metadata: {
+				...existingMetadata,
+				tags: mergeUniqueStrings(existingTags, ["tracked-contact"]),
+				trackedContactEntityIds,
+				trackedContactNames,
+				trackedContactTable: tableName,
+				trackedContactCapturedAt: Date.now(),
+			} as MemoryMetadata,
+		});
+
+		if (tableName !== "messages") return;
+		const platform = this.memoryPlatform(memory);
+		for (const match of matches) {
+			await this.recordInteraction({
+				contactId: match.contact.entityId,
+				platform,
+				direction: match.bySender ? "inbound" : "outbound",
+				summary: text.length > 180 ? `${text.slice(0, 180)}…` : text,
+				externalRef: String(memoryId),
+				occurredAt: new Date(
+					typeof memory.createdAt === "number" ? memory.createdAt : Date.now(),
+				).toISOString(),
+			});
+		}
+	}
+
+	private async memoryBelongsToContact(
+		memory: Memory,
+		contact: ContactInfo,
+	): Promise<boolean> {
+		if (!memory.entityId) return false;
+		if (memory.entityId === contact.entityId) return true;
+		const members = await this.getMemberEntityIds(contact.entityId);
+		return members.includes(memory.entityId);
+	}
+
+	private memoryMentionsContact(
+		text: string,
+		contact: ContactInfo,
+		entity: Entity | null,
+	): boolean {
+		const terms = mergeUniqueStrings(
+			entity?.names,
+			metadataStringValues(contact.customFields, [
+				"displayName",
+				"preferredName",
+				"nickname",
+				"nicknames",
+				"alias",
+				"aliases",
+				"username",
+				"usernames",
+				"handle",
+				"handles",
+			]),
+			contact.handles.map((handle) => handle.identifier),
+		);
+		return terms.some((term) => textMentionsTerm(text, term));
+	}
+
+	private memoryPlatform(memory: Memory): string {
+		const content = memory.content as Record<string, unknown>;
+		const metadata =
+			memory.metadata && typeof memory.metadata === "object"
+				? (memory.metadata as Record<string, unknown>)
+				: {};
+		const source = content.source ?? metadata.source ?? metadata.provider;
+		if (typeof source === "string" && source.trim().length > 0) {
+			return source.trim().toLowerCase();
+		}
+		return "unknown";
+	}
+
 	/**
 	 * Find a contact by one of its platform handles. Match is case-insensitive
 	 * on identifier; platform is normalized to lowercase.
@@ -1547,6 +1777,8 @@ export class RelationshipsService extends Service {
 				primary.followupThresholdDays ?? secondary.followupThresholdDays,
 			customFields: { ...secondary.customFields, ...primary.customFields },
 			preferences: { ...secondary.preferences, ...primary.preferences },
+			trackingEnabled: primary.trackingEnabled || secondary.trackingEnabled,
+			trackedAt: primary.trackedAt ?? secondary.trackedAt,
 		};
 
 		await this.persistContactInfo(merged);
@@ -1853,7 +2085,7 @@ export class RelationshipsService extends Service {
 		// entity, surface — and possibly accept — a merge candidate.
 		if (
 			confidence >= AUTO_MERGE_CONFIDENCE_THRESHOLD &&
-			dedupedEvidence.length >= AUTO_MERGE_MIN_EVIDENCE
+			(verified || dedupedEvidence.length >= AUTO_MERGE_MIN_EVIDENCE)
 		) {
 			const collisions = await this.findEntitiesByIdentity(platform, handle);
 			for (const otherEntityId of collisions) {

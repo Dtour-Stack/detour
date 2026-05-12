@@ -11,7 +11,8 @@
     "build:canary": "electrobun build --env=canary",
     "build:stable": "electrobun build --env=stable",
     "typecheck": "tsc --noEmit",
-    "build:eliza": "bun run --cwd eliza/packages/shared build:i18n && bun run --cwd eliza/packages/core build && bun run --cwd eliza/packages/shared build:dist && bun run --cwd eliza/packages/vault build && bun run --cwd eliza/packages/skills build && bun run --cwd eliza/plugins/plugin-sql build && bun run --cwd eliza/plugins/plugin-anthropic build && bun run --cwd eliza/plugins/plugin-openai build && bun run --cwd eliza/plugins/plugin-imessage build && bun run --cwd eliza/plugins/plugin-discord build && bun run --cwd eliza/plugins/plugin-coding-tools build && bun run --cwd eliza/plugins/plugin-agent-orchestrator build && (cd eliza/plugins/plugin-pdf && bun run build.ts) && (cd eliza/plugins/plugin-elizacloud && bun run build.ts) && (cd eliza/plugins/plugin-github && bunx tsup src/index.ts src/register-routes.ts --format esm --no-dts --clean) && (cd eliza/plugins/plugin-telegram && bunx tsup --no-dts)"
+    "verify:phantom-extension": "bun run scripts/verify-phantom-extension.ts",
+    "build:eliza": "bun run --cwd eliza/packages/shared build:i18n && bun run --cwd eliza/packages/core build && bun run --cwd eliza/packages/shared build:dist && bun run --cwd eliza/packages/vault build && bun run --cwd eliza/packages/skills build && bun run --cwd eliza/plugins/plugin-sql build && bun run --cwd eliza/plugins/plugin-anthropic build && bun run --cwd eliza/plugins/plugin-openai build && bun run --cwd eliza/plugins/plugin-imessage build && bun run --cwd eliza/plugins/plugin-discord build && bun run --cwd eliza/plugins/plugin-coding-tools build && bun run --cwd eliza/plugins/plugin-agent-skills build && bun run --cwd eliza/plugins/plugin-agent-orchestrator build && (cd eliza/plugins/plugin-pdf && bun run build.ts) && (cd eliza/plugins/plugin-elizacloud && bun run build.ts) && (cd eliza/plugins/plugin-github && bunx tsup src/index.ts src/register-routes.ts --format esm --no-dts --clean) && bun run --cwd eliza/plugins/plugin-telegram build"
   },
   "dependencies": {
     "@electric-sql/pglite": "*",
@@ -32,13 +33,17 @@
     "@elizaos/vault": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@napi-rs/keyring": "^1.3.0",
+    "@phantom/browser-sdk": "^2.0.2",
+    "@phantom/react-sdk": "^2.0.2",
+    "@solana/web3.js": "^1.98.4",
     "drizzle-orm": "0.45.2",
     "electrobun": "1.18.1",
     "monaco-editor": "^0.55.1",
     "portless": "^0.13.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "uuid": "^11.0.0"
+    "uuid": "^11.0.0",
+    "viem": "^2.48.11"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -47,6 +52,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "bun-types": "^1.3.0",
+    "playwright": "1.50.1",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
   },

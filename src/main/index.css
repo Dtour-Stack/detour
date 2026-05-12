@@ -642,6 +642,28 @@ body {
 .pensieve-list-row.active { background: var(--accent-soft); border-color: var(--accent); }
 .pensieve-list-row-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pensieve-list-row-preview { font-size: 12px; line-height: 1.4; color: var(--fg); margin-top: 4px; }
+.pensieve-person-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 0;
+	cursor: default;
+}
+.pensieve-person-main {
+	flex: 1;
+	min-width: 0;
+	padding: 9px 11px;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.pensieve-person-row > .btn {
+	margin: 8px 8px 0 0;
+	white-space: nowrap;
+}
 
 /* Detail panel */
 .pensieve-detail {

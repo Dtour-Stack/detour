@@ -14,10 +14,11 @@ import { LocalAITab } from "./LocalAITab";
 import { ElizaCloudTab } from "./ElizaCloudTab";
 import { CloudAppsTab } from "./CloudAppsTab";
 import { CloudContainersTab } from "./CloudContainersTab";
+import { PhantomWalletTab } from "./PhantomWalletTab";
 
 type Section = "configuration" | "vault" | "cloud";
 
-type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "character" | "agent" | "os" | "window";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "character" | "agent" | "os" | "window" | "phantom";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 type CloudTab = "elizacloud" | "apps" | "containers";
 
@@ -28,6 +29,7 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "local-ai", label: "Local AI" },
 	{ id: "character", label: "Agent Character" },
 	{ id: "agent", label: "Agent Permissions" },
+	{ id: "phantom", label: "Phantom wallet" },
 	{ id: "os", label: "OS Permissions" },
 	{ id: "window", label: "Window" },
 ];
@@ -58,6 +60,8 @@ function ConfigContent({ tab }: { tab: ConfigTab }) {
 			return <AgentCharacterTab />;
 		case "agent":
 			return <AgentPermissionsTab />;
+		case "phantom":
+			return <PhantomWalletTab />;
 		case "os":
 			return <OsPermissionsTab />;
 		case "window":

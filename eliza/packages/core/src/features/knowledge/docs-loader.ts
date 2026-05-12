@@ -85,7 +85,7 @@ export async function loadDocsFromPath(
 				metadata: options?.metadata,
 			});
 
-			logger.info(
+			logger.debug(
 				`✅ "${fileName}": ${result.fragmentCount} fragments created`,
 			);
 			successful++;
@@ -95,7 +95,7 @@ export async function loadDocsFromPath(
 		}
 	}
 
-	logger.info(
+	logger.debug(
 		`Document loading complete: ${successful} successful, ${failed} failed out of ${files.length} total`,
 	);
 

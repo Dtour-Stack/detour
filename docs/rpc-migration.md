@@ -1,9 +1,10 @@
 # HTTP/WS → typed RPC migration
 
-Per [.claude/rules/electrobun.md](../.claude/rules/electrobun.md): "IPC between
-bun and browser contexts uses postMessage, FFI" via typed RPC, NOT a custom
-HTTP server. Detour started with HTTP fetch + WebSocket and is migrating in
-phases — both layers coexist until the last endpoint moves.
+Status: **complete for product traffic.** Per
+[.claude/rules/electrobun.md](../.claude/rules/electrobun.md), IPC between
+bun and browser contexts uses postMessage + FFI via typed RPC, not a custom
+HTTP server. The migration finished in phases; only three intentional HTTP
+routes remain (see "Remaining HTTP surface" below).
 
 ## Architecture
 
@@ -14,16 +15,16 @@ Bun main process (src/bun/)                     Webview (src/main/)
 src/bun/core/rpc/registry.ts        ◄────RPC────►  src/main/rpc.ts
   buildRpcHandlers(deps)                            Electroview.defineRPC<DetourRPC>
   broadcaster.broadcast(name, payload)              messages: buildViewListeners()
-  bridgeWsToRpc(api) ────translates WS pushes─────► (per-feature subscribers in
-                                                       src/main/rpc-listeners/*)
 
-src/bun/core/api/server.ts                       src/main/api/client.ts
-  Bun.serve / fetch routes         ◄─HTTP/WS─►   WebClient (legacy, shrinking)
+src/bun/core/api/server.ts                       (no view-side client)
+  GET  /api/health           — liveness probe
+  POST /api/debug/action     — dev-only action invocation
+  POST /api/debug/embedding  — embedding-pipeline diagnostic
 ```
 
 Schema lives at [src/shared/rpc/](../src/shared/rpc/) — one file per feature
-group, composed in [src/shared/rpc/index.ts](../src/shared/rpc/index.ts).
-Single source of truth for both sides.
+group, composed in [src/shared/rpc/index.ts](../src/shared/rpc/index.ts). The
+schema is the single source of truth for both sides.
 
 ## Adding a method (canonical pattern)
 
@@ -51,13 +52,9 @@ Single source of truth for both sides.
    Then spread into `buildRpcHandlers` in
    [src/bun/core/rpc/registry.ts](../src/bun/core/rpc/registry.ts).
 
-3. **Call site** — replace `client.myMethod(...)` with
-   `rpc.request.myMethod({ id })` in `src/main/`.
+3. **Call site** — `rpc.request.myMethod({ id })` in `src/main/`.
 
-4. **HTTP route** — once all call sites move, delete the corresponding
-   route in [src/bun/core/api/server.ts](../src/bun/core/api/server.ts).
-
-## Adding a server-push message (replaces WS broadcast)
+## Adding a server-push message
 
 1. **Schema** — add to `src/shared/rpc/<group>.ts`:
    ```ts
@@ -67,18 +64,17 @@ Single source of truth for both sides.
    ```
    Intersect into `DetourBunMessages` in `src/shared/rpc/index.ts`.
 
-2. **Bridge entry** — translate the legacy WS `kind` to the RPC name in
-   `translateWsToRpc` in
-   [src/bun/core/rpc/registry.ts](../src/bun/core/rpc/registry.ts):
+2. **Emit** — from any service holding `deps.broadcaster`:
    ```ts
-   case "thing:changed":
-     return { name: "thingChanged", payload: { id: msg.id } };
+   deps.broadcaster.broadcast("thingChanged", { id });
    ```
-   Now every `api.publish({kind: "thing:changed", ...})` site automatically
-   reaches webviews via typed RPC AND legacy WS — no behavioral change
-   until WS is deleted.
+   The broadcaster fans the message out to every registered webview via the
+   electrobun postMessage bridge and evicts any dead send handle it
+   discovers along the way.
 
-3. **View listener** — add to `src/main/rpc-listeners/<group>.ts`:
+3. **View listener** — add to `src/main/rpc-listeners/<group>.ts`, then
+   spread into `buildViewListeners` in
+   [src/main/rpc-listeners/index.ts](../src/main/rpc-listeners/index.ts):
    ```ts
    const subscribers = new Set<Listener>();
    export function on<Thing>Changed(listener: Listener) { ... }
@@ -86,86 +82,32 @@ Single source of truth for both sides.
      return { thingChanged: (payload) => { for (const fn of subscribers) fn(payload); } };
    }
    ```
-   Then spread into `buildViewListeners` in
-   [src/main/rpc-listeners/index.ts](../src/main/rpc-listeners/index.ts).
 
-4. **Replace WS subscription** — components that did
-   `client.on((m) => { if (m.kind === "thing:changed") ... })` switch to
-   `on<Thing>Changed((payload) => ...)`.
+## Remaining HTTP surface
 
-5. **Delete WS publish** — once all call sites use the RPC subscriber,
-   replace `api.publish({kind: "thing:changed", ...})` with
-   `deps.broadcaster.broadcast("thingChanged", ...)` directly. Remove the
-   bridge entry. Eventually delete the WsServerMessage variant.
+These three routes are kept on HTTP **by design**, not awaiting migration:
 
-## Migrated
-
-| Group | Status | Verified |
+| Route | Purpose | Why HTTP |
 |---|---|---|
-| `vaultListBackends` | ✓ | ✓ |
-| `provider:changed` (WS→RPC bridge active) | ✓ bridge | not yet via RPC |
+| `GET /api/health` | Liveness probe + version | external tooling pings this; needs to work even when no webview is open |
+| `POST /api/debug/action` | Invoke an action by name (dev builds only) | bypasses the LLM action selector — used from `curl` during plugin development |
+| `POST /api/debug/embedding` | End-to-end embedding-pipeline diagnostic | intentionally bypasses RPC plumbing so it can detect mounting issues that would also break RPC |
 
-## Outstanding HTTP endpoints
+`/api/debug/*` are gated to Detour-dev.app builds (or
+`DETOUR_ALLOW_DEBUG_API=1`) and are not exposed in canary/stable artifacts.
 
-- `/api/health`
-- `/api/providers`, `/api/providers/active`, `/api/providers/openrouter/models`
-- `/api/auth/providers`, `/api/auth/accounts`, `/api/auth/flows/*`
-- `/api/backends/enabled`, `/api/backends/install`, `/api/backends/<id>/{signin,signout,diagnose}`
-- `/api/vault/{inventory,stats,keys}`
-- `/api/saved-logins`, `/api/saved-logins/<source>/<id>`
-- `/api/config/{models,window,agent,character}`
-- `/api/ui/preferences`
-- `/api/llama/status`, `/api/llama/restart`, `/api/llama/download-progress`
-- `/api/external/open`
-- `/api/window/{hide,pin,resize}`
-- `/api/browser/commands`, `/api/browser/permissions`
-- `/api/cron/*`
-- `/api/pensieve/*` (templates, template-vars, memories, knowledge,
-  embedding-map, chronicler, relationships, graph)
-- `/api/activity/*` (logs, runtime, trajectories, tasks, autonomy, plugins, db)
-- `/api/channels/*`, `/api/channels/discord/{guilds,backfill,catch-up}`
-- `/api/portless/*`
-- `/api/owner-bind/*`
-- `/api/inbox/*`, `/api/gateway/{feed,identities}`
-- `/api/os/permissions`, `/api/os/permissions/<id>/open`
-- `/api/routing`
-- `/api/debug/action` (dev-only — stays HTTP per design)
+The legacy WS push channel (`api.publish({kind})`) is **fully removed**.
+Every former WS push is now `broadcaster.broadcast(name, payload)` with a
+typed schema. There is no WS→RPC bridge left to maintain.
 
-## WS messages still active (bridged or pending)
+## State invariants
 
-- `chat:delta`, `chat:complete`, `chat:error` — chat streaming, OUT OF SCOPE
-  for current migration phase
-- `provider:changed` — bridged to `providerChanged`
-- `auth:flow-update` — pending (providers+auth migration)
-- `backend:changed` — bridged to `backendChanged`
-- `ui:open-settings`, `ui:open-browser` — pending (window/UI migration)
-- `browser:command` — pending (browser migration)
-- `ui:preferences-changed` — pending (config migration)
-
-## Migration order
-
-Phase 1 work (this session, parallel agents in worktrees):
-1. **vault remainder** — `/api/backends/enabled`, `/api/backends/install`,
-   `/api/backends/<id>/{signin,signout,diagnose}`, `/api/vault/*`,
-   `/api/saved-logins/*`
-2. **config** — `/api/config/{models,window,agent,character}`,
-   `/api/ui/preferences`
-3. **providers + auth** — `/api/providers/*`, `/api/auth/*`; first
-   `auth:flow-update` server-push migration
-4. **llama + window + external** — small leaves
-5. **channels** — channels/credentials/discord
-6. **pensieve** — large surface
-7. **activity** — large surface
-8. **browser** — browser/commands, browser/permissions
-9. **cron + owner-bind + inbox + gateway** — small surfaces
-10. **portless + os** — independent
-
-Out of scope this session: chat streaming, `/api/debug/action`.
-
-## Why phased
-
-- ~80 HTTP endpoints + ~10 WS message kinds. One mega-PR is unreviewable.
-- WebClient is used in ~50 places across `src/main/`. Updating all together
-  risks breakage with no rollback granularity.
-- Phased migration keeps both paths working; each phase ends with a verified
-  reduced HTTP surface.
+- `RuntimeService.build` / `rebuild` is serialized through
+  `enqueueSerializedBuild` — no overlapping initialization races.
+- `CronService`, `InboxService`, and `ChannelGatewayService` use per-key
+  async locks (see `src/bun/core/async-lock.ts`) for the in-memory state
+  they hold behind disk persistence (jobs map, status overrides, identity
+  records). This replaces ad-hoc Promise-chain locks.
+- `broadcaster` snapshots its `openWindows` set on each call and evicts
+  send handles that throw, so a torn-down window can't poison subsequent
+  broadcasts.

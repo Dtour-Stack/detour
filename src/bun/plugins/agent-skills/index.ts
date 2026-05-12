@@ -25,7 +25,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Action, ActionResult, Handler, IAgentRuntime, Plugin, Provider, ProviderResult, State, Memory } from "@elizaos/core";
 import { getSkillsDir, loadSkillsFromDir, stripFrontmatter, type Skill } from "@elizaos/skills";
 
@@ -48,8 +47,9 @@ function loadCatalog(): Map<string, Skill> {
 	if (cachedSkills) return cachedSkills;
 	const out = new Map<string, Skill>();
 	try {
-		const root = getSkillsDir();
-		const skillsDir = join(root, "skills");
+		// getSkillsDir() is the bundled skills root (…/packages/skills/skills),
+		// not the package root — do not append "/skills" again.
+		const skillsDir = getSkillsDir();
 		const result = loadSkillsFromDir({ dir: skillsDir, source: "bundled" });
 		for (const skill of result.skills) {
 			if (ENABLED_SKILLS.includes(skill.name as typeof ENABLED_SKILLS[number])) {

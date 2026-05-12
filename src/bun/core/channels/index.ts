@@ -47,7 +47,10 @@ function invalidChannelCredential(id: ChannelId, key: string, value: string): Ch
 	return null;
 }
 
-function settingField<K extends "autoReply" | "respondOnlyToMentions">(key: K, value: boolean | undefined): Pick<ChannelStatus, K> | {} {
+function settingField<K extends "autoReply" | "respondOnlyToMentions" | "continuousImprovementEnabled">(
+	key: K,
+	value: boolean | undefined,
+): Pick<ChannelStatus, K> | {} {
 	return value === undefined ? {} : { [key]: value } as Pick<ChannelStatus, K>;
 }
 
@@ -284,7 +287,13 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		label: "Telegram",
 		description: "Connect a Telegram bot. Required: TELEGRAM_BOT_TOKEN.",
 		requiredVaultKeys: ["TELEGRAM_BOT_TOKEN"],
-		optionalVaultKeys: ["TELEGRAM_AUTO_REPLY"],
+		optionalVaultKeys: [
+			"TELEGRAM_AUTO_REPLY",
+			"TELEGRAM_ALLOWED_CHATS",
+			"TELEGRAM_API_ROOT",
+			"CONTINUOUS_IMPROVEMENT_ENABLED",
+			"CONTINUOUS_IMPROVEMENT_INTERVAL_MS",
+		],
 		platform: "any",
 		pluginPackage: "@elizaos/plugin-telegram",
 		loadPlugin: loadTelegram,
@@ -338,6 +347,7 @@ export interface ChannelStatus {
 	liveDetail?: string;
 	autoReply?: boolean;
 	respondOnlyToMentions?: boolean;
+	continuousImprovementEnabled?: boolean;
 }
 
 export interface ChannelsSnapshot {
@@ -381,6 +391,20 @@ export class ChannelsService {
 		return undefined;
 	}
 
+	private async boolSettingWithVault(runtime: IAgentRuntime | null, key: string): Promise<boolean | undefined> {
+		const fromRt = this.boolSetting(runtime, key);
+		if (fromRt !== undefined) return fromRt;
+		const v = await this.vault.vault();
+		if (!(await v.has(key))) return undefined;
+		try {
+			const raw = await v.get(key);
+			const normalized = raw.trim().toLowerCase();
+			if (["true", "1", "yes", "on"].includes(normalized)) return true;
+			if (["false", "0", "no", "off"].includes(normalized)) return false;
+		} catch { /* ignore */ }
+		return undefined;
+	}
+
 	async snapshot(loadedPlugins: string[] = [], runtime: IAgentRuntime | null = null): Promise<ChannelsSnapshot> {
 		const loadedSet = new Set(loadedPlugins.map((s) => s.toLowerCase()));
 		const channels = await Promise.all(CHANNEL_DEFINITIONS.map((def) => this.channelStatus(def, loadedSet, runtime)));
@@ -406,7 +430,7 @@ export class ChannelsService {
 			pluginLoaded,
 			liveStatus: live.liveStatus,
 			...(live.liveDetail ? { liveDetail: live.liveDetail } : {}),
-			...this.channelRuntimeSettings(def, runtime),
+			...(await this.channelRuntimeSettings(def, runtime)),
 		};
 	}
 
@@ -447,14 +471,21 @@ export class ChannelsService {
 		return null;
 	}
 
-	private channelRuntimeSettings(def: ChannelDefinition, runtime: IAgentRuntime | null): Partial<ChannelStatus> {
+	private async channelRuntimeSettings(def: ChannelDefinition, runtime: IAgentRuntime | null): Promise<Partial<ChannelStatus>> {
 		if (def.id === "discord") {
 			return {
 				...settingField("autoReply", this.boolSetting(runtime, "DISCORD_AUTO_REPLY")),
 				...settingField("respondOnlyToMentions", this.boolSetting(runtime, "DISCORD_SHOULD_RESPOND_ONLY_TO_MENTIONS")),
 			};
 		}
-		if (def.id === "telegram") return settingField("autoReply", this.boolSetting(runtime, "TELEGRAM_AUTO_REPLY"));
+		if (def.id === "telegram") {
+			const autoReply = (await this.boolSettingWithVault(runtime, "TELEGRAM_AUTO_REPLY")) ?? true;
+			const continuousImprovementEnabled = (await this.boolSettingWithVault(runtime, "CONTINUOUS_IMPROVEMENT_ENABLED")) ?? true;
+			return {
+				...settingField("autoReply", autoReply),
+				...settingField("continuousImprovementEnabled", continuousImprovementEnabled),
+			};
+		}
 		return {};
 	}
 

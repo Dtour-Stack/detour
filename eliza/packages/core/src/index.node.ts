@@ -62,6 +62,7 @@ export * from "./network";
 export { getOptimizationRootDir } from "./optimization-root-dir";
 export * from "./plugin";
 export * from "./plugins";
+export * from "./planner-reply-context";
 
 export * from "./prompts";
 // Export onboarding providers

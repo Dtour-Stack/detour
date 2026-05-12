@@ -37,6 +37,7 @@ import { agentProjectsRequests } from "./handlers/agent-projects";
 import { githubChannelRequests } from "./handlers/github-channel";
 import { tasksRequests } from "./handlers/tasks";
 import { petsRequests, petsMessages } from "./handlers/pets";
+import { phantomRequests } from "./handlers/phantom";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
 type SendFn = (name: string, payload: unknown) => void;
@@ -47,14 +48,25 @@ const openWindows = new Set<SendFn>();
  * The global broadcaster instance — handed to every handler factory
  * via deps. Iterates registered window send fns. Safe to call from
  * service event listeners; no-op if no windows are open yet.
+ *
+ * A failing send (window torn down between broadcasts and the unregister
+ * callback firing) auto-evicts the entry so we don't spam every
+ * subsequent broadcast with the same `[rpc] broadcast(...) failed` line.
  */
 export const broadcaster: RpcBroadcaster = {
 	broadcast(name, payload) {
-		for (const send of openWindows) {
+		// Snapshot the set so an eviction inside the loop can't perturb
+		// JS's "modify during iteration" semantics (skip / repeat).
+		const targets = [...openWindows];
+		for (const send of targets) {
 			try {
 				send(name, payload);
 			} catch (err) {
-				console.warn(`[rpc] broadcast(${name}) failed:`, err instanceof Error ? err.message : err);
+				openWindows.delete(send);
+				console.warn(
+					`[rpc] broadcast(${name}) failed; dropped dead window:`,
+					err instanceof Error ? err.message : err,
+				);
 			}
 		}
 	},
@@ -62,7 +74,9 @@ export const broadcaster: RpcBroadcaster = {
 
 export function registerWindow(send: SendFn): () => void {
 	openWindows.add(send);
-	return () => openWindows.delete(send);
+	return () => {
+		openWindows.delete(send);
+	};
 }
 
 /**
@@ -96,6 +110,7 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...githubChannelRequests(deps),
 			...tasksRequests(deps),
 			...petsRequests(deps),
+			...phantomRequests(deps),
 		},
 		// View→bun fire-and-forget messages (the webview side of the
 		// schema). logWebview routes console/error forwarding into

@@ -33,10 +33,9 @@ import type { RpcDeps } from "../types";
  *   2. Functions receive `deps` (RpcDeps) — no service singletons.
  *   3. Each function returns a typed bag of handlers; registry
  *      composes them.
- *   4. Server-push messages flow through `deps.broadcaster.broadcast(...)`
- *      OR via the WS→RPC bridge in registry.ts (which translates legacy
- *      `api.publish({kind: ...})` calls to typed RPC pushes — that's the
- *      transitional layer until HTTP/WS is fully removed).
+ *   4. Server-push messages flow through `deps.broadcaster.broadcast(...)`.
+ *      The WS→RPC bridge layer was removed; broadcaster is now the only
+ *      bun→view push path.
  */
 
 const VALID_BACKEND_IDS = new Set<BackendId>([

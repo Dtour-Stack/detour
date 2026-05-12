@@ -128,4 +128,30 @@ describe("dpe fallback patch", () => {
 
 		expect(result).toBeNull();
 	});
+
+	test("falls back for addressed Telegram planner failure", async () => {
+		const { runtime, calls } = makeRuntime(async () => {
+			throw new Error("planner failed");
+		});
+
+		const result = await runWithPlannerFallbackContext(
+			{ source: "telegram", addressed: true },
+			() => runtime.dynamicPromptExecFromState(plannerArgs),
+		);
+
+		expect(calls).toEqual(["original", "model"]);
+		expect(result?.text).toBe("plain reply");
+	});
+
+	test("does not force plain replies for unaddressed Telegram groups", async () => {
+		const { runtime, calls } = makeRuntime(async () => null);
+
+		const result = await runWithPlannerFallbackContext(
+			{ source: "telegram", addressed: false },
+			() => runtime.dynamicPromptExecFromState(plannerArgs),
+		);
+
+		expect(calls).toEqual(["original"]);
+		expect(result).toBeNull();
+	});
 });

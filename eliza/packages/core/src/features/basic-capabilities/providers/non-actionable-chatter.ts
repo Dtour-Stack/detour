@@ -8,6 +8,7 @@ export function normalizeMessageText(message: Memory): string {
 export function looksLikeNonActionableChatter(message: Memory): boolean {
 	const text = normalizeMessageText(message);
 	return (
+		looksLikeLightweightSocialTurn(message) ||
 		/\bi hate\b.*\b(email|gmail|inbox|mail)\b/.test(text) ||
 		/^my calendar has been\b/.test(text) ||
 		(/\b(any )?(tips|advice|suggestions?)\b/.test(text) &&
@@ -15,6 +16,18 @@ export function looksLikeNonActionableChatter(message: Memory): boolean {
 		/\bi think i spend\b.*\btoo much time\b.*\b(phone|screen)\b/.test(text) ||
 		/^do you think blocking websites\b/.test(text) ||
 		/^should i call .*\bor just email\b/.test(text)
+	);
+}
+
+export function looksLikeLightweightSocialTurn(message: Memory): boolean {
+	const text = normalizeMessageText(message).replace(/[.!?]+$/g, "").trim();
+	return (
+		/^(hey|hi|hello|yo|hiya|heya|howdy|gm|good morning|good afternoon|good evening|sup|what'?s up|whats up)$/.test(
+			text,
+		) ||
+		/^(thanks|thank you|ty|thx|appreciate it|cool|nice|great|ok|okay|k|got it|sounds good|makes sense|lol|haha)$/.test(
+			text,
+		)
 	);
 }
 

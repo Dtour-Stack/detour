@@ -13,6 +13,7 @@
 import { BrowserView, BrowserWindow, Screen } from "electrobun/bun";
 import type { DetourRPC } from "../../shared/rpc";
 import { buildRpcHandlers, registerWindow } from "../core/rpc/registry";
+import { registerViewRpcClient } from "../core/rpc/view-invoker";
 import type { RpcDeps } from "../core/rpc/types";
 
 type DefinedRPC = ReturnType<typeof BrowserView.defineRPC<DetourRPC>>;
@@ -137,15 +138,19 @@ export class WindowFactory {
 	/** Hook the window into the broadcaster on dom-ready, unhook on close. */
 	private wireBroadcastRegistration(handle: WindowHandle): void {
 		let unregister: (() => void) | null = null;
+		let unregisterViewRpc: (() => void) | null = null;
 		handle.onDomReady(() => {
 			const send = getSendProxy(handle.window);
 			if (!send) return;
 			const sendFn: RpcSendFn = (name, payload) => send[name]?.(payload);
 			unregister = registerWindow(sendFn);
+			unregisterViewRpc = registerViewRpcClient(handle.rpc);
 		});
 		handle.onClose(() => {
 			unregister?.();
 			unregister = null;
+			unregisterViewRpc?.();
+			unregisterViewRpc = null;
 		});
 	}
 

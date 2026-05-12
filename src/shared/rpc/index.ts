@@ -43,6 +43,7 @@ import type { AgentProjectsRequests } from "./agent-projects";
 import type { GitHubChannelRequests } from "./github-channel";
 import type { TasksRequests, TasksMessages } from "./tasks";
 import type { PetsRequests, PetsMessages } from "./pets";
+import type { PhantomBunRequests, PhantomWebviewRequests } from "./phantom";
 
 export type DetourBunRequests =
 	& VaultRequests
@@ -68,7 +69,8 @@ export type DetourBunRequests =
 	& AgentProjectsRequests
 	& GitHubChannelRequests
 	& TasksRequests
-	& PetsRequests;
+	& PetsRequests
+	& PhantomBunRequests;
 
 // All `messages` (both bun→view and view→bun) live in DetourBunMessages.
 // Electrobun's runtime dispatch is purely string-keyed, and the typing
@@ -88,13 +90,15 @@ export type DetourBunMessages =
 	& TasksMessages
 	& PetsMessages;
 
+export type DetourWebviewRequests = PhantomWebviewRequests;
+
 export type DetourRPC = {
 	bun: RPCSchema<{
 		requests: DetourBunRequests;
 		messages: DetourBunMessages;
 	}>;
 	webview: RPCSchema<{
-		requests: Record<never, never>;
+		requests: DetourWebviewRequests;
 		messages: Record<never, never>;
 	}>;
 };

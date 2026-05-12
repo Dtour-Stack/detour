@@ -60,7 +60,9 @@ export function PortlessView() {
 		catch (err) { setError(err instanceof Error ? err.message : String(err)); }
 	}, [refresh]);
 
-	const proxyBase = snapshot ? `http://127.0.0.1:${snapshot.proxyPort}` : "";
+	const proxyBase = snapshot
+		? `${snapshot.proxyHttps ? "https" : "http"}://127.0.0.1:${snapshot.proxyPort}`
+		: "";
 
 	return (
 		<div className="portless-shell">

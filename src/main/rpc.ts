@@ -13,16 +13,15 @@
 import Electrobun, { Electroview } from "electrobun/view";
 import type { DetourRPC } from "../shared/rpc";
 import { buildViewListeners } from "./rpc-listeners";
+import { phantomViewRequestHandlers } from "./wallet/phantom-view-handlers";
 
 const rpcDef = Electroview.defineRPC<DetourRPC>({
 	maxRequestTime: 30_000,
 	handlers: {
-		// View side has no incoming requests — bun never asks the view to
-		// answer anything in this app. All view→bun traffic is `request`
-		// (awaitable) or `send` (fire-and-forget). All bun→view traffic
-		// arrives via the messages bag, dispatched into per-feature
-		// subscribers in src/main/rpc-listeners/.
-		requests: {},
+		// Bun → view awaitable RPC (Phantom wallet, etc.). View → bun traffic
+		// remains `request` / `send` on the same bridge; see
+		// docs/rpc-migration.md.
+		requests: phantomViewRequestHandlers,
 		messages: buildViewListeners(),
 	},
 });

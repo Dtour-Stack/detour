@@ -449,8 +449,17 @@ function ChannelCardBody({
 		<div className="channel-card-body">
 			<ChannelAlerts channel={channel} actionError={actionError} />
 			{channel.id === "imessage" && channel.pluginLoaded && <ImessageTccBanner />}
-			{(channel.id === "telegram" || channel.id === "discord") && channel.liveStatus === "online" && (
-				<OwnerPairingSection connector={channel.id} />
+			{(channel.id === "telegram" || channel.id === "discord") && channel.configured && channel.pluginLoaded && (
+				<>
+					<OwnerPairingSection connector={channel.id} />
+					{channel.liveStatus !== "online" && (
+						<div className="banner warn" style={{ marginBottom: 8 }}>
+							{channel.id === "telegram"
+								? "Bot is not fully online yet — pairing commands work only after Telegram shows “online”. Reply settings below still save to the vault."
+								: "Discord is not fully connected yet — pairing may not work until the gateway is online. Reply settings below still save to the vault."}
+						</div>
+					)}
+				</>
 			)}
 			{channel.id === "discord" && channel.liveStatus === "online" && <DiscordBackfillSection />}
 			<ReplySettingsSection channel={channel} busy={busy} onSetSetting={onSetSetting} />
@@ -518,6 +527,7 @@ function ReplySettingsSection({
 	onSetSetting: (key: string, value: boolean) => void;
 }) {
 	if (channel.id !== "discord" && channel.id !== "telegram") return null;
+	if (!channel.configured) return null;
 	const rows = channel.id === "discord"
 		? [
 			{ key: "DISCORD_AUTO_REPLY", label: "Auto reply", value: channel.autoReply ?? true },
@@ -525,10 +535,18 @@ function ReplySettingsSection({
 		]
 		: [
 			{ key: "TELEGRAM_AUTO_REPLY", label: "Auto reply", value: channel.autoReply ?? true },
+			{
+				key: "CONTINUOUS_IMPROVEMENT_ENABLED",
+				label: "Continuous improvement (Pensieve)",
+				value: channel.continuousImprovementEnabled ?? true,
+			},
 		];
 	return (
 		<section className="channel-card-section">
 			<h4 className="channel-card-section-title">Reply settings</h4>
+			<p className="hint" style={{ margin: "0 0 10px", lineHeight: 1.45 }}>
+				Toggles persist in the encrypted vault and take effect after the runtime reloads (a few seconds). Telegram: optional chat allowlist, API root, and reflection interval live under <strong>Credentials</strong> below.
+			</p>
 			<div className="channel-setting-list">
 				{rows.map((row) => (
 					<ReplySettingRow
@@ -636,6 +654,13 @@ function CredentialRow({
 }) {
 	const required = channel.requiredVaultKeys.includes(credentialKey);
 	const missing = channel.missingKeys.includes(credentialKey);
+	const useSecretField =
+		credentialKey.includes("TOKEN") ||
+		credentialKey.includes("KEY") ||
+		credentialKey.includes("SECRET") ||
+		credentialKey === "GITHUB_TOKEN";
+	const isAllowedChats = credentialKey === "TELEGRAM_ALLOWED_CHATS";
+	const inputType = useSecretField ? "password" : "text";
 	return (
 		<div className="channel-cred-row">
 			<label className="channel-cred-label">
@@ -643,14 +668,25 @@ function CredentialRow({
 				<span className="hint">{required ? "required" : "optional"} · {missing ? "not set" : "stored"}</span>
 			</label>
 			<div className="row" style={{ gap: 6 }}>
-				<input
-					type="password"
-					value={draft[credentialKey] ?? ""}
-					onChange={(e) => onDraftChange((d) => ({ ...d, [credentialKey]: e.target.value }))}
-					placeholder={missing ? "paste value…" : "(stored — paste to overwrite)"}
-					className="pensieve-input"
-					style={{ flex: 1 }}
-				/>
+				{isAllowedChats ? (
+					<textarea
+						value={draft[credentialKey] ?? ""}
+						onChange={(e) => onDraftChange((d) => ({ ...d, [credentialKey]: e.target.value }))}
+						placeholder={missing ? `e.g. ["-1001234567890"]` : "(stored — paste JSON array to overwrite)"}
+						className="pensieve-input"
+						rows={3}
+						style={{ flex: 1, minHeight: 72, resize: "vertical" }}
+					/>
+				) : (
+					<input
+						type={inputType}
+						value={draft[credentialKey] ?? ""}
+						onChange={(e) => onDraftChange((d) => ({ ...d, [credentialKey]: e.target.value }))}
+						placeholder={missing ? "paste value…" : "(stored — paste to overwrite)"}
+						className="pensieve-input"
+						style={{ flex: 1 }}
+					/>
+				)}
 				<button type="button" className="btn small" disabled={busy === credentialKey || !draft[credentialKey]} onClick={() => onSetKey(credentialKey)}>
 					{busy === credentialKey ? "Saving…" : "Save"}
 				</button>

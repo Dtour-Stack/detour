@@ -233,11 +233,29 @@ async function decideImprovement(
 		"skill_candidate: <optional reusable workflow idea>",
 		"reason: <brief>",
 	].join("\n");
-	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
-	return parseToonKeyValue<ContinuousImprovementDecision>(String(raw)) ?? {
+	const modelChain = [ModelType.TEXT_SMALL, ModelType.TEXT_MEDIUM, ModelType.TEXT_LARGE] as const;
+	let lastErr: string | undefined;
+	for (const modelType of modelChain) {
+		try {
+			const raw = await runtime.useModel(modelType, {
+				prompt,
+				maxTokens: 900,
+				temperature: 0.2,
+			});
+			const parsed = parseToonKeyValue<ContinuousImprovementDecision>(String(raw));
+			if (parsed) return parsed;
+		} catch (err) {
+			lastErr = err instanceof Error ? err.message : String(err);
+			logger.warn(
+				{ src: "continuous-improvement", modelType, err: lastErr },
+				"reflection model call failed; trying next size",
+			);
+		}
+	}
+	return {
 		should_write: false,
 		category: "skip",
-		reason: "unparseable model output",
+		reason: lastErr ? `all model sizes failed (${compact(lastErr, 120)})` : "unparseable model output",
 	};
 }
 

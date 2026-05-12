@@ -124,7 +124,7 @@ export const relationshipExtractionEvaluator: Evaluator = {
 		}
 
 		// Extract platform identities from the current message
-		const identities = extractPlatformIdentities(message.content.text);
+		const identities = extractPlatformIdentities(message.content.text, message);
 		if (identities.length > 0) {
 			await storePlatformIdentities(runtime, message.entityId, identities);
 			await upsertEntityIdentities(
@@ -193,7 +193,31 @@ export const relationshipExtractionEvaluator: Evaluator = {
 	},
 };
 
-function extractPlatformIdentities(text: string): PlatformIdentity[] {
+function messageLooksTelegram(message?: Memory): boolean {
+	if (!message) return false;
+	if (message.content?.source === "telegram") return true;
+	const meta = message.metadata;
+	if (!meta || typeof meta !== "object") return false;
+	if ("telegram" in meta && (meta as { telegram?: unknown }).telegram) {
+		return true;
+	}
+	const src = (meta as { source?: unknown }).source;
+	return typeof src === "string" && src.toLowerCase() === "telegram";
+}
+
+function messageLooksDiscord(message?: Memory): boolean {
+	if (!message) return false;
+	if (message.content?.source === "discord") return true;
+	const meta = message.metadata;
+	if (!meta || typeof meta !== "object") return false;
+	if ("discord" in meta && (meta as { discord?: unknown }).discord) {
+		return true;
+	}
+	const src = (meta as { source?: unknown }).source;
+	return typeof src === "string" && src.toLowerCase() === "discord";
+}
+
+function extractPlatformIdentities(text: string, message?: Memory): PlatformIdentity[] {
 	const now = Date.now();
 	const identities = new Map<string, PlatformIdentity>();
 	const addIdentity = (
@@ -201,9 +225,13 @@ function extractPlatformIdentities(text: string): PlatformIdentity[] {
 		handle: string | undefined,
 		confidence: number,
 	) => {
-		const normalizedHandle = handle?.trim();
+		let normalizedHandle = handle?.trim();
 		if (!normalizedHandle) {
 			return;
+		}
+		if (platform === "telegram" && normalizedHandle.startsWith("@")) {
+			normalizedHandle = normalizedHandle.slice(1).trim();
+			if (!normalizedHandle) return;
 		}
 		const key = `${platform}:${normalizedHandle.toLowerCase()}`;
 		const existing = identities.get(key);
@@ -251,6 +279,46 @@ function extractPlatformIdentities(text: string): PlatformIdentity[] {
 		"discord",
 		0.8,
 	);
+
+	// t.me deep links — unambiguous Telegram usernames (exclude +joinchat suffix paths)
+	collectMatches(
+		/\b(?:https?:\/\/)?(?:www\.)?t\.me\/([A-Za-z][A-Za-z0-9_]{4,31})(?=[/?#]|\s|$)/gi,
+		"telegram",
+		0.88,
+	);
+
+	// @mentions in Telegram supergroups/channels (not "my telegram is …" phrasing)
+	if (messageLooksTelegram(message)) {
+		const reserved = new Set([
+			"everyone",
+			"here",
+			"channel",
+			"join",
+			"admin",
+			"video",
+			"gif",
+			"thread",
+			"comments",
+		]);
+		const tgAt = /(^|[^A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_]{4,31})(?![A-Za-z0-9_])/g;
+		let atMatch: RegExpExecArray | null;
+		while ((atMatch = tgAt.exec(text)) !== null) {
+			const handle = atMatch[2];
+			if (handle && !reserved.has(handle.toLowerCase())) {
+				addIdentity("telegram", handle, 0.72);
+			}
+		}
+	}
+
+	// Legacy Discord username#0000 tags in Discord-sourced messages
+	if (messageLooksDiscord(message)) {
+		const discTag =
+			/\b([A-Za-z0-9_.]{2,32})#(\d{4})\b/g;
+		let tagMatch: RegExpExecArray | null;
+		while ((tagMatch = discTag.exec(text)) !== null) {
+			addIdentity("discord", `${tagMatch[1]}#${tagMatch[2]}`, 0.68);
+		}
+	}
 
 	return Array.from(identities.values());
 }

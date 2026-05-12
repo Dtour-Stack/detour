@@ -59,6 +59,8 @@ export type PortlessRoute = {
 export type PortlessSnapshot = {
 	running: boolean;
 	proxyPort: number;
+	/** True when deferring to standalone portless on HTTPS (typically :443). */
+	proxyHttps: boolean;
 	tld: string;
 	routes: PortlessRoute[];
 	/** Last bind error when the proxy couldn't claim a port (e.g. a
@@ -732,6 +734,8 @@ export type ChannelStatus = {
 	liveDetail?: string;
 	autoReply?: boolean;
 	respondOnlyToMentions?: boolean;
+	/** Telegram: CONTINUOUS_IMPROVEMENT_ENABLED (vault + runtime). */
+	continuousImprovementEnabled?: boolean;
 };
 
 export type ChannelsSnapshot = {
@@ -1071,6 +1075,9 @@ export type PensieveEntitySummary = {
 	importanceScore?: number;
 	messageCount?: number;
 	tags: string[];
+	memberEntityIds: string[];
+	tracked: boolean;
+	trackedAt?: string;
 };
 
 export type PensieveRelationshipSummary = {

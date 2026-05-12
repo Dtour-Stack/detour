@@ -1,14 +1,15 @@
 import {
+	getPlannerReplyContext,
+	PLANNER_REPLY_CONTEXT_SNAPSHOT_STATE_KEY,
 	type IAgentRuntime,
 	ModelType,
 	type Plugin,
+	runWithPlannerReplyContext,
 	type State,
 } from "@elizaos/core";
-import { AsyncLocalStorage } from "node:async_hooks";
 
 const WRAPPED = Symbol.for("detour.dpeFallback.wrapped");
 const PLANNER_FIELDS = new Set(["thought", "actions", "providers", "text", "simple"]);
-const plannerContext = new AsyncLocalStorage<{ source: string; addressed: boolean }>();
 
 type DynamicPromptArgs = Parameters<IAgentRuntime["dynamicPromptExecFromState"]>[0];
 type DynamicPromptResult = Awaited<ReturnType<IAgentRuntime["dynamicPromptExecFromState"]>>;
@@ -25,16 +26,42 @@ function isResponsePlanner(args: DynamicPromptArgs): boolean {
 	return true;
 }
 
+/** @deprecated Prefer `runWithPlannerReplyContext` from `@elizaos/core` (Telegram + Discord). */
 export function runWithPlannerFallbackContext<T>(
 	context: { source: string; addressed: boolean },
-	run: () => T,
-): T {
-	return plannerContext.run(context, run);
+	run: () => T | Promise<T>,
+): T | Promise<T> {
+	return runWithPlannerReplyContext(context, run);
+}
+
+function readPlannerReplyContextSnapshot(
+	state: State | undefined,
+): { source: string; addressed: boolean } | undefined {
+	const values = state?.values as Record<string, unknown> | undefined;
+	const raw = values?.[PLANNER_REPLY_CONTEXT_SNAPSHOT_STATE_KEY];
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const o = raw as Record<string, unknown>;
+	const source = typeof o.source === "string" ? o.source : "";
+	const addressed = typeof o.addressed === "boolean" ? o.addressed : false;
+	if (!source) return undefined;
+	return { source, addressed };
+}
+
+/** ALS when available; else snapshot embedded in composed state for this turn. */
+function effectivePlannerReplyContext(
+	args: DynamicPromptArgs,
+): { source: string; addressed: boolean } | undefined {
+	return getPlannerReplyContext() ?? readPlannerReplyContextSnapshot(args.state);
 }
 
 function canUsePlainReply(args: DynamicPromptArgs): boolean {
-	const context = plannerContext.getStore();
-	return isResponsePlanner(args) && (!context || (context.source === "discord" && context.addressed));
+	if (!isResponsePlanner(args)) return false;
+	const ctx = effectivePlannerReplyContext(args);
+	/** Legacy: no surface set context — keep permissive so older paths still get fallback. */
+	if (!ctx) return true;
+	/** Discord: only @-addressed turns use plain fallback (avoid spam in busy guilds). */
+	if (ctx.source === "discord" && !ctx.addressed) return false;
+	return ctx.addressed;
 }
 
 export function conversationText(state: State | undefined): string {
@@ -45,7 +72,8 @@ export function conversationText(state: State | undefined): string {
 			? state.text
 			: "";
 	const discordContext = providerText(state, "DISCORD_CONTEXT");
-	return [base, discordContext].filter((text) => text.trim().length > 0).join("\n\n");
+	const telegramContext = providerText(state, "TELEGRAM_CONTEXT");
+	return [base, discordContext, telegramContext].filter((text) => text.trim().length > 0).join("\n\n");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -124,12 +152,28 @@ export async function generatePlainTextReply(
 		"Reply:",
 	].join("\n");
 	try {
-		const raw = await runtime.useModel(ModelType.TEXT_SMALL, {
+		let raw = await runtime.useModel(ModelType.TEXT_SMALL, {
 			prompt,
 			maxTokens: 500,
 			temperature: 0.4,
 		});
-		const text = typeof raw === "string" ? cleanText(raw) : "";
+		let text = typeof raw === "string" ? cleanText(raw) : "";
+		if (!text.trim()) {
+			raw = await runtime.useModel(ModelType.TEXT_MEDIUM, {
+				prompt,
+				maxTokens: 500,
+				temperature: 0.35,
+			});
+			text = typeof raw === "string" ? cleanText(raw) : "";
+		}
+		if (!text.trim()) {
+			raw = await runtime.useModel(ModelType.TEXT_LARGE, {
+				prompt,
+				maxTokens: 500,
+				temperature: 0.25,
+			});
+			text = typeof raw === "string" ? cleanText(raw) : "";
+		}
 		if (!text) return null;
 		if (isInternalFailureText(text)) {
 			runtime.logger.warn(

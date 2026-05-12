@@ -9,7 +9,9 @@ import {
   logger,
   type Media,
   type Memory,
+  type MentionContext,
   ModelType,
+  runWithPlannerReplyContext,
   ServiceType,
   type UUID,
 } from '@elizaos/core';
@@ -89,6 +91,47 @@ const getChannelType = (chat: Chat): ChannelType => {
   }
 };
 
+function sliceTelegramEntitySource(telegramMessage: Message): string {
+  if ('text' in telegramMessage && telegramMessage.text) {
+    return telegramMessage.text;
+  }
+  if ('caption' in telegramMessage && telegramMessage.caption) {
+    return telegramMessage.caption;
+  }
+  return '';
+}
+
+function telegramMessageMentionsBotUsername(
+  telegramMessage: Message,
+  botUsername: string | undefined,
+): boolean {
+  const normalized = botUsername?.trim().replace(/^@/, '').toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const entities =
+    ('entities' in telegramMessage && telegramMessage.entities) ||
+    ('caption_entities' in telegramMessage && telegramMessage.caption_entities) ||
+    [];
+  const source = sliceTelegramEntitySource(telegramMessage);
+  for (const entity of entities) {
+    const slice = source.slice(entity.offset, entity.offset + entity.length);
+    if (entity.type === 'mention') {
+      if (slice.replace(/^@/, '').toLowerCase() === normalized) {
+        return true;
+      }
+    }
+    if (
+      entity.type === 'text_mention' &&
+      'user' in entity &&
+      entity.user?.username?.toLowerCase() === normalized
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Class representing a message manager.
  * @class
@@ -96,6 +139,10 @@ const getChannelType = (chat: Chat): ChannelType => {
 export class MessageManager {
   public bot: Telegraf<Context>;
   protected runtime: IAgentRuntime;
+  private telegramSelfPromise: Promise<{
+    id: number;
+    username?: string;
+  } | null> | null = null;
 
   /**
    * Constructor for creating a new instance of a BotAgent.
@@ -106,6 +153,65 @@ export class MessageManager {
   constructor(bot: Telegraf<Context>, runtime: IAgentRuntime) {
     this.bot = bot;
     this.runtime = runtime;
+  }
+
+  private getTelegramSelf(): Promise<{ id: number; username?: string } | null> {
+    if (!this.telegramSelfPromise) {
+      this.telegramSelfPromise = this.bot.telegram
+        .getMe()
+        .then((me) => ({ id: me.id, username: me.username }))
+        .catch(() => null);
+    }
+    return this.telegramSelfPromise;
+  }
+
+  private async buildTelegramMentionContext(
+    ctx: Context,
+    telegramMessage: Message,
+    channelType: ChannelType,
+  ): Promise<MentionContext | undefined> {
+    if (channelType === ChannelType.DM) {
+      return {
+        isMention: true,
+        isReply: false,
+        isThread: false,
+        mentionType: 'platform_mention',
+      };
+    }
+
+    const self = await this.getTelegramSelf();
+    const botUsernameSetting = this.runtime.getSetting('TELEGRAM_BOT_USERNAME');
+    const configuredUsername =
+      typeof botUsernameSetting === 'string'
+        ? botUsernameSetting.trim().replace(/^@/, '')
+        : '';
+    const botUsername = self?.username ?? configuredUsername;
+
+    const replyTo =
+      'reply_to_message' in telegramMessage
+        ? telegramMessage.reply_to_message
+        : undefined;
+    const isReplyToOurBot =
+      Boolean(self) && replyTo?.from?.id === self?.id;
+
+    const textMentionsBot = telegramMessageMentionsBotUsername(
+      telegramMessage,
+      botUsername,
+    );
+
+    if (isReplyToOurBot || textMentionsBot) {
+      const isTopic =
+        'is_topic_message' in telegramMessage &&
+        Boolean(telegramMessage.is_topic_message);
+      return {
+        isMention: textMentionsBot,
+        isReply: Boolean(isReplyToOurBot),
+        isThread: isTopic,
+        mentionType: textMentionsBot ? 'platform_mention' : 'reply',
+      };
+    }
+
+    return undefined;
   }
 
   /**
@@ -759,6 +865,12 @@ export class MessageManager {
       const chat = message.chat as Chat;
       const channelType = getChannelType(chat);
 
+      const mentionContext = await this.buildTelegramMentionContext(
+        ctx,
+        message,
+        channelType,
+      );
+
       await this.runtime.ensureConnection({
         entityId,
         roomId,
@@ -792,6 +904,7 @@ export class MessageManager {
           attachments: cleanedAttachments,
           source: 'telegram',
           channelType,
+          mentionContext,
           inReplyTo:
             'reply_to_message' in message && message.reply_to_message
               ? createUniqueUuid(
@@ -963,10 +1076,14 @@ export class MessageManager {
           'Auto-reply disabled (TELEGRAM_AUTO_REPLY=false); message ingested without response',
         );
       } else if (this.runtime.messageService) {
-        await this.runtime.messageService.handleMessage(
-          this.runtime,
-          memory,
-          callback,
+        await runWithPlannerReplyContext(
+          { source: 'telegram', addressed: true },
+          () =>
+            this.runtime.messageService!.handleMessage(
+              this.runtime,
+              memory,
+              callback,
+            ),
         );
       } else {
         logger.error(
