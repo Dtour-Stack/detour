@@ -16,10 +16,22 @@
  *   - OPENAI_EMBEDDING_MODEL (optional, default "text-embedding-3-small")
  *   - OPENAI_EMBEDDING_URL (optional, default https://api.openai.com/v1/embeddings)
  *   - OPENAI_EMBEDDING_DIMENSIONS (optional) — truncate output to N dims
+ *   - OPENAI_EMBEDDING_MAX_CHARS (optional, default 960) — char-budget for
+ *     pre-emptive truncation. 960 chars maps to ~480 tokens for typical
+ *     mixed content, which keeps requests safely under the local llama
+ *     server's 512-token batch (`--ctx-size 512`, the bge-small training
+ *     max). Override if you're targeting cloud OpenAI with 8k+ context.
  *
- * Failure mode: if the API call fails (no key, network error, quota), we
- * return a zero vector. The runtime keeps working (vector search degrades
- * to substring); the calling evaluator just doesn't get useful similarity.
+ * Sizing strategy (when the local llama server is the target):
+ *   - bge-small-en is trained on a 512-token sequence — anything beyond
+ *     that is wasted at the *model* level, and the *server* rejects
+ *     inputs that exceed its physical batch (`ubatch-size`, default = 512)
+ *     with HTTP 500 "input (N tokens) is too large to process".
+ *   - We truncate the client input pre-emptively to a conservative char
+ *     budget, and on a server batch-size error we halve-and-retry instead
+ *     of silently substituting a zero vector. Zero is only emitted as a
+ *     last resort (no API key, network down, retries exhausted) and is
+ *     logged at error level so an operator notices.
  */
 
 import {
@@ -33,8 +45,34 @@ import {
 const DEFAULT_MODEL = "text-embedding-3-small";
 const DEFAULT_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_DIM = 1536; // text-embedding-3-small native dim
-const DEFAULT_MAX_CHARS = 1_600;
+/**
+ * Conservative char-budget that maps to roughly 480 tokens for typical
+ * mixed (English prose + code + urls + punctuation) input — comfortably
+ * under the local llama server's 512-token batch. Tuned empirically off
+ * the observed 2-chars-per-token ratio in agent memories where dense
+ * punctuation and short identifiers produce many short tokens.
+ */
+const DEFAULT_MAX_CHARS = 960;
+/**
+ * Server-batch-size errors halve the input and retry up to this many
+ * extra attempts. Most rejected inputs succeed on the first halving;
+ * three attempts handles pathological "all-punctuation" inputs.
+ */
+const MAX_BATCH_RETRIES = 3;
+/** Bail out instead of slicing below this — sub-64-char embeddings are
+ *  too lossy to be worth keeping. */
+const MIN_RETRY_INPUT_LEN = 64;
 const REQUEST_TIMEOUT = 10_000;
+
+/**
+ * Recognise the specific class of errors that mean "shrink the input
+ * and try again": llama.cpp's `ubatch` rejection, OpenAI's context-length
+ * cap, and Cohere-style "max tokens" complaints. We only retry on these
+ * — auth, network, and quota errors fail through to the zero-vector
+ * fallback so the caller gets a definitive answer fast.
+ */
+const SHRINKABLE_ERROR_REGEX =
+	/input \(\d+ tokens\) is too large|increase the physical batch size|batch[\s_-]?size|context[_\s-]?length|maximum context|too many tokens/i;
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -127,7 +165,7 @@ export const embeddingOpenAIPlugin: Plugin = {
 
 			const text = extractText(params);
 			if (text.length === 0) return new Array(dim).fill(0);
-			const input = text.length > maxChars ? text.slice(0, maxChars) : text;
+			let input = text.length > maxChars ? text.slice(0, maxChars) : text;
 			if (input.length !== text.length && !warnedTruncatedInput) {
 				warnedTruncatedInput = true;
 				logger.warn(
@@ -147,23 +185,75 @@ export const embeddingOpenAIPlugin: Plugin = {
 				return new Array(dim).fill(0);
 			}
 
-			try {
-				const vec = await callOpenAIEmbeddings({
-					apiKey,
+			// Retry loop: if the server complains the input is too large for
+			// its batch, halve and try again. This is the local llama-server
+			// failure mode that previously silently produced zero vectors;
+			// halving converges fast (typical recovery in one extra round-trip).
+			const attemptErrors: string[] = [];
+			for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt += 1) {
+				try {
+					const vec = await callOpenAIEmbeddings({
+						apiKey,
+						url,
+						model,
+						input,
+						...(dimRaw && Number.isFinite(dim) ? { dimensions: dim } : {}),
+					});
+					warnedNoKey = false;
+					if (attempt > 0) {
+						logger.info(
+							{
+								src: "embedding-openai",
+								attempts: attempt + 1,
+								finalInputChars: input.length,
+								originalInputChars: text.length,
+							},
+							"embedding recovered after shrink-and-retry",
+						);
+					}
+					return vec;
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					attemptErrors.push(`attempt ${attempt + 1}: ${msg}`);
+					const isShrinkable = SHRINKABLE_ERROR_REGEX.test(msg);
+					const canShrink = input.length > MIN_RETRY_INPUT_LEN;
+					if (
+						isShrinkable
+						&& canShrink
+						&& attempt < MAX_BATCH_RETRIES
+					) {
+						const next = Math.max(MIN_RETRY_INPUT_LEN, Math.floor(input.length / 2));
+						logger.warn(
+							{
+								src: "embedding-openai",
+								err: msg,
+								inputChars: input.length,
+								nextInputChars: next,
+								attempt: attempt + 1,
+							},
+							"embedding rejected for batch size — halving input and retrying",
+						);
+						input = input.slice(0, next);
+						continue;
+					}
+					// Non-retryable, or we've exhausted retries / floor.
+					break;
+				}
+			}
+
+			logger.error(
+				{
+					src: "embedding-openai",
+					attempts: attemptErrors.length,
+					errors: attemptErrors,
+					originalInputChars: text.length,
+					finalInputChars: input.length,
 					url,
 					model,
-					input,
-					...(dimRaw && Number.isFinite(dim) ? { dimensions: dim } : {}),
-				});
-				warnedNoKey = false;
-				return vec;
-			} catch (err) {
-				logger.warn(
-					{ src: "embedding-openai", err: err instanceof Error ? err.message : err },
-					"embedding call failed — returning zero vector",
-				);
-				return new Array(dim).fill(0);
-			}
+				},
+				"embedding call failed after retries — returning zero vector (semantic search will degrade)",
+			);
+			return new Array(dim).fill(0);
 		},
 	},
 };
