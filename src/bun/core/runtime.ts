@@ -923,6 +923,40 @@ export class RuntimeService {
 			...channelSettings,
 			EMBEDDING_DIMENSION: "384",
 			OPENAI_EMBEDDING_DIMENSIONS: "384",
+			// Extra providers pulled into the first-pass response state on
+			// every chat turn. Eliza's `composeResponseState` defaults to
+			// just CORE [ENTITIES, CHARACTER, RECENT_MESSAGES, ACTIONS,
+			// PROVIDERS] with `onlyInclude=true`, so every Detour-specific
+			// "always-on" provider (character anchor, capabilities, coding
+			// brief, skill catalog, pensieve chronicler) gets silently
+			// dropped from the prompt. Same for FACTS / RELATIONSHIPS,
+			// which Eliza marks `dynamic: true` and expects the model to
+			// request explicitly — that wastes a whole LLM round-trip for
+			// a Pensieve-grounded agent where remembered facts and entity
+			// relationships are first-class context, not optional follow-up.
+			//
+			// We surface them up-front so:
+			//   - the agent sounds like itself across provider failover
+			//     (CHARACTER_ANCHOR carries identity + tone),
+			//   - "what can you do?" gets the live runtime snapshot
+			//     (CAPABILITIES enumerates loaded plugins/actions),
+			//   - "use the right tool" routes through the live brief
+			//     (CODING_BRIEF + SKILL_CATALOG),
+			//   - remembered facts and relationships feed every reply
+			//     (FACTS, RELATIONSHIPS),
+			//   - recent user activity is in scope without asking
+			//     (USER_ACTIVITY_CONTEXT from the Pensieve chronicler).
+			//
+			// Names not registered at runtime are ignored by composeState.
+			ADDITIONAL_RESPONSE_STATE_PROVIDERS: [
+				"AGENT_CHARACTER_ANCHOR",
+				"AGENT_CAPABILITIES",
+				"AGENT_CODING_BRIEF",
+				"AGENT_SKILL_CATALOG",
+				"USER_ACTIVITY_CONTEXT",
+				"FACTS",
+				"RELATIONSHIPS",
+			].join(","),
 		};
 		if (
 			settings.VALIDATION_LEVEL === undefined &&

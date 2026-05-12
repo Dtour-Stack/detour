@@ -134,17 +134,56 @@ function characterReplyContext(runtime: IAgentRuntime): string {
 	return lines.join("\n").slice(0, 5_000);
 }
 
+/**
+ * Pulls the rendered text for each Detour always-on provider out of the
+ * composed state. Without this, the plain-text fallback strips every
+ * memory + capability provider the runtime worked to assemble (character
+ * anchor, capabilities snapshot, coding brief, skill catalog, user-activity
+ * observations, facts, relationships) and the agent loses its identity +
+ * memory the moment the structured planner errors out. This is exactly
+ * when grounding matters most — model fail-overs are also the cases where
+ * the user is most likely to notice the agent "forgetting" itself.
+ *
+ * Names are read from the `ADDITIONAL_RESPONSE_STATE_PROVIDERS` runtime
+ * setting (the same one `composeResponseState` consults), so the fallback
+ * always sees exactly what we configured as always-on, with no hard-coded
+ * list to drift out of sync.
+ */
+function collectAlwaysOnContext(
+	runtime: IAgentRuntime,
+	state: State | undefined,
+): string {
+	const raw = runtime.getSetting?.("ADDITIONAL_RESPONSE_STATE_PROVIDERS");
+	if (typeof raw !== "string" || raw.length === 0) return "";
+	const names = raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+	if (names.length === 0) return "";
+	const blocks: string[] = [];
+	for (const name of names) {
+		const text = providerText(state, name).trim();
+		if (text.length > 0) blocks.push(text);
+	}
+	return blocks.join("\n\n").slice(0, 12_000);
+}
+
 export async function generatePlainTextReply(
 	runtime: IAgentRuntime,
 	conversation: string,
 	reason: string,
+	memoryContext = "",
 ): Promise<string | null> {
 	if (!conversation.trim()) return null;
 	const characterContext = characterReplyContext(runtime);
+	const trimmedMemory = memoryContext.trim();
 	const prompt = [
 		`You are ${runtime.character.name}. Reply to the latest user message in plain text.`,
 		"Return only the message to send. No labels, no JSON, no TOON, no markdown fence, no hidden reasoning.",
 		...(characterContext ? ["", "Character context:", characterContext] : []),
+		...(trimmedMemory
+			? ["", "Memory and capability context (use anything relevant when answering):", trimmedMemory]
+			: []),
 		"",
 		"Recent conversation:",
 		conversation.slice(-12_000),
@@ -205,7 +244,12 @@ async function fallbackPlannerReply(
 	args: DynamicPromptArgs,
 	reason: string,
 ): Promise<DynamicPromptResult> {
-	const text = await generatePlainTextReply(runtime, conversationText(args.state), reason);
+	const text = await generatePlainTextReply(
+		runtime,
+		conversationText(args.state),
+		reason,
+		collectAlwaysOnContext(runtime, args.state),
+	);
 	if (!text) return null;
 	return {
 		thought: "Plain-text planner fallback",

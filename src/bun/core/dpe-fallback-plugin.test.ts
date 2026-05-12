@@ -21,10 +21,12 @@ function makeRuntime(
 	original: () => Promise<unknown>,
 	useModel: (modelType: unknown, params: unknown) => Promise<string> = async () => "plain reply",
 	character: Record<string, unknown> = { name: "Detour Squirrel" },
+	settings: Record<string, string> = {},
 ): { runtime: IAgentRuntime; calls: string[] } {
 	const calls: string[] = [];
 	const runtime = {
 		character,
+		getSetting: (key: string) => settings[key],
 		dynamicPromptExecFromState: async () => {
 			calls.push("original");
 			return await original();
@@ -153,5 +155,85 @@ describe("dpe fallback patch", () => {
 
 		expect(calls).toEqual(["original"]);
 		expect(result).toBeNull();
+	});
+
+	test("plain text fallback carries always-on provider context from composed state", async () => {
+		const prompts: string[] = [];
+		const { runtime } = makeRuntime(
+			async () => {
+				throw new Error("planner failed");
+			},
+			async (_modelType, params) => {
+				prompts.push((params as { prompt?: string }).prompt ?? "");
+				return "memory-aware reply";
+			},
+			{ name: "Detour Squirrel" },
+			{
+				ADDITIONAL_RESPONSE_STATE_PROVIDERS:
+					"AGENT_CHARACTER_ANCHOR,FACTS,USER_ACTIVITY_CONTEXT",
+			},
+		);
+
+		const argsWithProviders = {
+			options: { modelType: ModelType.ACTION_PLANNER },
+			schema: [
+				{ field: "thought" },
+				{ field: "actions" },
+				{ field: "providers" },
+				{ field: "text" },
+				{ field: "simple" },
+			],
+			state: {
+				values: { recentMessages: "user: hi" },
+				text: "hi",
+				data: {
+					providers: {
+						AGENT_CHARACTER_ANCHOR: {
+							text: "Identity anchor — Detour Squirrel.\nCarry tone across providers.",
+						},
+						FACTS: {
+							text: "Known facts:\n- The user prefers tabs over spaces.",
+						},
+						USER_ACTIVITY_CONTEXT: {
+							text: "Recent observation: user just finished a coding sprint.",
+						},
+					},
+				},
+			},
+		} as never;
+
+		const result = await runWithPlannerFallbackContext(
+			{ source: "discord", addressed: true },
+			() => runtime.dynamicPromptExecFromState(argsWithProviders),
+		);
+
+		expect(result?.text).toBe("memory-aware reply");
+		expect(prompts).toHaveLength(1);
+		const fallbackPrompt = prompts[0] ?? "";
+		expect(fallbackPrompt).toContain("Memory and capability context");
+		expect(fallbackPrompt).toContain("Identity anchor — Detour Squirrel");
+		expect(fallbackPrompt).toContain("tabs over spaces");
+		expect(fallbackPrompt).toContain("coding sprint");
+	});
+
+	test("plain text fallback skips memory block when no providers are configured", async () => {
+		const prompts: string[] = [];
+		const { runtime } = makeRuntime(
+			async () => {
+				throw new Error("planner failed");
+			},
+			async (_modelType, params) => {
+				prompts.push((params as { prompt?: string }).prompt ?? "");
+				return "plain reply";
+			},
+		);
+
+		await runWithPlannerFallbackContext(
+			{ source: "discord", addressed: true },
+			() => runtime.dynamicPromptExecFromState(plannerArgs),
+		);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).not.toContain("Memory and capability context");
 	});
 });

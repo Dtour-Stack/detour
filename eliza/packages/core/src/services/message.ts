@@ -659,6 +659,37 @@ const LIGHTWEIGHT_SOCIAL_STATE_PROVIDERS = [
 const STRUCTURED_RESPONSE_STATE_PROVIDERS = ["ACTIONS", "PROVIDERS"];
 const FOCUSED_PROVIDER_REPLY_STATE_PROVIDERS = ["CHARACTER", "RECENT_MESSAGES"];
 
+/**
+ * Names of additional providers a host wants pulled into the first-pass
+ * response state. Read from
+ * `runtime.getSetting("ADDITIONAL_RESPONSE_STATE_PROVIDERS")` — a
+ * comma-separated string of provider names.
+ *
+ * Without this hook, `composeResponseState` only loads the five CORE
+ * providers (ENTITIES, CHARACTER, RECENT_MESSAGES, ACTIONS, PROVIDERS).
+ * Anything else — including non-dynamic providers like an always-on
+ * character anchor, a capabilities snapshot, a coding brief, or a
+ * persistent-facts/relationships layer — gets silently dropped because
+ * `composeResponseState` calls `composeState(..., onlyInclude=true)`.
+ *
+ * Hosts can opt extra provider names into the first pass via the setting:
+ *   character.settings.ADDITIONAL_RESPONSE_STATE_PROVIDERS =
+ *     "AGENT_CHARACTER_ANCHOR,AGENT_CAPABILITIES,FACTS,RELATIONSHIPS"
+ *
+ * Unknown names are harmless — `composeState` filters by
+ * `runtime.providers` and silently skips any name not registered.
+ */
+export function getAdditionalResponseStateProviders(
+	runtime: IAgentRuntime,
+): string[] {
+	const raw = runtime.getSetting?.("ADDITIONAL_RESPONSE_STATE_PROVIDERS");
+	if (typeof raw !== "string" || raw.length === 0) return [];
+	return raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
+
 function hasInboundBenchmarkContext(message: Memory): boolean {
 	const metadata = message.metadata as Record<string, unknown> | undefined;
 	const benchmarkContext = metadata?.benchmarkContext;
@@ -672,9 +703,11 @@ function composeResponseState(
 	message: Memory,
 	skipCache = false,
 ): Promise<State> {
-	const providers = hasInboundBenchmarkContext(message)
+	const extra = getAdditionalResponseStateProviders(runtime);
+	const base = hasInboundBenchmarkContext(message)
 		? [...CORE_RESPONSE_STATE_PROVIDERS, "CONTEXT_BENCH"]
 		: CORE_RESPONSE_STATE_PROVIDERS;
+	const providers = extra.length > 0 ? [...base, ...extra] : base;
 	return runtime.composeState(message, providers, true, skipCache);
 }
 
@@ -724,9 +757,10 @@ function composeFocusedProviderReplyState(
 	providers: string[],
 	skipCache = false,
 ): Promise<State> {
+	const extra = getAdditionalResponseStateProviders(runtime);
 	return runtime.composeState(
 		message,
-		[...FOCUSED_PROVIDER_REPLY_STATE_PROVIDERS, ...providers],
+		[...FOCUSED_PROVIDER_REPLY_STATE_PROVIDERS, ...providers, ...extra],
 		true,
 		skipCache,
 	);
