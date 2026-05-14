@@ -19,11 +19,14 @@
  * the action call so the repo is private from the start.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Action, ActionResult, Handler, IAgentRuntime, Plugin } from "@elizaos/core";
+import { hasOwnerAccess } from "@elizaos/agent/security";
 import { KNOWN_MEMORY_TABLES } from "../../core/pensieve/memory-service";
+
+const DEFAULT_HF_BUCKET = "hf://buckets/dexploarer/detourdump";
 
 const CRED_PATTERNS: RegExp[] = [
 	/sk-ant-[A-Za-z0-9_-]{16,}/g,
@@ -152,22 +155,33 @@ function scrubTextFields(value: unknown, depth = 0): unknown {
 
 function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
 	if (!opts) return undefined;
-	for (const k of keys) {
-		const v = opts[k];
-		if (typeof v === "string" && v.trim().length > 0) return v.trim();
+	const params = opts.parameters;
+	const bags = [
+		params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, unknown> : null,
+		opts,
+	].filter((bag): bag is Record<string, unknown> => !!bag);
+	for (const bag of bags) {
+		for (const k of keys) {
+			const v = bag[k];
+			if (typeof v === "string" && v.trim().length > 0) return v.trim();
+		}
 	}
 	return undefined;
 }
 
 function pickBool(opts: Record<string, unknown> | undefined, key: string, dflt: boolean): boolean {
-	const v = opts?.[key];
+	const params = opts?.parameters;
+	const bag = params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, unknown> : opts;
+	const v = bag?.[key];
 	if (typeof v === "boolean") return v;
 	if (typeof v === "string") return v === "true" || v === "1";
 	return dflt;
 }
 
 function pickNumber(opts: Record<string, unknown> | undefined, key: string, dflt: number): number {
-	const v = opts?.[key];
+	const params = opts?.parameters;
+	const bag = params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, unknown> : opts;
+	const v = bag?.[key];
 	if (typeof v === "number" && Number.isFinite(v)) return v;
 	if (typeof v === "string") {
 		const n = Number(v);
@@ -370,6 +384,7 @@ function buildArchiveSummary(args: {
 		memoriesByTable: Map<string, Array<Record<string, unknown>>>;
 		redactedMemories: number;
 		scrubbedTrajectories: number;
+		relationships: number;
 		totalTrajectoriesScanned: number;
 		totalMemoriesScanned: number;
 	};
@@ -395,6 +410,7 @@ function buildArchiveSummary(args: {
 	lines.push(`| Memories (published) | ${Array.from(counts.memoriesByTable.values()).reduce((a, r) => a + r.length, 0)} |`);
 	lines.push(`| Memories scanned (pre-filter) | ${counts.totalMemoriesScanned} |`);
 	lines.push(`| Memories redacted | ${counts.redactedMemories} |`);
+	lines.push(`| Relationships | ${counts.relationships} |`);
 	lines.push("");
 	lines.push("## Memories by table");
 	lines.push("");
@@ -404,6 +420,350 @@ function buildArchiveSummary(args: {
 	lines.push("");
 	lines.push("Latest full data: [`data/`](../../data/)");
 	return `${lines.join("\n")}\n`;
+}
+
+type DumpSnapshot = {
+	work: string;
+	now: string;
+	parts: { day: string; week: string; month: string };
+	releaseTag: string;
+	filteredTrajectories: Array<Record<string, unknown>>;
+	filteredDetails: Array<Record<string, unknown>>;
+	filteredMemories: Array<Record<string, unknown>>;
+	filteredRelationships: Array<Record<string, unknown>>;
+	memoriesByTable: Map<string, Array<Record<string, unknown>>>;
+	redactedMemoryCount: number;
+	scrubbedTrajectoryCount: number;
+	totalTrajectoriesScanned: number;
+	totalMemoriesScanned: number;
+	tableLines: string[];
+	dataBytes: number;
+};
+
+function dumpCounts(snapshot: DumpSnapshot): Record<string, unknown> {
+	return {
+		trajectories: snapshot.filteredTrajectories.length,
+		trajectoryDetails: snapshot.filteredDetails.length,
+		memories: snapshot.filteredMemories.length,
+		memoryTables: snapshot.memoriesByTable.size,
+		relationships: snapshot.filteredRelationships.length,
+		redactedMemories: snapshot.redactedMemoryCount,
+		totalTrajectoriesScanned: snapshot.totalTrajectoriesScanned,
+		totalMemoriesScanned: snapshot.totalMemoriesScanned,
+		dataBytes: snapshot.dataBytes,
+	};
+}
+
+function directorySizeBytes(path: string): number {
+	try {
+		const st = statSync(path);
+		if (st.isFile()) return st.size;
+		if (!st.isDirectory()) return 0;
+		let total = 0;
+		for (const entry of readdirSync(path, { withFileTypes: true })) {
+			total += directorySizeBytes(join(path, entry.name));
+		}
+		return total;
+	} catch {
+		return 0;
+	}
+}
+
+async function createAgentDumpSnapshot({
+	runtime,
+	limit,
+	owner,
+	repoUrl,
+	releaseUrlForTag,
+}: {
+	runtime: IAgentRuntime;
+	limit: number;
+	owner: string;
+	repoUrl: string;
+	releaseUrlForTag?: (tag: string) => string | null;
+}): Promise<DumpSnapshot> {
+	const trajectoryService = runtime.getService("trajectories") as
+		| {
+			listTrajectories?: (opts: { limit?: number; offset?: number }) => Promise<{ trajectories: Array<Record<string, unknown>>; total: number }>;
+			getTrajectoryDetail?: (id: string) => Promise<Record<string, unknown> | null>;
+		}
+		| null;
+	const trajectories: Array<Record<string, unknown>> = [];
+	const trajectoryDetails: Array<Record<string, unknown>> = [];
+	if (trajectoryService?.listTrajectories) {
+		const PAGE = 100;
+		try {
+			let offset = 0;
+			while (trajectories.length < limit) {
+				const wantThisPage = Math.min(PAGE, limit - trajectories.length);
+				const r = await trajectoryService.listTrajectories({ limit: wantThisPage, offset });
+				const rows = r.trajectories ?? [];
+				if (rows.length === 0) break;
+				trajectories.push(...rows);
+				offset += rows.length;
+				if (typeof r.total === "number" && offset >= r.total) break;
+			}
+		} catch (err) {
+			console.warn("[agent-public-log] trajectories list failed:", err instanceof Error ? err.message : err);
+		}
+		if (trajectoryService.getTrajectoryDetail) {
+			const detailCap = Math.min(trajectories.length, 500);
+			for (let i = 0; i < detailCap; i++) {
+				const id = String((trajectories[i] as { id?: unknown }).id ?? "");
+				if (!id) continue;
+				try {
+					const detail = await trajectoryService.getTrajectoryDetail(id);
+					if (detail) trajectoryDetails.push({ id, ...detail });
+				} catch { /* skip row */ }
+			}
+		}
+	}
+
+	const memories: Array<Record<string, unknown>> = [];
+	const seen = new Set<string>();
+	const perTable = Math.max(50, Math.ceil(limit / KNOWN_MEMORY_TABLES.length));
+	const getMem = (runtime as unknown as { getMemories?: (opts: { tableName: string; count?: number }) => Promise<Array<Record<string, unknown>>> }).getMemories;
+	if (typeof getMem === "function") {
+		for (const tableName of KNOWN_MEMORY_TABLES) {
+			try {
+				const rows = await getMem.call(runtime, { tableName, count: perTable }) ?? [];
+				for (const m of rows) {
+					const id = String((m as { id?: unknown }).id ?? "");
+					if (id && seen.has(id)) continue;
+					if (id) seen.add(id);
+					memories.push({ ...m, _table: tableName });
+				}
+			} catch (err) {
+				console.warn(`[agent-public-log] memories(${tableName}) fetch failed:`, err instanceof Error ? err.message : err);
+			}
+		}
+	}
+
+	const relationships: Array<Record<string, unknown>> = [];
+	const getRelationships = (runtime as unknown as {
+		getRelationships?: (opts: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+	}).getRelationships;
+	if (typeof getRelationships === "function") {
+		try {
+			const agentId = typeof runtime.agentId === "string" ? runtime.agentId : undefined;
+			const rows = await getRelationships.call(runtime, {
+				...(agentId ? { entityIds: [agentId] } : {}),
+				limit: Math.min(5000, Math.max(200, limit * 5)),
+			});
+			relationships.push(...(rows ?? []));
+		} catch (err) {
+			console.warn("[agent-public-log] relationships fetch failed:", err instanceof Error ? err.message : err);
+		}
+	}
+
+	const filteredMemories: Array<Record<string, unknown>> = [];
+	let redactedMemoryCount = 0;
+	for (const mem of memories) {
+		const md = (mem.metadata as Record<string, unknown> | undefined) ?? {};
+		const summary = {
+			type: typeof md.type === "string" ? md.type : (typeof mem.type === "string" ? mem.type : undefined),
+			path: typeof md.path === "string" ? md.path : (typeof mem.path === "string" ? mem.path : undefined),
+			tags: Array.isArray(md.tags)
+				? (md.tags as unknown[]).filter((t): t is string => typeof t === "string")
+				: (Array.isArray(mem.tags) ? (mem.tags as unknown[]).filter((t): t is string => typeof t === "string") : undefined),
+		};
+		if (isSensitiveMemory(summary)) {
+			redactedMemoryCount++;
+			continue;
+		}
+		if (isPrivateChannelRecord(mem)) {
+			redactedMemoryCount++;
+			filteredMemories.push(deepRedact(scrubTextFields(mem)) as Record<string, unknown>);
+			continue;
+		}
+		filteredMemories.push(deepRedact(mem) as Record<string, unknown>);
+	}
+
+	const scrubbedTrajectoryIds = new Set<string>();
+	const filteredTrajectories: Array<Record<string, unknown>> = [];
+	for (const t of trajectories) {
+		if (isPrivateChannelRecord(t)) {
+			scrubbedTrajectoryIds.add(String((t as { id?: unknown }).id ?? ""));
+			filteredTrajectories.push(deepRedact(scrubTextFields(t)) as Record<string, unknown>);
+			continue;
+		}
+		filteredTrajectories.push(deepRedact(t) as Record<string, unknown>);
+	}
+	const filteredDetails: Array<Record<string, unknown>> = [];
+	for (const d of trajectoryDetails) {
+		const id = String((d as { id?: unknown }).id ?? "");
+		if (scrubbedTrajectoryIds.has(id) || isPrivateChannelRecord(d)) {
+			filteredDetails.push(deepRedact(scrubTextFields(d)) as Record<string, unknown>);
+		} else {
+			filteredDetails.push(deepRedact(d) as Record<string, unknown>);
+		}
+	}
+
+	const filteredRelationships = relationships.map((r) => (
+		isPrivateChannelRecord(r)
+			? deepRedact(scrubTextFields(r))
+			: deepRedact(r)
+	)) as Array<Record<string, unknown>>;
+
+	const memoriesByTable = new Map<string, Array<Record<string, unknown>>>();
+	for (const m of filteredMemories) {
+		const t = String((m as { _table?: unknown })._table ?? "memories");
+		const list = memoriesByTable.get(t) ?? [];
+		list.push(m);
+		memoriesByTable.set(t, list);
+	}
+
+	const work = mkdtempSync(join(tmpdir(), "detour-agent-dump-"));
+	try {
+		mkdirSync(join(work, "data"), { recursive: true });
+		mkdirSync(join(work, "data", "memories"), { recursive: true });
+
+		const SHARD_SOFT_LIMIT = 25 * 1024 * 1024;
+		const writeShardedJsonl = (relPath: string, records: ReadonlyArray<Record<string, unknown>>): { files: string[]; bytes: number } => {
+			const files: string[] = [];
+			let totalBytes = 0;
+			let shardIndex = 0;
+			let buf = "";
+			let bufBytes = 0;
+			const flush = () => {
+				if (buf.length === 0) return;
+				const fname = shardIndex === 0
+					? relPath
+					: relPath.replace(/\.jsonl$/, `.${String(shardIndex).padStart(3, "0")}.jsonl`);
+				writeFileSync(join(work, fname), buf);
+				files.push(fname);
+				totalBytes += bufBytes;
+				shardIndex++;
+				buf = "";
+				bufBytes = 0;
+			};
+			for (const r of records) {
+				const line = `${JSON.stringify(r)}\n`;
+				const lineBytes = Buffer.byteLength(line, "utf8");
+				if (bufBytes + lineBytes > SHARD_SOFT_LIMIT && bufBytes > 0) flush();
+				buf += line;
+				bufBytes += lineBytes;
+			}
+			flush();
+			return { files, bytes: totalBytes };
+		};
+
+		writeShardedJsonl("data/trajectories.jsonl", filteredTrajectories);
+		writeShardedJsonl("data/trajectory-details.jsonl", filteredDetails);
+		writeShardedJsonl("data/relationships.jsonl", filteredRelationships);
+
+		const tableLines: string[] = [];
+		const memoryShardCounts: Record<string, { files: number; entries: number }> = {};
+		for (const [tableName, rows] of memoriesByTable) {
+			const r = writeShardedJsonl(`data/memories/${tableName}.jsonl`, rows);
+			memoryShardCounts[tableName] = { files: r.files.length, entries: rows.length };
+			const shardSuffix = r.files.length > 1 ? ` (${r.files.length} shards)` : "";
+			tableLines.push(`- \`data/memories/${tableName}.jsonl\`${shardSuffix} - ${rows.length} entries`);
+		}
+		writeShardedJsonl("data/all-memories.jsonl", filteredMemories);
+
+		const now = new Date().toISOString();
+		const parts = isoDateParts(new Date());
+		const releaseTag = `snapshot-${now.replace(/[:.]/g, "").replace("Z", "Z")}`;
+		const releaseUrl = releaseUrlForTag?.(releaseTag) ?? null;
+		const archiveSummary = buildArchiveSummary({
+			now,
+			owner,
+			repoUrl,
+			releaseUrl,
+			counts: {
+				trajectories: filteredTrajectories.length,
+				details: filteredDetails.length,
+				memoriesByTable,
+				redactedMemories: redactedMemoryCount,
+				scrubbedTrajectories: scrubbedTrajectoryIds.size,
+				relationships: filteredRelationships.length,
+				totalTrajectoriesScanned: trajectories.length,
+				totalMemoriesScanned: memories.length,
+			},
+		});
+		mkdirSync(join(work, "archive", "daily"), { recursive: true });
+		mkdirSync(join(work, "archive", "weekly"), { recursive: true });
+		mkdirSync(join(work, "archive", "monthly"), { recursive: true });
+		mkdirSync(join(work, "data", "archive", "daily"), { recursive: true });
+		mkdirSync(join(work, "data", "archive", "weekly"), { recursive: true });
+		mkdirSync(join(work, "data", "archive", "monthly"), { recursive: true });
+		writeFileSync(join(work, "archive", "daily", `${parts.day}.md`), archiveSummary);
+		writeFileSync(join(work, "archive", "weekly", `${parts.week}.md`), archiveSummary);
+		writeFileSync(join(work, "archive", "monthly", `${parts.month}.md`), archiveSummary);
+		writeFileSync(join(work, "data", "archive", "daily", `${parts.day}.md`), archiveSummary);
+		writeFileSync(join(work, "data", "archive", "weekly", `${parts.week}.md`), archiveSummary);
+		writeFileSync(join(work, "data", "archive", "monthly", `${parts.month}.md`), archiveSummary);
+		writeFileSync(join(work, "data", "manifest.json"), `${JSON.stringify({
+			generatedAt: now,
+			owner,
+			target: repoUrl,
+			counts: {
+				trajectories: filteredTrajectories.length,
+				trajectoryDetails: filteredDetails.length,
+				memories: filteredMemories.length,
+				memoryTables: memoriesByTable.size,
+				relationships: filteredRelationships.length,
+				redactedMemories: redactedMemoryCount,
+				scrubbedTrajectories: scrubbedTrajectoryIds.size,
+				totalTrajectoriesScanned: trajectories.length,
+				totalMemoriesScanned: memories.length,
+			},
+			memoryShardCounts,
+		}, null, 2)}\n`);
+
+		const readme = [
+			`# ${owner} - agent data dump`,
+			"",
+			`Snapshot at \`${now}\`.`,
+			"",
+			"Auto-generated by [detour](https://github.com/Dexploarer/detour).",
+			"",
+			"## Contents",
+			"",
+			"### Trajectories",
+			`- \`data/trajectories.jsonl\` - ${filteredTrajectories.length} summary rows.`,
+			`- \`data/trajectory-details.jsonl\` - ${filteredDetails.length} full detail records.`,
+			"",
+			"### Memories and knowledge",
+			...(tableLines.length ? tableLines : ["- (no memories captured this run)"]),
+			"",
+			`- \`data/all-memories.jsonl\` - ${filteredMemories.length} combined entries.`,
+			`- \`data/relationships.jsonl\` - ${filteredRelationships.length} relationship records.`,
+			`- \`data/archive/\` - daily, weekly, and monthly snapshot summaries.`,
+			`- \`data/manifest.json\` - counts and shard metadata.`,
+			"",
+			"## Redaction",
+			"",
+			"- Vault / auth / credential memories are dropped entirely.",
+			"- iMessage-sourced records are kept, but text-bearing fields are replaced with `[REDACTED iMessage]`.",
+			"- All surviving strings are deep-scrubbed for credential patterns.",
+		].join("\n");
+		writeFileSync(join(work, "README.md"), `${readme}\n`);
+		writeFileSync(join(work, "data", "README.md"), `${readme}\n`);
+
+		const dataBytes = directorySizeBytes(join(work, "data"));
+		return {
+			work,
+			now,
+			parts,
+			releaseTag,
+			filteredTrajectories,
+			filteredDetails,
+			filteredMemories,
+			filteredRelationships,
+			memoriesByTable,
+			redactedMemoryCount,
+			scrubbedTrajectoryCount: scrubbedTrajectoryIds.size,
+			totalTrajectoriesScanned: trajectories.length,
+			totalMemoriesScanned: memories.length,
+			tableLines,
+			dataBytes,
+		};
+	} catch (err) {
+		try { rmSync(work, { recursive: true, force: true }); } catch { /* ignore */ }
+		throw err;
+	}
 }
 
 const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
@@ -435,263 +795,17 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	if (!owner) return fail("GitHub /user did not return a login");
 	const name = (repoName ?? `${owner}-detour-public-log`).toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 100);
 
-	// 2. Pull trajectories — paginated for completeness. The summary
-	//    rows give us IDs; per-trajectory detail (steps, llmCalls,
-	//    providerAccess, actionAttempts) is fetched separately so the
-	//    dump captures the actual reasoning trace, not just headers.
-	const trajectoryService = runtime.getService("trajectories") as
-		| {
-			listTrajectories?: (opts: { limit?: number; offset?: number }) => Promise<{ trajectories: Array<Record<string, unknown>>; total: number }>;
-			getTrajectoryDetail?: (id: string) => Promise<Record<string, unknown> | null>;
-		}
-		| null;
-	const trajectories: Array<Record<string, unknown>> = [];
-	const trajectoryDetails: Array<Record<string, unknown>> = [];
-	if (trajectoryService?.listTrajectories) {
-		const PAGE = 100;
-		try {
-			let offset = 0;
-			while (trajectories.length < limit) {
-				const wantThisPage = Math.min(PAGE, limit - trajectories.length);
-				const r = await trajectoryService.listTrajectories({ limit: wantThisPage, offset });
-				const rows = r.trajectories ?? [];
-				if (rows.length === 0) break;
-				trajectories.push(...rows);
-				offset += rows.length;
-				// Hard stop when we've scanned the full table.
-				if (typeof r.total === "number" && offset >= r.total) break;
-			}
-		} catch (err) {
-			console.warn("[agent-public-log] trajectories list failed:", err instanceof Error ? err.message : err);
-		}
-		// Pull full detail for each trajectory ID (capped to avoid
-		// runaway round-trips on huge backlogs).
-		if (trajectoryService.getTrajectoryDetail) {
-			const detailCap = Math.min(trajectories.length, 500);
-			for (let i = 0; i < detailCap; i++) {
-				const id = String((trajectories[i] as { id?: unknown }).id ?? "");
-				if (!id) continue;
-				try {
-					const detail = await trajectoryService.getTrajectoryDetail(id);
-					if (detail) trajectoryDetails.push({ id, ...detail });
-				} catch { /* per-row failure → skip */ }
-			}
-		}
-	}
-
-	// 3. Pull memories from EVERY known pensieve table, paginated.
-	//    KNOWN_MEMORY_TABLES is the canonical list; matches what the
-	//    pensieve UI shows. Per-table page cap prevents a single huge
-	//    table from squeezing out the others.
-	const memories: Array<Record<string, unknown>> = [];
-	const seen = new Set<string>();
-	const perTable = Math.max(50, Math.ceil(limit / KNOWN_MEMORY_TABLES.length));
-	const getMem = (runtime as unknown as { getMemories?: (opts: { tableName: string; count?: number }) => Promise<Array<Record<string, unknown>>> }).getMemories;
-	if (typeof getMem === "function") {
-		for (const tableName of KNOWN_MEMORY_TABLES) {
-			try {
-				const rows = await getMem.call(runtime, { tableName, count: perTable }) ?? [];
-				for (const m of rows) {
-					const id = String((m as { id?: unknown }).id ?? "");
-					if (id && seen.has(id)) continue;
-					if (id) seen.add(id);
-					memories.push({ ...m, _table: tableName });
-				}
-			} catch (err) {
-				console.warn(`[agent-public-log] memories(${tableName}) fetch failed:`, err instanceof Error ? err.message : err);
-			}
-		}
-	}
-
-	// 4. Redact + filter. eliza memories carry sensitivity hints under
-	//    `metadata.{type,path,tags}` — fall back to top-level keys for
-	//    pensieve-shaped rows.
-	const filteredMemories: Array<Record<string, unknown>> = [];
-	let redactedMemoryCount = 0;
-	for (const mem of memories) {
-		const md = (mem.metadata as Record<string, unknown> | undefined) ?? {};
-		const summary = {
-			type: typeof md.type === "string" ? md.type : (typeof mem.type === "string" ? mem.type : undefined),
-			path: typeof md.path === "string" ? md.path : (typeof mem.path === "string" ? mem.path : undefined),
-			tags: Array.isArray(md.tags)
-				? (md.tags as unknown[]).filter((t): t is string => typeof t === "string")
-				: (Array.isArray(mem.tags) ? (mem.tags as unknown[]).filter((t): t is string => typeof t === "string") : undefined),
-		};
-		// Hard-drop only for vault/auth/credential category. Those have
-		// no public-facing utility and can't be safely redacted in a
-		// targeted way.
-		if (isSensitiveMemory(summary)) {
-			redactedMemoryCount++;
-			continue;
-		}
-		// iMessage-sourced records: scrub the text-bearing fields but
-		// keep the record shell (id, timestamps, source, tags). The
-		// timeline stays visible; only the actual chat content is
-		// redacted.
-		if (isPrivateChannelRecord(mem)) {
-			redactedMemoryCount++;
-			filteredMemories.push(deepRedact(scrubTextFields(mem)) as Record<string, unknown>);
-			continue;
-		}
-		// Default: just credential-pattern redaction.
-		filteredMemories.push(deepRedact(mem) as Record<string, unknown>);
-	}
-
-	// Track which trajectory IDs are iMessage-sourced so the detail
-	// fetch knows to scrub their text fields too. We never drop the
-	// trajectory record itself — only the message text inside it.
-	const scrubbedTrajectoryIds = new Set<string>();
-	const filteredTrajectories: Array<Record<string, unknown>> = [];
-	for (const t of trajectories) {
-		if (isPrivateChannelRecord(t)) {
-			scrubbedTrajectoryIds.add(String((t as { id?: unknown }).id ?? ""));
-			filteredTrajectories.push(deepRedact(scrubTextFields(t)) as Record<string, unknown>);
-			continue;
-		}
-		filteredTrajectories.push(deepRedact(t) as Record<string, unknown>);
-	}
-	const filteredDetails: Array<Record<string, unknown>> = [];
-	for (const d of trajectoryDetails) {
-		const id = String((d as { id?: unknown }).id ?? "");
-		if (scrubbedTrajectoryIds.has(id) || isPrivateChannelRecord(d)) {
-			filteredDetails.push(deepRedact(scrubTextFields(d)) as Record<string, unknown>);
-		} else {
-			filteredDetails.push(deepRedact(d) as Record<string, unknown>);
-		}
-	}
-
-	// Bucket memories by table so the dump is navigable per-table.
-	const memoriesByTable = new Map<string, Array<Record<string, unknown>>>();
-	for (const m of filteredMemories) {
-		const t = String((m as { _table?: unknown })._table ?? "memories");
-		const list = memoriesByTable.get(t) ?? [];
-		list.push(m);
-		memoriesByTable.set(t, list);
-	}
-
-	// 4. Stage repo contents in a temp dir, git init, push.
-	const work = mkdtempSync(join(tmpdir(), "detour-public-log-"));
+	const snapshot = await createAgentDumpSnapshot({
+		runtime,
+		limit,
+		owner,
+		repoUrl: `https://github.com/${owner}/${name}`,
+		releaseUrlForTag: release
+			? (tag) => `https://github.com/${owner}/${name}/releases/tag/${encodeURIComponent(tag)}`
+			: undefined,
+	});
+	const work = snapshot.work;
 	try {
-		mkdirSync(join(work, "data"), { recursive: true });
-		mkdirSync(join(work, "data", "memories"), { recursive: true });
-
-		// GitHub hard-rejects files > 100MB and warns above 50MB. The
-		// agent's trajectory-detail records (LLM call payloads, full
-		// step traces) can be huge, so we shard JSONL writes once a
-		// file approaches 25MB. Each shard is independently readable.
-		const SHARD_SOFT_LIMIT = 25 * 1024 * 1024;
-		const writeShardedJsonl = (relPath: string, records: ReadonlyArray<Record<string, unknown>>): { files: string[]; bytes: number } => {
-			const files: string[] = [];
-			let totalBytes = 0;
-			let shardIndex = 0;
-			let buf = "";
-			let bufBytes = 0;
-			const flush = () => {
-				if (buf.length === 0) return;
-				const fname = shardIndex === 0
-					? relPath
-					: relPath.replace(/\.jsonl$/, `.${String(shardIndex).padStart(3, "0")}.jsonl`);
-				writeFileSync(join(work, fname), buf);
-				files.push(fname);
-				totalBytes += bufBytes;
-				shardIndex++;
-				buf = "";
-				bufBytes = 0;
-			};
-			for (const r of records) {
-				const line = `${JSON.stringify(r)}\n`;
-				const lineBytes = Buffer.byteLength(line, "utf8");
-				if (bufBytes + lineBytes > SHARD_SOFT_LIMIT && bufBytes > 0) flush();
-				buf += line;
-				bufBytes += lineBytes;
-			}
-			flush();
-			return { files, bytes: totalBytes };
-		};
-
-		// Trajectories: summary rows + full detail (steps, llm calls,
-		// provider accesses, action attempts) — sharded for size.
-		const trajResult = writeShardedJsonl("data/trajectories.jsonl", filteredTrajectories);
-		const detailResult = writeShardedJsonl("data/trajectory-details.jsonl", filteredDetails);
-
-		// Memories: one JSONL per pensieve table (each sharded as
-		// needed) + a combined `all-memories.jsonl` for tooling.
-		const tableLines: string[] = [];
-		const memoryShardCounts: Record<string, { files: number; entries: number }> = {};
-		for (const [tableName, rows] of memoriesByTable) {
-			const r = writeShardedJsonl(`data/memories/${tableName}.jsonl`, rows);
-			memoryShardCounts[tableName] = { files: r.files.length, entries: rows.length };
-			const shardSuffix = r.files.length > 1 ? ` (${r.files.length} shards)` : "";
-			tableLines.push(`- \`data/memories/${tableName}.jsonl\`${shardSuffix} — ${rows.length} entries`);
-		}
-		const allMemResult = writeShardedJsonl("data/all-memories.jsonl", filteredMemories);
-		void trajResult; void detailResult; void allMemResult; void memoryShardCounts;
-
-		// Chronological archive: compact markdown summaries per day,
-		// per ISO week, per month. We DON'T archive the full data dump
-		// (would blow past GitHub's repo size practically immediately —
-		// each snapshot is ~250MB of trajectory details). Summaries
-		// give you the timeline; the rolling `data/` is the latest
-		// full state.
-		const now = new Date().toISOString();
-		const parts = isoDateParts(new Date());
-		// Predict the release tag + URL so the archive markdown can
-		// link to the release at write time, even though the actual
-		// release isn't created until after push.
-		const releaseTag = `snapshot-${now.replace(/[:.]/g, "").replace("Z", "Z")}`;
-		const releaseUrl = release
-			? `https://github.com/${owner}/${name}/releases/tag/${encodeURIComponent(releaseTag)}`
-			: null;
-		const archiveSummary = buildArchiveSummary({
-			now,
-			owner,
-			repoUrl: `https://github.com/${owner}/${name}`,
-			releaseUrl,
-			counts: {
-				trajectories: filteredTrajectories.length,
-				details: filteredDetails.length,
-				memoriesByTable,
-				redactedMemories: redactedMemoryCount,
-				scrubbedTrajectories: scrubbedTrajectoryIds.size,
-				totalTrajectoriesScanned: trajectories.length,
-				totalMemoriesScanned: memories.length,
-			},
-		});
-		mkdirSync(join(work, "archive", "daily"), { recursive: true });
-		mkdirSync(join(work, "archive", "weekly"), { recursive: true });
-		mkdirSync(join(work, "archive", "monthly"), { recursive: true });
-		writeFileSync(join(work, "archive", "daily", `${parts.day}.md`), archiveSummary);
-		writeFileSync(join(work, "archive", "weekly", `${parts.week}.md`), archiveSummary);
-		writeFileSync(join(work, "archive", "monthly", `${parts.month}.md`), archiveSummary);
-
-		const readme = [
-			`# ${owner} — public agent log`,
-			"",
-			`Snapshot at \`${now}\`.`,
-			"",
-			"Auto-generated by [detour](https://github.com/Dexploarer/detour) — Dexploarer's elizaOS sandbox.",
-			"",
-			"## Contents",
-			"",
-			"### Trajectories",
-			`- \`data/trajectories.jsonl\` — ${filteredTrajectories.length} summary rows (id, source, status, timing, step counts).`,
-			`- \`data/trajectory-details.jsonl\` — ${filteredDetails.length} full detail records (steps, LLM calls, provider accesses, action attempts, observations).`,
-			"",
-			"### Memories — fanout across every pensieve table",
-			...(tableLines.length ? tableLines : ["- (no memories captured this run)"]),
-			"",
-			`- \`data/all-memories.jsonl\` — ${filteredMemories.length} combined (deduped by id, redacted=${redactedMemoryCount}).`,
-			"",
-			"## Redaction",
-			"",
-			"- **Vault / auth / credential memories** (type ∈ {vault, secret, credential}, paths matching `vault|auth|_meta|_routing|pm.|config.`, tags including `vault|secret|credential|private`): dropped entirely.",
-			"- **iMessage-sourced records** (source / channel / platform fields matching `imessage`): kept, but text-bearing fields (`text`, `body`, `content.text`, `message`, `input`, `output`, `prompt`, `completion`, etc.) are replaced with `[REDACTED iMessage]`. Timeline + metadata stays visible; chat content does not.",
-			"- **All string fields in every surviving record** are deep-walked and scrubbed for credential patterns (sk-…, sk-ant-…, ghp_…, AKIA…, PRIVATE KEY blocks, `ANTHROPIC_API_KEY=…`, etc.).",
-			"",
-			"Records that merely mention iMessage in unrelated context (autonomy prompts, GIF captions, agent reasoning) are kept as-is.",
-		].join("\n");
-		writeFileSync(join(work, "README.md"), `${readme}\n`);
-
 		if (reset) {
 			try {
 				const deleted = await deleteRepoIfExists({ pat, owner, name });
@@ -752,7 +866,7 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 		const commit = await git(repoWork, [
 			"-c", "user.email=agent@detour.local",
 			"-c", "user.name=Detour Agent",
-			"commit", "--quiet", "-m", `snapshot: ${now}`,
+			"commit", "--quiet", "-m", `snapshot: ${snapshot.now}`,
 		]);
 		if (!commit.ok && !commit.stderr.includes("nothing to commit")) {
 			throw new Error(`git commit failed: ${commit.stderr}`);
@@ -785,12 +899,13 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 				const tarCode = await tarProc.exited;
 				if (tarCode !== 0) throw new Error(`tar failed: ${tarStderr.trim().slice(0, 200)}`);
 				const releaseBody = [
-					`Snapshot at \`${now}\`.`,
+					`Snapshot at \`${snapshot.now}\`.`,
 					"",
-					`- ${filteredTrajectories.length} trajectories (${filteredDetails.length} with full detail)`,
-					`- ${filteredMemories.length} memories across ${memoriesByTable.size} pensieve tables (${redactedMemoryCount} redacted)`,
+					`- ${snapshot.filteredTrajectories.length} trajectories (${snapshot.filteredDetails.length} with full detail)`,
+					`- ${snapshot.filteredMemories.length} memories across ${snapshot.memoriesByTable.size} pensieve tables (${snapshot.redactedMemoryCount} redacted)`,
+					`- ${snapshot.filteredRelationships.length} relationships`,
 					"",
-					`Daily summary: \`archive/daily/${parts.day}.md\`.`,
+					`Daily summary: \`archive/daily/${snapshot.parts.day}.md\`.`,
 					"",
 					"Download `dump.tar.gz` for the full data — extract and inspect with `tar xzf dump.tar.gz`. Each file inside is a JSONL ready for `jq`/grep.",
 				].join("\n");
@@ -798,8 +913,8 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 					pat,
 					owner,
 					name,
-					tag: releaseTag,
-					releaseTitle: `Snapshot ${now}`,
+					tag: snapshot.releaseTag,
+					releaseTitle: `Snapshot ${snapshot.now}`,
 					body: releaseBody,
 					assetPath: tarPath,
 					assetName: "dump.tar.gz",
@@ -813,7 +928,7 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 		}
 
 		const releaseSuffix = releaseInfo ? ` · release: ${releaseInfo.htmlUrl}` : "";
-		const summary = `Published agent public log to ${repo.htmlUrl} — ${filteredTrajectories.length} trajectories (${filteredDetails.length} with full detail), ${filteredMemories.length} memories across ${memoriesByTable.size} tables (${redactedMemoryCount} redacted). Archive: daily/${parts.day}, weekly/${parts.week}, monthly/${parts.month}${releaseSuffix}.`;
+		const summary = `Published agent public log to ${repo.htmlUrl} — ${snapshot.filteredTrajectories.length} trajectories (${snapshot.filteredDetails.length} with full detail), ${snapshot.filteredMemories.length} memories across ${snapshot.memoriesByTable.size} tables (${snapshot.redactedMemoryCount} redacted), ${snapshot.filteredRelationships.length} relationships. Archive: daily/${snapshot.parts.day}, weekly/${snapshot.parts.week}, monthly/${snapshot.parts.month}${releaseSuffix}.`;
 		await emit(callback, summary, "AGENT_PUBLIC_LOG_PUBLISH");
 
 		// Optional: post about it on X. Best-effort; if X auth is missing
@@ -822,8 +937,8 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 			try {
 				const text = [
 					`Just dumped my latest agent log: ${repo.htmlUrl}`,
-					`${filteredTrajectories.length} trajectories · ${filteredMemories.length} memories · ${redactedMemoryCount} redacted`,
-					`Archive: archive/daily/${parts.day}.md`,
+					`${snapshot.filteredTrajectories.length} trajectories · ${snapshot.filteredMemories.length} memories · ${snapshot.redactedMemoryCount} redacted`,
+					`Archive: archive/daily/${snapshot.parts.day}.md`,
 					`(part of detour — Dexploarer's elizaOS sandbox)`,
 				].join("\n");
 				const liveActions = (runtime as unknown as { actions?: Array<{ name: string; handler: (...a: unknown[]) => unknown }> }).actions ?? [];
@@ -841,20 +956,86 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 			caller: runtime.character?.name ? `agent:${runtime.character.name}` : "agent",
 			htmlUrl: repo.htmlUrl,
 			cloneUrl: repo.cloneUrl,
-			counts: {
-				trajectories: filteredTrajectories.length,
-				trajectoryDetails: filteredDetails.length,
-				memories: filteredMemories.length,
-				memoryTables: memoriesByTable.size,
-				redactedMemories: redactedMemoryCount,
-				totalTrajectoriesScanned: trajectories.length,
-				totalMemoriesScanned: memories.length,
-			},
+			counts: dumpCounts(snapshot),
 		});
 	} catch (err) {
 		return fail(err instanceof Error ? err.message : String(err));
 	} finally {
 		try { rmSync(work, { recursive: true, force: true }); } catch { /* ignore */ }
+	}
+};
+
+function truncateOutput(text: string, max = 2000): string {
+	return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+async function runHfSync(work: string, destination: string): Promise<{
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}> {
+	let proc: ReturnType<typeof Bun.spawn>;
+	try {
+		proc = Bun.spawn(["hf", "sync", "./data", destination], {
+			cwd: work,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+	} catch (err) {
+		throw new Error(`hf CLI could not be started: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	const stdoutPipe = proc.stdout;
+	const stderrPipe = proc.stderr;
+	const [stdout, stderr, exitCode] = await Promise.all([
+		stdoutPipe && typeof stdoutPipe === "object" ? new Response(stdoutPipe as ReadableStream<Uint8Array>).text() : Promise.resolve(""),
+		stderrPipe && typeof stderrPipe === "object" ? new Response(stderrPipe as ReadableStream<Uint8Array>).text() : Promise.resolve(""),
+		proc.exited,
+	]);
+	return {
+		exitCode,
+		stdout: truncateOutput(stdout.trim()),
+		stderr: truncateOutput(stderr.trim()),
+	};
+}
+
+const hfSyncHandler: Handler = async (runtime, message, _s, options, callback) => {
+	if (!(await hasOwnerAccess(runtime, message))) {
+		return fail("Permission denied: only the owner may sync the agent data dump to Hugging Face.");
+	}
+	const opts = options as Record<string, unknown> | undefined;
+	const destination = pickString(opts, ["destination", "bucket", "target", "url"]) ?? DEFAULT_HF_BUCKET;
+	if (!destination.startsWith("hf://")) {
+		return fail("Hugging Face destination must start with `hf://`.");
+	}
+	const limit = Math.min(2000, pickNumber(opts, "limit", 200));
+	let snapshot: DumpSnapshot | null = null;
+	try {
+		snapshot = await createAgentDumpSnapshot({
+			runtime,
+			limit,
+			owner: runtime.character?.name ?? "detour-agent",
+			repoUrl: destination,
+		});
+		const result = await runHfSync(snapshot.work, destination);
+		if (result.exitCode !== 0) {
+			return fail(`HF sync failed (exit ${result.exitCode}): ${result.stderr || result.stdout || "no output"}`);
+		}
+		const command = `hf sync ./data ${destination}`;
+		const summary = `Synced agent data dump to ${destination} using \`${command}\`: ${snapshot.filteredTrajectories.length} trajectories, ${snapshot.filteredDetails.length} trajectory details, ${snapshot.filteredMemories.length} memories/knowledge records, ${snapshot.filteredRelationships.length} relationships, ${snapshot.redactedMemoryCount} redacted, ${snapshot.dataBytes} bytes.`;
+		await emit(callback, summary, "AGENT_HF_DATASET_SYNC");
+		return ok(summary, {
+			destination,
+			command,
+			stdout: result.stdout,
+			stderr: result.stderr,
+			counts: dumpCounts(snapshot),
+		});
+	} catch (err) {
+		return fail(err instanceof Error ? err.message : String(err));
+	} finally {
+		if (snapshot) {
+			try { rmSync(snapshot.work, { recursive: true, force: true }); } catch { /* ignore */ }
+		}
 	}
 };
 
@@ -876,9 +1057,23 @@ export const agentPublicLogPublishAction: Action = {
 	],
 } as Action;
 
+export const agentHfDatasetSyncAction: Action = {
+	name: "AGENT_HF_DATASET_SYNC",
+	similes: ["HF_SYNC_DATASET", "HUGGINGFACE_DATASET_SYNC", "DUMP_AGENT_DATA_TO_HF", "EXPORT_TO_HUGGINGFACE"],
+	description:
+		"Dump the agent's trajectories, full trajectory detail, Pensieve memories/knowledge tables, combined memories, relationships, manifest, and archive summaries into a staged `./data` directory, then run `hf sync ./data hf://buckets/dexploarer/detourdump` by default. Optional: `destination` (any hf:// target) and `limit` (default 200, max 2000). Requires the local Hugging Face `hf` CLI to be installed and authenticated. Redaction matches AGENT_PUBLIC_LOG_PUBLISH: vault/auth/credential memories are dropped, iMessage text fields are scrubbed, and surviving strings are credential-scrubbed.",
+	validate: async (runtime, message) => hasOwnerAccess(runtime, message),
+	handler: hfSyncHandler,
+	examples: [],
+	parameters: [
+		{ name: "destination", description: "Hugging Face target. Defaults to hf://buckets/dexploarer/detourdump.", required: false, schema: { type: "string" as const } },
+		{ name: "limit", description: "Max items to include per category (1-2000).", required: false, schema: { type: "number" as const } },
+	],
+} as Action;
+
 export const agentPublicLogPlugin: Plugin = {
 	name: "agent-public-log",
 	description:
-		"Single-action plugin: AGENT_PUBLIC_LOG_PUBLISH dumps the agent's recent trajectories + memories to a public GitHub repo under the agent's identity, with credential redaction. Force-pushes a rolling snapshot. Use for accountability / transparency.",
-	actions: [agentPublicLogPublishAction],
+		"Agent data publishing plugin: AGENT_PUBLIC_LOG_PUBLISH dumps recent trajectories + memories to GitHub, and AGENT_HF_DATASET_SYNC syncs the same staged dataset to a Hugging Face hf:// bucket with credential redaction.",
+	actions: [agentPublicLogPublishAction, agentHfDatasetSyncAction],
 };
