@@ -375,6 +375,18 @@ export type AgentConfig = {
 	elevatedCoding?: boolean;
 };
 
+export type AgentDataDumpCounts = {
+	trajectories: number;
+	trajectoryDetails: number;
+	memories: number;
+	memoryTables: number;
+	relationships: number;
+	redactedMemories: number;
+	totalTrajectoriesScanned: number;
+	totalMemoriesScanned: number;
+	dataBytes: number;
+};
+
 export type AgentCharacterStyle = {
 	all: string[];
 	chat: string[];

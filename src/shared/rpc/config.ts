@@ -1,10 +1,32 @@
 import type {
 	AgentCharacterConfig,
 	AgentConfig,
+	AgentDataDumpCounts,
 	ModelConfig,
 	UiPreferences,
 	WindowConfig,
 } from "../index";
+
+export type AgentHfDumpJobStatus = "running" | "succeeded" | "failed";
+
+export type AgentHfDumpJob = {
+	id: string;
+	destination: string;
+	command: string;
+	status: AgentHfDumpJobStatus;
+	startedAt: string;
+	finishedAt: string | null;
+	counts: AgentDataDumpCounts | null;
+	stdout: string | null;
+	stderr: string | null;
+	error: string | null;
+};
+
+export type AgentHfDumpStatus = {
+	defaultDestination: string;
+	hfAvailable: boolean;
+	activeJob: AgentHfDumpJob | null;
+};
 
 /**
  * App configuration RPC: agent permissions, character, models, window,
@@ -52,6 +74,18 @@ export type ConfigRequests = {
 	uiSetPreferences: {
 		params: Partial<UiPreferences>;
 		response: { ok: true };
+	};
+	agentHfDumpStatus: {
+		params: Record<string, never>;
+		response: AgentHfDumpStatus;
+	};
+	agentHfDumpStartSync: {
+		params: { destination?: string; limit?: number };
+		response: AgentHfDumpJob;
+	};
+	agentHfDumpGetJob: {
+		params: { id: string };
+		response: AgentHfDumpJob | null;
 	};
 };
 

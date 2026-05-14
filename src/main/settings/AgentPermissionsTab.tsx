@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentConfig, AgentVaultMode } from "../../shared/index";
+import type { AgentHfDumpJob } from "../../shared/rpc/config";
 import { rpc } from "../rpc";
 
 const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
@@ -8,12 +9,25 @@ const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
 	{ id: "read-write", label: "Read + write", help: "Agent can also save / overwrite / delete entries." },
 ];
 
+function formatBytes(n: number): string {
+	if (n < 1024) return `${n} B`;
+	if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+	if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+	return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 export function AgentPermissionsTab() {
 	const [cfg, setCfg] = useState<AgentConfig | null>(null);
 	const [allowedDraft, setAllowedDraft] = useState("");
 	const [deniedDraft, setDeniedDraft] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [savedAt, setSavedAt] = useState<number | null>(null);
+	const [hfDestination, setHfDestination] = useState("hf://buckets/dexploarer/detourdump");
+	const [hfLimit, setHfLimit] = useState("200");
+	const [hfAvailable, setHfAvailable] = useState<boolean | null>(null);
+	const [hfJob, setHfJob] = useState<AgentHfDumpJob | null>(null);
+	const [hfStarting, setHfStarting] = useState(false);
+	const [hfError, setHfError] = useState<string | null>(null);
 
 	useEffect(() => {
 		void rpc.request.configGetAgent({}).then((c) => {
@@ -21,7 +35,26 @@ export function AgentPermissionsTab() {
 			setAllowedDraft(c.allowedPrefixes.join(", "));
 			setDeniedDraft(c.deniedPrefixes.join(", "));
 		});
+		void rpc.request.agentHfDumpStatus({}).then((hf) => {
+			setHfDestination(hf.defaultDestination);
+			setHfAvailable(hf.hfAvailable);
+			setHfJob(hf.activeJob);
+		}).catch((err) => {
+			setHfError(err instanceof Error ? err.message : String(err));
+		});
 	}, []);
+
+	useEffect(() => {
+		if (!hfJob || hfJob.status !== "running") return;
+		const id = window.setInterval(() => {
+			void rpc.request.agentHfDumpGetJob({ id: hfJob.id }).then((job) => {
+				if (job) setHfJob(job);
+			}).catch((err) => {
+				setHfError(err instanceof Error ? err.message : String(err));
+			});
+		}, 1500);
+		return () => window.clearInterval(id);
+	}, [hfJob?.id, hfJob?.status]);
 
 	async function save(next: AgentConfig) {
 		setSaving(true);
@@ -61,8 +94,33 @@ export function AgentPermissionsTab() {
 		const deniedPrefixes = deniedDraft.split(",").map((s) => s.trim()).filter(Boolean);
 		void save({ ...cfg, allowedPrefixes, deniedPrefixes });
 	}
+	async function startHfSync() {
+		const destination = hfDestination.trim();
+		if (!destination.startsWith("hf://")) {
+			setHfError("Hugging Face destination must start with `hf://`.");
+			return;
+		}
+		const parsedLimit = Number(hfLimit);
+		const limit = Number.isFinite(parsedLimit) ? Math.min(2000, Math.max(1, Math.floor(parsedLimit))) : 200;
+		const confirmed = window.confirm(
+			`Sync the redacted agent data dump to ${destination}?\n\nThis uploads trajectories, memories, knowledge, and relationships after Detour's redaction filters.`,
+		);
+		if (!confirmed) return;
+		setHfStarting(true);
+		setHfError(null);
+		try {
+			const job = await rpc.request.agentHfDumpStartSync({ destination, limit });
+			setHfJob(job);
+		} catch (err) {
+			setHfError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setHfStarting(false);
+		}
+	}
 
 	if (!cfg) return <div className="hint">Loading…</div>;
+
+	const hfRunning = hfJob?.status === "running";
 
 	return (
 		<div>
@@ -220,6 +278,69 @@ export function AgentPermissionsTab() {
 						</span>
 					</label>
 				</div>
+			</div>
+
+			<h3 style={{ margin: "20px 0 4px" }}>Data export</h3>
+			<p className="hint">
+				Syncs the agent's redacted trajectories, memories, knowledge, relationships, manifest, and archive summaries to a Hugging Face bucket.
+			</p>
+			<div className="card">
+				<label>Hugging Face destination</label>
+				<input
+					type="text"
+					value={hfDestination}
+					placeholder="hf://buckets/dexploarer/detourdump"
+					onChange={(e) => setHfDestination(e.target.value)}
+					disabled={hfRunning || hfStarting}
+					style={{ marginTop: 6 }}
+				/>
+				<div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginTop: 12 }}>
+					<div style={{ flex: "0 0 120px" }}>
+						<label>Limit</label>
+						<input
+							type="number"
+							min={1}
+							max={2000}
+							step={1}
+							value={hfLimit}
+							onChange={(e) => setHfLimit(e.target.value)}
+							disabled={hfRunning || hfStarting}
+							style={{ marginTop: 6 }}
+						/>
+					</div>
+					<button
+						type="button"
+						onClick={() => void startHfSync()}
+						disabled={hfRunning || hfStarting}
+						style={{ minWidth: 170 }}
+					>
+						{hfRunning ? "Syncing..." : hfStarting ? "Starting..." : "Sync to Hugging Face"}
+					</button>
+				</div>
+				<div className="hint" style={{ marginTop: 8 }}>
+					Command: <code>hf sync ./data {hfDestination.trim() || "hf://buckets/dexploarer/detourdump"}</code>
+				</div>
+				{hfAvailable === false && (
+					<div className="hint" style={{ marginTop: 8, color: "var(--error)" }}>
+						Hugging Face <code>hf</code> CLI was not detected in the app environment.
+					</div>
+				)}
+				{hfJob && (
+					<div className="hint" style={{ marginTop: 8, color: hfJob.status === "failed" ? "var(--error)" : hfJob.status === "succeeded" ? "var(--ok)" : "var(--fg-muted)" }}>
+						{hfJob.status === "running" && <>Sync running since {new Date(hfJob.startedAt).toLocaleTimeString()}.</>}
+						{hfJob.status === "succeeded" && hfJob.counts && (
+							<>
+								Synced {hfJob.counts.trajectories} trajectories, {hfJob.counts.memories} memories, {hfJob.counts.relationships} relationships ({formatBytes(hfJob.counts.dataBytes)}).
+							</>
+						)}
+						{hfJob.status === "failed" && (hfJob.error ?? "Sync failed.")}
+					</div>
+				)}
+				{hfError && (
+					<div className="hint" style={{ marginTop: 8, color: "var(--error)" }}>
+						{hfError}
+					</div>
+				)}
 			</div>
 
 			{saving && <div className="hint">Saving…</div>}

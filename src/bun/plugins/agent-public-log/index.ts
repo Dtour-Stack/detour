@@ -24,9 +24,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Action, ActionResult, Handler, IAgentRuntime, Plugin } from "@elizaos/core";
 import { hasOwnerAccess } from "@elizaos/agent/security";
+import type { AgentDataDumpCounts } from "../../../shared/index";
 import { KNOWN_MEMORY_TABLES } from "../../core/pensieve/memory-service";
 
-const DEFAULT_HF_BUCKET = "hf://buckets/dexploarer/detourdump";
+export const DEFAULT_HF_BUCKET = "hf://buckets/dexploarer/detourdump";
 
 const CRED_PATTERNS: RegExp[] = [
 	/sk-ant-[A-Za-z0-9_-]{16,}/g,
@@ -440,7 +441,7 @@ type DumpSnapshot = {
 	dataBytes: number;
 };
 
-function dumpCounts(snapshot: DumpSnapshot): Record<string, unknown> {
+function dumpCounts(snapshot: DumpSnapshot): AgentDataDumpCounts {
 	return {
 		trajectories: snapshot.filteredTrajectories.length,
 		trajectoryDetails: snapshot.filteredDetails.length,
@@ -969,6 +970,10 @@ function truncateOutput(text: string, max = 2000): string {
 	return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+export function hfDatasetSyncCommand(destination = DEFAULT_HF_BUCKET): string {
+	return `hf sync ./data ${destination}`;
+}
+
 async function runHfSync(work: string, destination: string): Promise<{
 	exitCode: number;
 	stdout: string;
@@ -978,6 +983,7 @@ async function runHfSync(work: string, destination: string): Promise<{
 	try {
 		proc = Bun.spawn(["hf", "sync", "./data", destination], {
 			cwd: work,
+			env: process.env,
 			stdout: "pipe",
 			stderr: "pipe",
 		});
@@ -998,16 +1004,25 @@ async function runHfSync(work: string, destination: string): Promise<{
 	};
 }
 
-const hfSyncHandler: Handler = async (runtime, message, _s, options, callback) => {
-	if (!(await hasOwnerAccess(runtime, message))) {
-		return fail("Permission denied: only the owner may sync the agent data dump to Hugging Face.");
-	}
-	const opts = options as Record<string, unknown> | undefined;
-	const destination = pickString(opts, ["destination", "bucket", "target", "url"]) ?? DEFAULT_HF_BUCKET;
+export type AgentHfDatasetSyncResult = {
+	destination: string;
+	command: string;
+	stdout: string;
+	stderr: string;
+	counts: AgentDataDumpCounts;
+	summary: string;
+};
+
+export async function syncAgentDumpToHf(
+	runtime: IAgentRuntime,
+	options: { destination?: string; limit?: number } = {},
+): Promise<AgentHfDatasetSyncResult> {
+	const destination = options.destination ?? DEFAULT_HF_BUCKET;
 	if (!destination.startsWith("hf://")) {
-		return fail("Hugging Face destination must start with `hf://`.");
+		throw new Error("Hugging Face destination must start with `hf://`.");
 	}
-	const limit = Math.min(2000, pickNumber(opts, "limit", 200));
+	const rawLimit = options.limit ?? 200;
+	const limit = Math.min(2000, Math.max(1, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 200));
 	let snapshot: DumpSnapshot | null = null;
 	try {
 		snapshot = await createAgentDumpSnapshot({
@@ -1018,24 +1033,45 @@ const hfSyncHandler: Handler = async (runtime, message, _s, options, callback) =
 		});
 		const result = await runHfSync(snapshot.work, destination);
 		if (result.exitCode !== 0) {
-			return fail(`HF sync failed (exit ${result.exitCode}): ${result.stderr || result.stdout || "no output"}`);
+			throw new Error(`HF sync failed (exit ${result.exitCode}): ${result.stderr || result.stdout || "no output"}`);
 		}
-		const command = `hf sync ./data ${destination}`;
+		const command = hfDatasetSyncCommand(destination);
+		const counts = dumpCounts(snapshot);
 		const summary = `Synced agent data dump to ${destination} using \`${command}\`: ${snapshot.filteredTrajectories.length} trajectories, ${snapshot.filteredDetails.length} trajectory details, ${snapshot.filteredMemories.length} memories/knowledge records, ${snapshot.filteredRelationships.length} relationships, ${snapshot.redactedMemoryCount} redacted, ${snapshot.dataBytes} bytes.`;
-		await emit(callback, summary, "AGENT_HF_DATASET_SYNC");
-		return ok(summary, {
+		return {
 			destination,
 			command,
 			stdout: result.stdout,
 			stderr: result.stderr,
-			counts: dumpCounts(snapshot),
-		});
-	} catch (err) {
-		return fail(err instanceof Error ? err.message : String(err));
+			counts,
+			summary,
+		};
 	} finally {
 		if (snapshot) {
 			try { rmSync(snapshot.work, { recursive: true, force: true }); } catch { /* ignore */ }
 		}
+	}
+}
+
+const hfSyncHandler: Handler = async (runtime, message, _s, options, callback) => {
+	if (!(await hasOwnerAccess(runtime, message))) {
+		return fail("Permission denied: only the owner may sync the agent data dump to Hugging Face.");
+	}
+	const opts = options as Record<string, unknown> | undefined;
+	const destination = pickString(opts, ["destination", "bucket", "target", "url"]) ?? DEFAULT_HF_BUCKET;
+	const limit = Math.min(2000, pickNumber(opts, "limit", 200));
+	try {
+		const result = await syncAgentDumpToHf(runtime, { destination, limit });
+		await emit(callback, result.summary, "AGENT_HF_DATASET_SYNC");
+		return ok(result.summary, {
+			destination: result.destination,
+			command: result.command,
+			stdout: result.stdout,
+			stderr: result.stderr,
+			counts: result.counts,
+		});
+	} catch (err) {
+		return fail(err instanceof Error ? err.message : String(err));
 	}
 };
 
