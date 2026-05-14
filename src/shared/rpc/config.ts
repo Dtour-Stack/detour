@@ -2,6 +2,9 @@ import type {
 	AgentCharacterConfig,
 	AgentConfig,
 	AgentDataDumpCounts,
+	AgentHfSyncPolicy,
+	AgentHfSyncReason,
+	AgentHfSyncState,
 	ModelConfig,
 	UiPreferences,
 	WindowConfig,
@@ -13,6 +16,7 @@ export type AgentHfDumpJob = {
 	id: string;
 	destination: string;
 	command: string;
+	reason: AgentHfSyncReason;
 	status: AgentHfDumpJobStatus;
 	startedAt: string;
 	finishedAt: string | null;
@@ -26,6 +30,8 @@ export type AgentHfDumpStatus = {
 	defaultDestination: string;
 	hfAvailable: boolean;
 	activeJob: AgentHfDumpJob | null;
+	policy: AgentHfSyncPolicy;
+	state: AgentHfSyncState;
 };
 
 /**
@@ -86,6 +92,10 @@ export type ConfigRequests = {
 	agentHfDumpGetJob: {
 		params: { id: string };
 		response: AgentHfDumpJob | null;
+	};
+	agentHfDumpSetPolicy: {
+		params: AgentHfSyncPolicy;
+		response: AgentHfSyncPolicy;
 	};
 };
 

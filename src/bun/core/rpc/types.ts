@@ -10,6 +10,7 @@
  */
 
 import type { ActivityService } from "../activity";
+import type { AgentHfSyncService } from "../agent-hf-sync-service";
 import type { AuthService } from "../auth";
 import type { BackendOps } from "../backend-ops";
 import type { ChannelGatewayService } from "../channels/gateway";
@@ -49,6 +50,7 @@ export type RpcDeps = {
 	config: ConfigService;
 	pensieve: PensieveService;
 	activity: ActivityService;
+	agentHfSync: AgentHfSyncService;
 	channels: ChannelsService;
 	gateway: ChannelGatewayService;
 	inbox: InboxService;

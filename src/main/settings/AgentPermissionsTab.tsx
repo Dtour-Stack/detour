@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentConfig, AgentVaultMode } from "../../shared/index";
+import type { AgentConfig, AgentHfSyncPolicy, AgentHfSyncState, AgentVaultMode } from "../../shared/index";
 import type { AgentHfDumpJob } from "../../shared/rpc/config";
 import { rpc } from "../rpc";
 
@@ -26,7 +26,10 @@ export function AgentPermissionsTab() {
 	const [hfLimit, setHfLimit] = useState("200");
 	const [hfAvailable, setHfAvailable] = useState<boolean | null>(null);
 	const [hfJob, setHfJob] = useState<AgentHfDumpJob | null>(null);
+	const [hfPolicy, setHfPolicy] = useState<AgentHfSyncPolicy | null>(null);
+	const [hfState, setHfState] = useState<AgentHfSyncState | null>(null);
 	const [hfStarting, setHfStarting] = useState(false);
+	const [hfPolicySaving, setHfPolicySaving] = useState(false);
 	const [hfError, setHfError] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -39,6 +42,10 @@ export function AgentPermissionsTab() {
 			setHfDestination(hf.defaultDestination);
 			setHfAvailable(hf.hfAvailable);
 			setHfJob(hf.activeJob);
+			setHfPolicy(hf.policy);
+			setHfState(hf.state);
+			setHfDestination(hf.policy.destination);
+			setHfLimit(String(hf.policy.limit));
 		}).catch((err) => {
 			setHfError(err instanceof Error ? err.message : String(err));
 		});
@@ -49,6 +56,13 @@ export function AgentPermissionsTab() {
 		const id = window.setInterval(() => {
 			void rpc.request.agentHfDumpGetJob({ id: hfJob.id }).then((job) => {
 				if (job) setHfJob(job);
+				if (job && job.status !== "running") {
+					void rpc.request.agentHfDumpStatus({}).then((hf) => {
+						setHfPolicy(hf.policy);
+						setHfState(hf.state);
+						setHfAvailable(hf.hfAvailable);
+					});
+				}
 			}).catch((err) => {
 				setHfError(err instanceof Error ? err.message : String(err));
 			});
@@ -117,10 +131,47 @@ export function AgentPermissionsTab() {
 			setHfStarting(false);
 		}
 	}
+	function patchHfPolicy(patch: Partial<AgentHfSyncPolicy>) {
+		setHfPolicy((current) => current ? { ...current, ...patch } : current);
+	}
+	async function saveHfPolicy() {
+		if (!hfPolicy) return;
+		const destination = hfDestination.trim();
+		if (!destination.startsWith("hf://")) {
+			setHfError("Hugging Face destination must start with `hf://`.");
+			return;
+		}
+		const parsedLimit = Number(hfLimit);
+		const limit = Number.isFinite(parsedLimit) ? Math.min(2000, Math.max(1, Math.floor(parsedLimit))) : hfPolicy.limit;
+		const next: AgentHfSyncPolicy = { ...hfPolicy, destination, limit };
+		if (next.enabled) {
+			const confirmed = window.confirm(
+				`Enable autonomous Hugging Face sync to ${destination}?\n\nDetour may upload redacted agent trajectories, memories, knowledge, and relationships in the background when this policy fires.`,
+			);
+			if (!confirmed) return;
+		}
+		setHfPolicySaving(true);
+		setHfError(null);
+		try {
+			const policy = await rpc.request.agentHfDumpSetPolicy(next);
+			const status = await rpc.request.agentHfDumpStatus({});
+			setHfPolicy(policy);
+			setHfState(status.state);
+			setHfJob(status.activeJob);
+			setHfAvailable(status.hfAvailable);
+			setHfDestination(policy.destination);
+			setHfLimit(String(policy.limit));
+		} catch (err) {
+			setHfError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setHfPolicySaving(false);
+		}
+	}
 
 	if (!cfg) return <div className="hint">Loading…</div>;
 
 	const hfRunning = hfJob?.status === "running";
+	const policyEnabled = hfPolicy?.enabled ?? false;
 
 	return (
 		<div>
@@ -320,6 +371,109 @@ export function AgentPermissionsTab() {
 				<div className="hint" style={{ marginTop: 8 }}>
 					Command: <code>hf sync ./data {hfDestination.trim() || "hf://buckets/dexploarer/detourdump"}</code>
 				</div>
+				{hfPolicy && (
+					<div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+						<div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+							<div>
+								<span className="name" style={{ fontSize: 13 }}>Autonomous sync</span>
+								<div className="hint" style={{ marginTop: 2 }}>
+									When enabled, Detour syncs in the background on startup, daily, or after enough new trajectories.
+								</div>
+							</div>
+							<label style={{ margin: 0, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+								<input
+									type="checkbox"
+									checked={policyEnabled}
+									onChange={(e) => patchHfPolicy({ enabled: e.target.checked })}
+									disabled={hfPolicySaving}
+								/>
+								<span style={{ fontSize: 12, color: policyEnabled ? "var(--accent)" : "var(--fg-muted)" }}>
+									{policyEnabled ? "ON" : "off"}
+								</span>
+							</label>
+						</div>
+						<div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+							<label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, fontSize: 12 }}>
+								<input
+									type="checkbox"
+									checked={hfPolicy.syncOnStartup}
+									onChange={(e) => patchHfPolicy({ syncOnStartup: e.target.checked })}
+									disabled={hfPolicySaving}
+								/>
+								Sync once after startup
+							</label>
+							<label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, fontSize: 12 }}>
+								<input
+									type="checkbox"
+									checked={hfPolicy.daily}
+									onChange={(e) => patchHfPolicy({ daily: e.target.checked })}
+									disabled={hfPolicySaving}
+								/>
+								Daily sync
+							</label>
+							<div>
+								<label>Daily time (UTC)</label>
+								<input
+									type="time"
+									value={hfPolicy.dailyTimeUtc}
+									onChange={(e) => patchHfPolicy({ dailyTimeUtc: e.target.value })}
+									disabled={hfPolicySaving}
+									style={{ marginTop: 6 }}
+								/>
+							</div>
+							<div>
+								<label>New trajectories</label>
+								<input
+									type="number"
+									min={1}
+									max={10000}
+									step={1}
+									value={hfPolicy.everyNewTrajectories}
+									onChange={(e) => patchHfPolicy({ everyNewTrajectories: Number(e.target.value) })}
+									disabled={hfPolicySaving}
+									style={{ marginTop: 6 }}
+								/>
+							</div>
+							<div>
+								<label>Minimum interval (min)</label>
+								<input
+									type="number"
+									min={1}
+									max={1440}
+									step={1}
+									value={hfPolicy.minIntervalMinutes}
+									onChange={(e) => patchHfPolicy({ minIntervalMinutes: Number(e.target.value) })}
+									disabled={hfPolicySaving}
+									style={{ marginTop: 6 }}
+								/>
+							</div>
+							<div>
+								<label>Failure cooldown (min)</label>
+								<input
+									type="number"
+									min={1}
+									max={1440}
+									step={1}
+									value={hfPolicy.failureCooldownMinutes}
+									onChange={(e) => patchHfPolicy({ failureCooldownMinutes: Number(e.target.value) })}
+									disabled={hfPolicySaving}
+									style={{ marginTop: 6 }}
+								/>
+							</div>
+						</div>
+						<div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+							<div className="hint" style={{ margin: 0 }}>
+								{hfState?.lastSuccessAt
+									? <>Last sync: {new Date(hfState.lastSuccessAt).toLocaleString()} ({hfState.lastReason ?? "sync"}).</>
+									: "No autonomous sync has completed yet."}
+								{hfState?.lastError ? <> Last error: {hfState.lastError}</> : null}
+							</div>
+							<button type="button" onClick={() => void saveHfPolicy()} disabled={hfPolicySaving || hfRunning}>
+								{hfPolicySaving ? "Saving..." : "Save policy"}
+							</button>
+						</div>
+					</div>
+				)}
 				{hfAvailable === false && (
 					<div className="hint" style={{ marginTop: 8, color: "var(--error)" }}>
 						Hugging Face <code>hf</code> CLI was not detected in the app environment.

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { clearSkillsDirCache } from "@elizaos/skills";
 import { ActivityService } from "./activity";
+import { AgentHfSyncService } from "./agent-hf-sync-service";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
 import { BackendOps } from "./backend-ops";
@@ -146,6 +147,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	pensieve.start();
 	const activity = new ActivityService(runtime);
 	activity.start();
+	const agentHfSync = new AgentHfSyncService({
+		runtime,
+		config,
+		trajectories: activity.trajectories,
+	});
+	agentHfSync.start();
 	const gateway = new ChannelGatewayService();
 	const improvement = new ContinuousImprovementService(runtime, pensieve.memories, activity.logs);
 	improvement.start();
@@ -335,7 +342,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// bag is mounted on every webview's RPC instance via WindowFactory.
 	const rpcDeps = buildRpcDeps({
 		runtime, vault, auth, backendOps, config, pensieve, activity,
-		channels, gateway, inbox, llama, cron, ownerBind, portless, previewServers,
+		agentHfSync, channels, gateway, inbox, llama, cron, ownerBind, portless, previewServers,
 		goal, dream,
 	});
 
@@ -361,6 +368,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		stop: async () => {
 			discordObservations.stop();
 			improvement.stop();
+			agentHfSync.stop();
 			dream.stop();
 			activity.stop();
 			pensieve.stop();

@@ -387,6 +387,38 @@ export type AgentDataDumpCounts = {
 	dataBytes: number;
 };
 
+export const AGENT_HF_SYNC_DEFAULT_DESTINATION = "hf://buckets/dexploarer/detourdump";
+
+export type AgentHfSyncReason =
+	| "manual"
+	| "startup"
+	| "daily"
+	| "trajectory-threshold";
+
+export type AgentHfSyncPolicy = {
+	enabled: boolean;
+	destination: string;
+	limit: number;
+	syncOnStartup: boolean;
+	daily: boolean;
+	dailyTimeUtc: string;
+	everyNewTrajectories: number;
+	minIntervalMinutes: number;
+	failureCooldownMinutes: number;
+};
+
+export type AgentHfSyncState = {
+	lastAttemptAt: string | null;
+	lastSuccessAt: string | null;
+	lastFailureAt: string | null;
+	lastError: string | null;
+	lastReason: AgentHfSyncReason | null;
+	lastSyncedTrajectoryTotal: number | null;
+	lastObservedTrajectoryTotal: number | null;
+	lastDailySyncDateUtc: string | null;
+	lastCounts: AgentDataDumpCounts | null;
+};
+
 export type AgentCharacterStyle = {
 	all: string[];
 	chat: string[];

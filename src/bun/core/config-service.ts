@@ -8,7 +8,18 @@
  * the agent's permission state survives restarts without env vars.
  */
 
-import type { AgentCharacterConfig, AgentCharacterMessageExample, AgentConfig, ChroniclerConfig, ModelConfig, WindowConfig } from "../../shared/index";
+import {
+	AGENT_HF_SYNC_DEFAULT_DESTINATION,
+	type AgentCharacterConfig,
+	type AgentCharacterMessageExample,
+	type AgentConfig,
+	type AgentHfSyncPolicy,
+	type AgentHfSyncReason,
+	type AgentHfSyncState,
+	type ChroniclerConfig,
+	type ModelConfig,
+	type WindowConfig,
+} from "../../shared/index";
 import { setPermissionConfig, type AgentVaultMode } from "../plugins/vault-tools/index";
 import type { VaultService } from "./vault";
 import { DEFAULT_AGENT_CHARACTER } from "./agent-character";
@@ -59,11 +70,37 @@ const DEFAULT_CHRONICLER: ChroniclerConfig = {
 	maxWindowsPerScreen: 8,
 };
 
+const DEFAULT_HF_SYNC_POLICY: AgentHfSyncPolicy = {
+	enabled: false,
+	destination: AGENT_HF_SYNC_DEFAULT_DESTINATION,
+	limit: 200,
+	syncOnStartup: true,
+	daily: false,
+	dailyTimeUtc: "03:00",
+	everyNewTrajectories: 50,
+	minIntervalMinutes: 30,
+	failureCooldownMinutes: 30,
+};
+
+const DEFAULT_HF_SYNC_STATE: AgentHfSyncState = {
+	lastAttemptAt: null,
+	lastSuccessAt: null,
+	lastFailureAt: null,
+	lastError: null,
+	lastReason: null,
+	lastSyncedTrajectoryTotal: null,
+	lastObservedTrajectoryTotal: null,
+	lastDailySyncDateUtc: null,
+	lastCounts: null,
+};
+
 const KEY_AGENT = "config.agent";
 const KEY_CHARACTER = "config.character";
 const KEY_MODELS = "config.models";
 const KEY_WINDOW = "config.window";
 const KEY_CHRONICLER = "config.chronicler";
+const KEY_HF_SYNC_POLICY = "config.agentHfSyncPolicy";
+const KEY_HF_SYNC_STATE = "config.agentHfSyncState";
 
 function configuredString(raw: Record<string, unknown>, key: keyof ModelConfig): string | null {
 	const value = raw[key];
@@ -251,6 +288,30 @@ export class ConfigService {
 		return sanitized;
 	}
 
+	async getAgentHfSyncPolicy(): Promise<AgentHfSyncPolicy> {
+		const raw = await this.readJson(KEY_HF_SYNC_POLICY);
+		if (!raw) return { ...DEFAULT_HF_SYNC_POLICY };
+		return this.sanitizeHfSyncPolicy(raw);
+	}
+
+	async setAgentHfSyncPolicy(next: AgentHfSyncPolicy): Promise<AgentHfSyncPolicy> {
+		const sanitized = this.sanitizeHfSyncPolicy(recordFromUnknown(next));
+		await this.writeJson(KEY_HF_SYNC_POLICY, sanitized);
+		return sanitized;
+	}
+
+	async getAgentHfSyncState(): Promise<AgentHfSyncState> {
+		const raw = await this.readJson(KEY_HF_SYNC_STATE);
+		if (!raw) return { ...DEFAULT_HF_SYNC_STATE };
+		return this.sanitizeHfSyncState(raw);
+	}
+
+	async setAgentHfSyncState(next: AgentHfSyncState): Promise<AgentHfSyncState> {
+		const sanitized = this.sanitizeHfSyncState(recordFromUnknown(next));
+		await this.writeJson(KEY_HF_SYNC_STATE, sanitized);
+		return sanitized;
+	}
+
 	// ── Helpers ────────────────────────────────────────────────────────
 
 	private parseMode(value: unknown): AgentVaultMode {
@@ -270,6 +331,79 @@ export class ConfigService {
 			includeWindowTitles: typeof raw.includeWindowTitles === "boolean" ? raw.includeWindowTitles : DEFAULT_CHRONICLER.includeWindowTitles,
 			maxWindowsPerScreen,
 		};
+	}
+
+	private sanitizeHfSyncPolicy(raw: Record<string, unknown>): AgentHfSyncPolicy {
+		const destination = typeof raw.destination === "string" && raw.destination.trim().startsWith("hf://")
+			? raw.destination.trim()
+			: DEFAULT_HF_SYNC_POLICY.destination;
+		const dailyTimeUtc = typeof raw.dailyTimeUtc === "string" && /^\d{2}:\d{2}$/.test(raw.dailyTimeUtc)
+			? raw.dailyTimeUtc
+			: DEFAULT_HF_SYNC_POLICY.dailyTimeUtc;
+		const limit = this.clampedNumber(raw.limit, 1, 2000, DEFAULT_HF_SYNC_POLICY.limit);
+		const everyNewTrajectories = this.clampedNumber(raw.everyNewTrajectories, 1, 10_000, DEFAULT_HF_SYNC_POLICY.everyNewTrajectories);
+		const minIntervalMinutes = this.clampedNumber(raw.minIntervalMinutes, 1, 24 * 60, DEFAULT_HF_SYNC_POLICY.minIntervalMinutes);
+		const failureCooldownMinutes = this.clampedNumber(raw.failureCooldownMinutes, 1, 24 * 60, DEFAULT_HF_SYNC_POLICY.failureCooldownMinutes);
+		return {
+			enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_HF_SYNC_POLICY.enabled,
+			destination,
+			limit,
+			syncOnStartup: typeof raw.syncOnStartup === "boolean" ? raw.syncOnStartup : DEFAULT_HF_SYNC_POLICY.syncOnStartup,
+			daily: typeof raw.daily === "boolean" ? raw.daily : DEFAULT_HF_SYNC_POLICY.daily,
+			dailyTimeUtc,
+			everyNewTrajectories,
+			minIntervalMinutes,
+			failureCooldownMinutes,
+		};
+	}
+
+	private sanitizeHfSyncState(raw: Record<string, unknown>): AgentHfSyncState {
+		const reason = raw.lastReason;
+		const lastReason: AgentHfSyncReason | null =
+			reason === "manual" || reason === "startup" || reason === "daily" || reason === "trajectory-threshold"
+				? reason
+				: null;
+		return {
+			lastAttemptAt: this.nullableString(raw.lastAttemptAt),
+			lastSuccessAt: this.nullableString(raw.lastSuccessAt),
+			lastFailureAt: this.nullableString(raw.lastFailureAt),
+			lastError: this.nullableString(raw.lastError),
+			lastReason,
+			lastSyncedTrajectoryTotal: this.nullableNumber(raw.lastSyncedTrajectoryTotal),
+			lastObservedTrajectoryTotal: this.nullableNumber(raw.lastObservedTrajectoryTotal),
+			lastDailySyncDateUtc: this.nullableString(raw.lastDailySyncDateUtc),
+			lastCounts: this.sanitizeDumpCounts(raw.lastCounts),
+		};
+	}
+
+	private sanitizeDumpCounts(raw: unknown): AgentHfSyncState["lastCounts"] {
+		const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+		if (!obj) return null;
+		return {
+			trajectories: this.clampedNumber(obj.trajectories, 0, Number.MAX_SAFE_INTEGER, 0),
+			trajectoryDetails: this.clampedNumber(obj.trajectoryDetails, 0, Number.MAX_SAFE_INTEGER, 0),
+			memories: this.clampedNumber(obj.memories, 0, Number.MAX_SAFE_INTEGER, 0),
+			memoryTables: this.clampedNumber(obj.memoryTables, 0, Number.MAX_SAFE_INTEGER, 0),
+			relationships: this.clampedNumber(obj.relationships, 0, Number.MAX_SAFE_INTEGER, 0),
+			redactedMemories: this.clampedNumber(obj.redactedMemories, 0, Number.MAX_SAFE_INTEGER, 0),
+			totalTrajectoriesScanned: this.clampedNumber(obj.totalTrajectoriesScanned, 0, Number.MAX_SAFE_INTEGER, 0),
+			totalMemoriesScanned: this.clampedNumber(obj.totalMemoriesScanned, 0, Number.MAX_SAFE_INTEGER, 0),
+			dataBytes: this.clampedNumber(obj.dataBytes, 0, Number.MAX_SAFE_INTEGER, 0),
+		};
+	}
+
+	private clampedNumber(raw: unknown, min: number, max: number, fallback: number): number {
+		return typeof raw === "number" && Number.isFinite(raw)
+			? Math.max(min, Math.min(max, Math.round(raw)))
+			: fallback;
+	}
+
+	private nullableString(raw: unknown): string | null {
+		return typeof raw === "string" && raw.length > 0 ? raw : null;
+	}
+
+	private nullableNumber(raw: unknown): number | null {
+		return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
 	}
 
 	private sanitizeCharacter(raw: Record<string, unknown>): AgentCharacterConfig {

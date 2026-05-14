@@ -1,49 +1,14 @@
 import type {
 	AgentCharacterConfig,
 	AgentConfig,
+	AgentHfSyncPolicy,
 	ModelConfig,
 	ThemeChoice,
 	UiPreferences,
 	WindowConfig,
 } from "../../../../shared/index";
 import type { AgentHfDumpJob, AgentHfDumpStatus } from "../../../../shared/rpc/config";
-import {
-	DEFAULT_HF_BUCKET,
-	hfDatasetSyncCommand,
-	syncAgentDumpToHf,
-} from "../../../plugins/agent-public-log/index";
 import type { RpcDeps } from "../types";
-
-const hfDumpJobs = new Map<string, AgentHfDumpJob>();
-let activeHfDumpJobId: string | null = null;
-
-function activeHfDumpJob(): AgentHfDumpJob | null {
-	if (!activeHfDumpJobId) return null;
-	return hfDumpJobs.get(activeHfDumpJobId) ?? null;
-}
-
-function pruneHfDumpJobs(): void {
-	const jobs = [...hfDumpJobs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-	for (const job of jobs.slice(10)) hfDumpJobs.delete(job.id);
-}
-
-async function hfCliAvailable(): Promise<boolean> {
-	try {
-		const proc = Bun.spawn(["hf", "version"], { env: process.env, stdout: "pipe", stderr: "pipe" });
-		await Promise.all([
-			proc.stdout ? new Response(proc.stdout as ReadableStream<Uint8Array>).text() : Promise.resolve(""),
-			proc.stderr ? new Response(proc.stderr as ReadableStream<Uint8Array>).text() : Promise.resolve(""),
-		]);
-		return await proc.exited === 0;
-	} catch {
-		return false;
-	}
-}
-
-function normalizeHfDumpLimit(value: number | undefined): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return 200;
-	return Math.min(2000, Math.max(1, Math.floor(value)));
-}
 
 /**
  * Config + UI preferences RPC handlers. Mirrors the HTTP routes in
@@ -112,56 +77,16 @@ export function configRequests(deps: RpcDeps) {
 			return { ok: true };
 		},
 		agentHfDumpStatus: async (_params: Record<string, never>): Promise<AgentHfDumpStatus> => {
-			return {
-				defaultDestination: DEFAULT_HF_BUCKET,
-				hfAvailable: await hfCliAvailable(),
-				activeJob: activeHfDumpJob(),
-			};
+			return await deps.agentHfSync.status();
 		},
 		agentHfDumpStartSync: async (params: { destination?: string; limit?: number }): Promise<AgentHfDumpJob> => {
-			const existing = activeHfDumpJob();
-			if (existing?.status === "running") return existing;
-			const destination = params.destination?.trim() || DEFAULT_HF_BUCKET;
-			if (!destination.startsWith("hf://")) {
-				throw new Error("Hugging Face destination must start with `hf://`.");
-			}
-			const runtime = deps.runtime.peek();
-			if (!runtime) throw new Error("Agent runtime is not ready yet.");
-			const limit = normalizeHfDumpLimit(params.limit);
-			const job: AgentHfDumpJob = {
-				id: crypto.randomUUID(),
-				destination,
-				command: hfDatasetSyncCommand(destination),
-				status: "running",
-				startedAt: new Date().toISOString(),
-				finishedAt: null,
-				counts: null,
-				stdout: null,
-				stderr: null,
-				error: null,
-			};
-			hfDumpJobs.set(job.id, job);
-			activeHfDumpJobId = job.id;
-			void (async () => {
-				try {
-					const result = await syncAgentDumpToHf(runtime, { destination, limit });
-					job.status = "succeeded";
-					job.counts = result.counts;
-					job.stdout = result.stdout;
-					job.stderr = result.stderr;
-				} catch (err) {
-					job.status = "failed";
-					job.error = err instanceof Error ? err.message : String(err);
-				} finally {
-					job.finishedAt = new Date().toISOString();
-					if (activeHfDumpJobId === job.id) activeHfDumpJobId = null;
-					pruneHfDumpJobs();
-				}
-			})();
-			return job;
+			return await deps.agentHfSync.startSync("manual", params);
 		},
 		agentHfDumpGetJob: async (params: { id: string }): Promise<AgentHfDumpJob | null> => {
-			return hfDumpJobs.get(params.id) ?? null;
+			return deps.agentHfSync.getJob(params.id);
+		},
+		agentHfDumpSetPolicy: async (params: AgentHfSyncPolicy): Promise<AgentHfDumpStatus["policy"]> => {
+			return await deps.agentHfSync.setPolicy(params);
 		},
 	};
 }

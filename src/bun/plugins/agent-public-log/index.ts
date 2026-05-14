@@ -24,10 +24,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Action, ActionResult, Handler, IAgentRuntime, Plugin } from "@elizaos/core";
 import { hasOwnerAccess } from "@elizaos/agent/security";
-import type { AgentDataDumpCounts } from "../../../shared/index";
+import {
+	AGENT_HF_SYNC_DEFAULT_DESTINATION,
+	type AgentDataDumpCounts,
+} from "../../../shared/index";
 import { KNOWN_MEMORY_TABLES } from "../../core/pensieve/memory-service";
 
-export const DEFAULT_HF_BUCKET = "hf://buckets/dexploarer/detourdump";
+export const DEFAULT_HF_BUCKET = AGENT_HF_SYNC_DEFAULT_DESTINATION;
 
 const CRED_PATTERNS: RegExp[] = [
 	/sk-ant-[A-Za-z0-9_-]{16,}/g,
