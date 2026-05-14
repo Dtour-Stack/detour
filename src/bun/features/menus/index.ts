@@ -54,12 +54,12 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
-				label: "Chat",
+				label: "Detour Hub",
 				submenu: [
-					{ label: "Toggle Chat", action: "chat:toggle", accelerator: "CommandOrControl+Shift+Space" },
-					{ label: "Open Chat", action: "chat:open" },
+					{ label: "Toggle Detour", action: "chat:toggle", accelerator: "CommandOrControl+Shift+Space" },
+					{ label: "Open Detour", action: "chat:open" },
 					{ type: "separator" },
-					{ label: "Open Settings", action: "app:settings" },
+					{ label: "Open Configuration", action: "app:settings" },
 				],
 			},
 			{
@@ -81,15 +81,15 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
-				label: "Channels",
-				submenu: [
-					{ label: "Open Channels", action: "channels:open", accelerator: "CommandOrControl+Shift+C" },
-				],
-			},
-			{
 				label: "Workspace",
 				submenu: [
 					{ label: "Open Workspace", action: "workspace:open", accelerator: "CommandOrControl+Shift+W" },
+				],
+			},
+			{
+				label: "Gallery",
+				submenu: [
+					{ label: "Open Gallery", action: "gallery:open", accelerator: "CommandOrControl+Shift+G" },
 				],
 			},
 			{
@@ -125,11 +125,11 @@ export const menusFeature: Feature = {
 				case "browser:open":
 					deps.events.emit("ui:open-browser", {});
 					break;
-				case "channels:open":
-					deps.events.emit("ui:open-channels", {});
-					break;
 				case "workspace:open":
 					deps.events.emit("ui:open-workspace", {});
+					break;
+				case "gallery:open":
+					deps.events.emit("ui:open-gallery", {});
 					break;
 			}
 		});

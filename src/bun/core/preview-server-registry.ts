@@ -30,6 +30,11 @@ export type PreviewState = {
 	port: number;
 	hostname: string;
 	url: string;
+	publicUrl?: string;
+	publicUrlProvider?: "ngrok";
+	publicUrlPid?: number;
+	publicUrlStartedAt?: number;
+	publicUrlError?: string;
 	rootDir: string | null; // null when external (port pre-bound by agent's bun-dev process)
 	startedAt: number;
 };
@@ -86,7 +91,7 @@ function urlForRoute(hostname: string, proxyPort: number): string {
 }
 
 export class PreviewServerRegistry {
-	private servers = new Map<string, { state: PreviewState; server: BunServer | null; child: ChildProc | null }>();
+	private servers = new Map<string, { state: PreviewState; server: BunServer | null; child: ChildProc | null; ngrok: ChildProc | null }>();
 	/** In-flight start promises keyed by slug. A second concurrent
 	 * startStatic() call awaits the existing promise instead of
 	 * spawning a duplicate dev server (the duplicate would race for
@@ -210,7 +215,7 @@ export class PreviewServerRegistry {
 			rootDir: rootAbs,
 			startedAt: Date.now(),
 		};
-		this.servers.set(slug, { state, server, child: null });
+		this.servers.set(slug, { state, server, child: null, ngrok: null });
 		return state;
 	}
 
@@ -285,7 +290,7 @@ export class PreviewServerRegistry {
 			rootDir: null,
 			startedAt: Date.now(),
 		};
-		this.servers.set(slug, { state, server: null, child });
+		this.servers.set(slug, { state, server: null, child, ngrok: null });
 
 		// Watch the child for unexpected exit (crash, OOM, port collision
 		// after-the-fact). When it dies, drop the route so requests stop
@@ -335,7 +340,63 @@ export class PreviewServerRegistry {
 			rootDir: null,
 			startedAt: Date.now(),
 		};
-		this.servers.set(slug, { state, server: null, child: null });
+		this.servers.set(slug, { state, server: null, child: null, ngrok: null });
+		return state;
+	}
+
+	async startPublic(slug: string): Promise<PreviewState> {
+		const state = await this.startStatic(slug);
+		const entry = this.servers.get(slug);
+		if (!entry) throw new Error(`preview not running for ${slug}`);
+		if (entry.ngrok && state.publicUrl) return state;
+
+		if (entry.ngrok) {
+			try { entry.ngrok.kill(); } catch { /* ignore */ }
+			entry.ngrok = null;
+		}
+
+		delete state.publicUrl;
+		delete state.publicUrlProvider;
+		delete state.publicUrlPid;
+		delete state.publicUrlStartedAt;
+		delete state.publicUrlError;
+
+		const bin = await resolveNgrokBinary();
+		const args = ngrokArgsForPort(state.port);
+		const child = Bun.spawn([bin, ...args], {
+			stdout: "pipe",
+			stderr: "pipe",
+			env: { ...process.env },
+		});
+		entry.ngrok = child;
+
+		try {
+			const publicUrl = await waitForNgrokPublicUrl(child, 30_000);
+			state.publicUrl = publicUrl;
+			state.publicUrlProvider = "ngrok";
+			state.publicUrlPid = child.pid;
+			state.publicUrlStartedAt = Date.now();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			state.publicUrlError = message;
+			if (this.servers.get(slug)?.ngrok === child) entry.ngrok = null;
+			try { child.kill(); } catch { /* ignore */ }
+			throw new Error(`ngrok public preview failed: ${message}`);
+		}
+
+		void child.exited.then((code) => {
+			const current = this.servers.get(slug);
+			if (current?.ngrok !== child) return;
+			current.ngrok = null;
+			if (current.state.publicUrl) {
+				current.state.publicUrlError = `ngrok exited with code ${code}`;
+				delete current.state.publicUrl;
+				delete current.state.publicUrlProvider;
+				delete current.state.publicUrlPid;
+				delete current.state.publicUrlStartedAt;
+			}
+		}).catch(() => { /* ignore */ });
+
 		return state;
 	}
 
@@ -344,6 +405,7 @@ export class PreviewServerRegistry {
 		if (!entry) return;
 		try { entry.server?.stop(true); } catch { /* ignore */ }
 		try { entry.child?.kill(); } catch { /* ignore */ }
+		try { entry.ngrok?.kill(); } catch { /* ignore */ }
 		try { this.portless.removeRoute(entry.state.hostname); } catch { /* ignore */ }
 		this.servers.delete(slug);
 	}
@@ -424,6 +486,134 @@ async function pickFreePort(): Promise<number> {
 	probe.stop(true);
 	if (typeof port !== "number") throw new Error("could not allocate a free port");
 	return port;
+}
+
+async function resolveNgrokBinary(): Promise<string> {
+	const configured = process.env.DETOUR_NGROK_BIN?.trim() || process.env.NGROK_BIN?.trim();
+	if (configured) return configured;
+	try {
+		const proc = Bun.spawn(["which", "ngrok"], { stdout: "pipe", stderr: "ignore" });
+		const out = await new Response(proc.stdout).text();
+		const code = await proc.exited;
+		if (code === 0 && out.trim().length > 0) return out.trim();
+	} catch { /* ignore */ }
+	throw new Error("ngrok CLI not found. Install ngrok or set DETOUR_NGROK_BIN/NGROK_BIN.");
+}
+
+export function ngrokArgsForPort(port: number): string[] {
+	const args = ["http", `http://127.0.0.1:${port}`, "--log=stdout", "--log-format=json"];
+	const domain = process.env.DETOUR_NGROK_DOMAIN?.trim() || process.env.NGROK_DOMAIN?.trim();
+	if (domain) args.push(`--domain=${domain}`);
+	return args;
+}
+
+export function parseNgrokTunnelUrlLine(line: string): string | null {
+	const trimmed = line.trim();
+	if (!trimmed) return null;
+	try {
+		const parsed = JSON.parse(trimmed) as { url?: string };
+		const url = normalizePublicHttpsUrl(parsed.url ?? "");
+		if (url) return url;
+	} catch { /* not json */ }
+	const match = trimmed.match(/https:\/\/[^\s"']*ngrok[^\s"']*/i);
+	return normalizePublicHttpsUrl(match?.[0] ?? "");
+}
+
+function normalizePublicHttpsUrl(raw: string): string | null {
+	if (!raw.startsWith("https://")) return null;
+	try {
+		const url = new URL(raw);
+		return `${url.origin}/`;
+	} catch {
+		return null;
+	}
+}
+
+function parseNgrokErrorLine(line: string): string | null {
+	const trimmed = line.trim();
+	if (!trimmed) return null;
+	try {
+		const parsed = JSON.parse(trimmed) as { lvl?: string; level?: string; msg?: string; err?: string; error?: string };
+		const level = (parsed.lvl ?? parsed.level ?? "").toLowerCase();
+		const detail = [parsed.msg, parsed.err, parsed.error].filter((v): v is string => typeof v === "string" && v.length > 0).join(": ");
+		if (detail && (level.includes("err") || /failed|error|authtoken|unauthorized|ERR_NGROK/i.test(detail))) return detail;
+	} catch { /* not json */ }
+	if (/failed|error|authtoken|unauthorized|ERR_NGROK/i.test(trimmed)) return trimmed.slice(0, 500);
+	return null;
+}
+
+type ReadableStreamLike = ReadableStream<Uint8Array> | { getReader?: () => ReadableStreamDefaultReader<Uint8Array> } | number | null | undefined;
+
+function asReadableStream(value: ReadableStreamLike): ReadableStream<Uint8Array> | null {
+	return value && typeof value === "object" && typeof value.getReader === "function"
+		? (value as ReadableStream<Uint8Array>)
+		: null;
+}
+
+async function waitForNgrokPublicUrl(child: ChildProc, timeoutMs: number): Promise<string> {
+	return await new Promise((resolve, reject) => {
+		let done = false;
+		const errors: string[] = [];
+		const finish = (fn: () => void) => {
+			if (done) return;
+			done = true;
+			clearTimeout(timer);
+			fn();
+		};
+		const fail = (message: string) => finish(() => reject(new Error(message)));
+		const pass = (url: string) => finish(() => resolve(url));
+		const timeoutMessage = () => {
+			const detail = errors.length > 0 ? ` Last ngrok output: ${errors.slice(-2).join(" | ")}` : "";
+			return `timed out waiting for ngrok public URL.${detail}`;
+		};
+		const timer = setTimeout(() => fail(timeoutMessage()), timeoutMs);
+		const handleLine = (line: string) => {
+			const url = parseNgrokTunnelUrlLine(line);
+			if (url) {
+				pass(url);
+				return;
+			}
+			const error = parseNgrokErrorLine(line);
+			if (error) errors.push(error);
+		};
+		const consume = (stream: ReadableStream<Uint8Array> | null) => {
+			if (!stream) return;
+			const reader = stream.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			void (async () => {
+				try {
+					while (true) {
+						const { value, done: streamDone } = await reader.read();
+						if (streamDone) break;
+						buffer += decoder.decode(value, { stream: true });
+						let nl: number;
+						while ((nl = buffer.indexOf("\n")) !== -1) {
+							const line = buffer.slice(0, nl);
+							buffer = buffer.slice(nl + 1);
+							handleLine(line);
+						}
+					}
+					if (buffer.trim().length > 0) handleLine(buffer);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					errors.push(message);
+				} finally {
+					try { reader.releaseLock(); } catch { /* ignore */ }
+				}
+			})();
+		};
+		consume(asReadableStream(child.stdout));
+		consume(asReadableStream(child.stderr));
+		void child.exited.then((code) => {
+			if (!done) {
+				const detail = errors.length > 0 ? ` ${errors.slice(-2).join(" | ")}` : "";
+				fail(`ngrok exited before publishing a URL (code ${code}).${detail}`);
+			}
+		}).catch((err) => {
+			if (!done) fail(err instanceof Error ? err.message : String(err));
+		});
+	});
 }
 
 async function waitForPort(port: number, timeoutMs: number): Promise<void> {

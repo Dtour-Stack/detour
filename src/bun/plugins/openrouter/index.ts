@@ -16,9 +16,7 @@ import {
 	type TextEmbeddingParams,
 } from "@elizaos/core";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { saveGeneratedMediaUrl } from "../../core/generated-media";
 
 const CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings";
@@ -268,24 +266,6 @@ function imageModalities(model: string): string[] {
 	return lower.includes("flux") || lower.includes("sourceful") ? ["image"] : ["image", "text"];
 }
 
-function imageExtension(mimeSubtype: string): string {
-	const normalized = mimeSubtype.toLowerCase();
-	if (normalized === "jpeg") return "jpg";
-	const safe = normalized.replace(/[^a-z0-9]/g, "");
-	return safe.length > 0 ? safe : "png";
-}
-
-function materializeGeneratedImage(url: string): string {
-	const match = url.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
-	if (!match) return url;
-	const payload = match[2];
-	if (!payload) throw new Error("Image generation returned an empty image payload.");
-	const dir = mkdtempSync(join(tmpdir(), "detour-openrouter-image-"));
-	const filePath = join(dir, `${randomUUID()}.${imageExtension(match[1] ?? "png")}`);
-	writeFileSync(filePath, Buffer.from(payload, "base64"), { mode: 0o600 });
-	return filePath;
-}
-
 async function emit(callback: HandlerCallback | undefined, text: string): Promise<void> {
 	if (!callback) return;
 	await callback({ text, source: "openrouter" }, "GENERATE_IMAGE");
@@ -309,6 +289,7 @@ const generateImageHandler: Handler = async (runtime, message, _state, options, 
 		return fail(text);
 	}
 	try {
+		const model = pickModel(runtime, "OPENROUTER_MODEL_IMAGE", DEFAULT_IMAGE_MODEL);
 		const images = await openRouterPlugin.models![ModelType.IMAGE]!(runtime, {
 			prompt,
 			...(typeof opts.size === "string" ? { size: opts.size } : {}),
@@ -319,7 +300,7 @@ const generateImageHandler: Handler = async (runtime, message, _state, options, 
 			await emit(callback, text);
 			return fail(text);
 		}
-		return sendOpenRouterImage(callback, image);
+		return sendOpenRouterImage(callback, image, prompt, model);
 	} catch (error) {
 		const reason = `Image generation failed: ${error instanceof Error ? error.message : String(error)}`;
 		await emit(callback, reason);
@@ -330,8 +311,19 @@ const generateImageHandler: Handler = async (runtime, message, _state, options, 
 async function sendOpenRouterImage(
 	callback: HandlerCallback | undefined,
 	image: OpenRouterImageGenerationResult,
+	prompt?: string,
+	model?: string,
 ): Promise<ActionResult> {
-	const imageUrl = materializeGeneratedImage(image.url);
+	const media = await saveGeneratedMediaUrl({
+		kind: "image",
+		provider: "openrouter",
+		capability: "image-generation",
+		url: image.url,
+		title: "OpenRouter generated image",
+		...(prompt ? { prompt } : {}),
+		...(model ? { model } : {}),
+	});
+	const imageUrl = media.url;
 	const text = "Generated image.";
 	await callback?.({
 		text,
@@ -349,10 +341,11 @@ async function sendOpenRouterImage(
 	return {
 		success: true,
 		text,
-		values: { generatedImage: true, imageUrl },
+		values: { generatedImage: true, imageUrl, galleryId: media.id },
 		data: {
 			actionName: "GENERATE_IMAGE",
 			imageUrl,
+			galleryId: media.id,
 			...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
 		},
 	};

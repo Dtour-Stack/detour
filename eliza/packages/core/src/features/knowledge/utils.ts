@@ -13,6 +13,7 @@ const PLAIN_TEXT_CONTENT_TYPES = [
 	"text/yaml",
 	"application/x-yaml",
 	"application/json",
+	"application/x-ndjson",
 	"text/markdown",
 	"text/csv",
 ];
@@ -125,6 +126,7 @@ export function isBinaryContentType(
 	const textContentTypes = [
 		"text/",
 		"application/json",
+		"application/x-ndjson",
 		"application/xml",
 		"application/javascript",
 		"application/typescript",

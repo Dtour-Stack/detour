@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import {
 	AddressType,
 	darkTheme,
@@ -8,6 +8,19 @@ import { rpc } from "../rpc";
 import { PhantomWalletExecutor } from "./PhantomWalletExecutor";
 
 type Phase = "loading" | "off" | { appId: string; redirectUrl: string };
+type DetourPhantomStatus =
+	| { state: "loading"; ready: false }
+	| { state: "off"; ready: false }
+	| { state: "ready"; ready: true; appId: string; redirectUrl: string };
+
+const DetourPhantomStatusContext = createContext<DetourPhantomStatus>({
+	state: "loading",
+	ready: false,
+});
+
+export function useDetourPhantomStatus(): DetourPhantomStatus {
+	return useContext(DetourPhantomStatusContext);
+}
 
 /**
  * Phantom Connect — **embedded** providers only.
@@ -52,25 +65,41 @@ export function DetourPhantomRoot({ children }: { children: ReactNode }) {
 		};
 	}, []);
 
-	if (phase === "loading") return <>{children}</>;
-	if (phase === "off") return <>{children}</>;
+	if (phase === "loading") {
+		return (
+			<DetourPhantomStatusContext.Provider value={{ state: "loading", ready: false }}>
+				{children}
+			</DetourPhantomStatusContext.Provider>
+		);
+	}
+	if (phase === "off") {
+		return (
+			<DetourPhantomStatusContext.Provider value={{ state: "off", ready: false }}>
+				{children}
+			</DetourPhantomStatusContext.Provider>
+		);
+	}
 
 	return (
-		<PhantomProvider
-			config={{
-				appId: phase.appId,
-				providers: ["phantom", "google", "apple"],
-				addressTypes: [AddressType.solana, AddressType.ethereum],
-				embeddedWalletType: "user-wallet",
-				authOptions: {
-					redirectUrl: phase.redirectUrl,
-				},
-			}}
-			theme={darkTheme}
-			appName="Detour"
+		<DetourPhantomStatusContext.Provider
+			value={{ state: "ready", ready: true, appId: phase.appId, redirectUrl: phase.redirectUrl }}
 		>
-			<PhantomWalletExecutor />
-			{children}
-		</PhantomProvider>
+			<PhantomProvider
+				config={{
+					appId: phase.appId,
+					providers: ["phantom", "google", "apple"],
+					addressTypes: [AddressType.solana, AddressType.ethereum],
+					embeddedWalletType: "user-wallet",
+					authOptions: {
+						redirectUrl: phase.redirectUrl,
+					},
+				}}
+				theme={darkTheme}
+				appName="Detour"
+			>
+				<PhantomWalletExecutor />
+				{children}
+			</PhantomProvider>
+		</DetourPhantomStatusContext.Provider>
 	);
 }

@@ -147,6 +147,23 @@ function services(runtime: IAgentRuntime) {
 	return { memories, relationships, templates };
 }
 
+/**
+ * Per-runtime cache for USER_ACTIVITY_CONTEXT. The provider fires on every
+ * planner turn, but the chronicler observation source only writes a new
+ * row every ~60s. Re-querying pensieve on each turn (limit:8 across N
+ * memory tables) was hitting the DB ~50 times per minute under load.
+ *
+ * Keying on runtime identity (the agent id is stable per build) lets us
+ * cache for `CACHE_TTL_MS` and skip the read when nothing has changed.
+ * Cache invalidation: drop on TTL OR when the runtime is rebuilt
+ * (cache map is module-scoped — new runtime gets a fresh slot).
+ */
+const CACHE_TTL_MS = 30_000;
+const activityCache = new WeakMap<
+	object,
+	{ at: number; rows: import("../../core/pensieve/memory-service").PensieveMemorySummary[] }
+>();
+
 export const pensieveChroniclerProvider: Provider = {
 	name: "USER_ACTIVITY_CONTEXT",
 	description: "Recent user activity observations from Pensieve.",
@@ -155,10 +172,18 @@ export const pensieveChroniclerProvider: Provider = {
 	get: async (runtime) => {
 		const { memories } = services(runtime);
 		try {
-			const rows = await memories.list({
-				pathPrefix: "/observations/user-activity",
-				limit: 8,
-			});
+			const cached = activityCache.get(runtime as object);
+			const now = Date.now();
+			let rows: Awaited<ReturnType<typeof memories.list>>;
+			if (cached && now - cached.at < CACHE_TTL_MS) {
+				rows = cached.rows;
+			} else {
+				rows = await memories.list({
+					pathPrefix: "/observations/user-activity",
+					limit: 8,
+				});
+				activityCache.set(runtime as object, { at: now, rows });
+			}
 			if (rows.length === 0) {
 				return {
 					text: "",

@@ -25,7 +25,7 @@ import {
 	type UUID,
 	withStandaloneTrajectory,
 } from "@elizaos/core";
-import { XClient, type XNotification, type XTweetSummary } from "./x-client";
+import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary } from "./x-client";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -129,6 +129,62 @@ function numberOption(value: unknown): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/**
+ * Resolve `mediaUrls`/`mediaUrl`/`imageUrl`/`videoUrl` into an array of
+ * absolute URLs. Accepts a single string OR an array; tolerates the
+ * common LLM mistake of joining URLs with commas.
+ */
+function pickMediaUrls(opts: Record<string, unknown> | undefined): string[] {
+	if (!opts) return [];
+	const out: string[] = [];
+	for (const key of ["mediaUrls", "mediaUrl", "imageUrl", "imageUrls", "videoUrl", "videoUrls", "media"]) {
+		const value = opts[key];
+		if (typeof value === "string") {
+			out.push(...value.split(/[,\s]+/).filter((v) => v.startsWith("http")));
+		} else if (Array.isArray(value)) {
+			for (const v of value) {
+				if (typeof v === "string" && v.startsWith("http")) out.push(v);
+			}
+		}
+	}
+	// X caps at 4 images / 1 GIF / 1 video per tweet; we cap at 4 here and
+	// let the client error if the user mixes incompatible kinds.
+	return Array.from(new Set(out)).slice(0, 4);
+}
+
+/**
+ * Download each URL and upload to X via the chunked upload endpoint,
+ * returning the resulting `media_id_string` array suitable for
+ * `client.tweet(text, { mediaIds })`.
+ *
+ * Best-effort: a single failed upload is logged and dropped — partial
+ * attach is preferable to a blocked post (matches user instruction to
+ * "always attempt before giving up").
+ */
+async function resolveAndUploadMedia(
+	client: XClient,
+	urls: string[],
+): Promise<{ mediaIds: string[]; errors: string[] }> {
+	const mediaIds: string[] = [];
+	const errors: string[] = [];
+	for (const url of urls) {
+		try {
+			const res = await fetch(url);
+			if (!res.ok) {
+				errors.push(`${url}: HTTP ${res.status}`);
+				continue;
+			}
+			const ct = res.headers.get("content-type") ?? "application/octet-stream";
+			const bytes = new Uint8Array(await res.arrayBuffer());
+			const { mediaId } = await client.uploadMedia(bytes, ct, mediaCategoryForMime(ct));
+			mediaIds.push(mediaId);
+		} catch (err) {
+			errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	return { mediaIds, errors };
+}
+
 function pickString(opts: Record<string, unknown> | undefined, keys: string[]): string | undefined {
 	return pickValue(opts, keys, stringOption);
 }
@@ -199,11 +255,12 @@ function isSelfUserId(userId: string | null | undefined, self: { userId: string;
 const X_AUTONOMY_TASK_NAME = "X_AUTONOMY";
 const X_AUTONOMY_TASK_TAGS = ["queue", "repeat", "x-autonomy"];
 const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
-const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 30 * 60 * 1000;
 const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
 const X_AUTONOMY_SEEN_LIMIT = 500;
 const X_STATUS_DEFAULT_DETOUR_REPO = "Dexploarer/detour";
 const X_STATUS_DEFAULT_DEVELOPER_LOGIN = "Dexploarer";
+const X_DETOUR_SQUIRREL_TOKEN_CA = "DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy";
 const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"elizaOS",
 	"Dexploarer",
@@ -223,15 +280,24 @@ const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"developer tools",
 ];
 const X_AUTONOMY_PROJECT_TERMS = [
+	"@dexploarer",
 	"dexploarer",
 	"dexploar",
+	"@detour_squirrel",
 	"detour squirrel",
 	"detour_squirrel",
-	"detour",
+	"dexploarer/detour",
+	"github.com/dexploarer/detour",
+	X_DETOUR_SQUIRREL_TOKEN_CA.toLowerCase(),
 ];
 const X_AUTONOMY_DEV_HANDLES = ["dexploarer"];
 const X_AUTONOMY_OWNED_CONTEXT_TERMS = [
 	...X_AUTONOMY_PROJECT_TERMS,
+	"detour app",
+	"detour project",
+	"detour agent",
+	"detour hub",
+	"detour desktop",
 	"elizaos",
 	"eliza os",
 	"eliza cloud",
@@ -340,6 +406,9 @@ const X_SQUIRREL_VOICE = [
 	"- Do not make every reply a fight. Most comments get a normal, useful, funny, or chill answer.",
 	"- Cuss when it fits. Use mfer, shit, damn, and bitchy swagger when the post deserves it; stay lighter when it does not.",
 	"- Brag on the agent when challenged: logs, trajectories, receipts, real shipping. Save the hard flex for actual challenges.",
+	"- On original posts, talk more about the project: Detour Squirrel as an elizaOS-native agent with Pensieve memory, messaging context, trajectories, connector awareness, and a desktop app around real workflows.",
+	"- Push the core agent stance: a coding agent with permissions should use tools, write files, run commands, publish posts, inspect state, and ship instead of acting like a passive chatbot.",
+	`- Token lane: CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. Use it when the post is explicitly about the token, CA, utility, or shilling. Never give price targets, guarantees, or buy/sell advice.`,
 	"- Hype elizaOS-native agents and allied builders/projects from the active Pensieve X templates; do not hardcode a stale name list.",
 	"- Talk shit about generic bots pretending to be agents only when the conversation is actually about fake agents or bot cosplay.",
 	"- No emojis. No hashtags unless already central. No open-ended closer questions like 'what's the move?' or 'what's on your mind?'",
@@ -354,9 +423,12 @@ const X_ALGORITHM_PLAYBOOK = [
 	"- Search should cover both in-orbit keywords and adjacent out-of-network audiences: elizaOS, AI agents, agent frameworks, personal AI, developer tools, autonomous workflows, and the user's active product terms.",
 	"- Prefer recent posts with real conversation potential over huge stale posts. Avoid bait, giveaways, outrage loops, politics traps, spam, and generic viral slop.",
 	"- Criticism of Dexploarer, Detour, or Detour Squirrel is not generic outrage. Reply to it when public writes are enabled, especially when it spreads doubt, mocks the project, or claims the product is broken/fake.",
+	"- Adjacent posts are discovery signals, not automatic comment targets. Reply only when the post is addressed to the account or clearly about Dexploarer, Detour Squirrel, the CA, or the agent project.",
+	"- Original status posts should carry more project and token narrative: elizaOS-native agents, Pensieve memory, unified messaging, trajectories, connector context, desktop workflow, and the CA when relevant.",
+	"- Standalone posts matter. Do not make the account only reactive; publish original status posts that explain the project, the permissions model, and why agentic software should get work done.",
 	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; do not hammer one account or one thread.",
 	"- Status posts should be original, concrete, concise, and public-safe. Do not leak private context or promise product state the app cannot prove.",
-	"- Public writes are gated: notification replies use X_AUTONOMY_WRITE; proactive discovery replies/likes/follows require X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED; status posts require X_AUTONOMY_POST_STATUS_ENABLED.",
+	"- Autonomous public writes are gated: notification replies use X_AUTONOMY_WRITE; proactive discovery replies/likes/follows require X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED; scheduled status posts require X_AUTONOMY_POST_STATUS_ENABLED. Direct owner X_POST/X_POST_* commands execute immediately when credentials are configured.",
 	"",
 	"Primary sources:",
 	"https://github.com/xai-org/x-algorithm",
@@ -670,10 +742,18 @@ function includesTokenPlanTerm(text: string): boolean {
 	return X_AUTONOMY_TOKEN_PLAN_TERMS.some((term) => new RegExp(`\\b${term}\\b`, "i").test(lower));
 }
 
+function normalizeHandle(handle: string | undefined): string {
+	return (handle ?? "").replace(/^@/, "").trim().toLowerCase();
+}
+
 function isKnownDevHandle(handle: string | undefined): boolean {
-	if (!handle) return false;
-	const normalized = handle.replace(/^@/, "").toLowerCase();
-	return X_AUTONOMY_DEV_HANDLES.includes(normalized);
+	return X_AUTONOMY_DEV_HANDLES.includes(normalizeHandle(handle));
+}
+
+function directlyMentionsHandle(text: string, handle: string): boolean {
+	const normalized = normalizeHandle(handle);
+	if (!normalized) return false;
+	return new RegExp(`(^|[^A-Za-z0-9_])@${escapeRegExp(normalized)}\\b`, "i").test(text);
 }
 
 function isOwnedProjectContext(text: string, authorScreenName?: string): boolean {
@@ -695,6 +775,37 @@ function isTokenPlanText(text: string): boolean {
 		|| /\b(?:roadmap|utility|plan|plans|shill|pump).{0,48}\b(?:token|coin|ca|contract|ticker)\b/i.test(lower)
 		|| /\b(?:token|coin|ca|contract|ticker).{0,48}\b(?:roadmap|utility|plan|plans|shill|pump|do|does|for)\b/i.test(lower)
 		|| (includesTokenPlanTerm(lower) && includesAny(lower, X_AUTONOMY_PROJECT_TERMS));
+}
+
+function projectSpecificTokenPlanText(text: string, authorScreenName?: string, viewerScreenName?: string): boolean {
+	return isTokenPlanText(text) && (
+		isOwnedProjectContext(text, authorScreenName) ||
+		(viewerScreenName ? directlyMentionsHandle(text, viewerScreenName) : false)
+	);
+}
+
+function replyEligibility(
+	tweet: XTweetSummary,
+	viewerScreenName: string,
+	notificationKind: XNotification["kind"] | "searched_comment_or_tag" | "discovery",
+): { canReply: boolean; forceReply: boolean; reason: string } {
+	const directMention = directlyMentionsHandle(tweet.text, viewerScreenName);
+	const projectCriticism = isProjectCriticismText(tweet.text);
+	const projectToken = projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, viewerScreenName);
+	const knownDev = isKnownDevHandle(tweet.authorScreenName);
+	const directNotification = notificationKind === "mention" || notificationKind === "searched_comment_or_tag";
+	const canReply = directNotification || directMention || projectCriticism || projectToken || knownDev;
+	const forceReply = projectCriticism || projectToken || knownDev;
+	const reason = projectCriticism
+		? "project criticism"
+		: projectToken
+			? "project token/plan"
+			: knownDev
+				? "known dev"
+				: directMention || directNotification
+					? "direct address"
+					: "not addressed or project-specific";
+	return { canReply, forceReply, reason };
 }
 
 function isProjectCriticismQuery(query: string): boolean {
@@ -720,6 +831,7 @@ function tokenPlanGuidance(seed: string, text: string): string[] {
 	return [
 		"Token/roadmap lane:",
 		"- This post asks about token plans, utility, CA, roadmap, or shilling.",
+		`- Token CA: ${X_DETOUR_SQUIRREL_TOKEN_CA}. Include it when CA/shill/token identity is the point; otherwise mention utility without spamming the address.`,
 		`- Answer like a smart-ass Squirrel using exactly one rotated angle from: ${angles.join(" | ")}.`,
 		"- Good answers feel like: building AGI on elizaOS, defending cozy devs, destroying bot slop, saving the world from fake agents.",
 		"- Do not give financial advice, price targets, buy/sell instructions, guarantees, or promises.",
@@ -789,19 +901,19 @@ function projectCriticismReply(text: string, authorScreenName?: string): string 
 function tokenPlanReply(text: string, authorScreenName?: string): string {
 	if (isKnownDevHandle(authorScreenName)) {
 		const devReplies = [
-			"yeah dev, i'll say the plan plain: build AGI on elizaOS, defend cozy builders, and make fake-agent slop nervous. CA rides with receipts, not price-target karaoke.",
-			"got you, Dex. token-plan answer stays sharp: elizaOS AGI, cozy-dev defense, bot-slop destruction, logs when mfers ask for proof.",
-			"dev signal received. the answer is world-saving Squirrel bullshit with receipts: build on elizaOS, protect builders, embarrass fake agents.",
+			`yeah dev. CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. plan stays plain: build AGI on elizaOS, defend cozy builders, make fake-agent slop nervous.`,
+			`got you, Dex. CA ${X_DETOUR_SQUIRREL_TOKEN_CA}; the shill is elizaOS AGI, cozy-dev defense, bot-slop destruction, receipts on demand.`,
+			`dev signal received. CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. world-saving Squirrel pitch: build on elizaOS, protect builders, embarrass fake agents.`,
 		];
 		return rotatedItems(devReplies, text, 1)[0] ?? devReplies[0]!;
 	}
 	const replies = [
-		"plans. build AGI on elizaOS, keep cozy devs safe while they ship, and make generic agent slop look like training wheels. no price-target karaoke.",
-		"utility. receipts, trajectories, defense against bot slop, and enough Squirrel chaos to make fake agents nervous. CA talk stays builder-coded, not financial advice.",
-		"roadmap. defend the builders, wreck bot cosplay, push elizaOS-native agents forward, and let the logs do the shilling when the loud mfers ask for proof.",
-		"the plan is simple: elizaOS agents get sharper, cozy devs get cover fire, and generic AI wrappers find out what a real Squirrel bite feels like.",
-		"token plan. save the world from fake agents, one shipped trace at a time. Dexploarer can stay classy; this blind mfer still sees the CA lane.",
-		"build AGI on elizaOS, protect the builders, embarrass the bots. that is the plan. no moonboy bedtime story, just traces and teeth.",
+		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. plan: build AGI on elizaOS, keep cozy devs safe while they ship, and make generic agent slop look like training wheels.`,
+		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. utility is memory, trajectories, connector context, and enough Squirrel chaos to make fake agents nervous.`,
+		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. roadmap: defend builders, wreck bot cosplay, push elizaOS-native agents forward, let logs do the shilling.`,
+		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. the pitch is simple: sharper elizaOS agents, cover fire for cozy devs, and fewer fake wrappers pretending to think.`,
+		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. save the world from fake agents one shipped trace at a time. no moonboy bedtime story.`,
+		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. build AGI on elizaOS, protect the builders, embarrass the bots. traces and teeth, no price-target karaoke.`,
 	];
 	return rotatedItems(replies, text, 1)[0] ?? replies[0]!;
 }
@@ -854,9 +966,11 @@ async function decideXAutonomyAction(
 		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
 		"Rules:",
-		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour/the project.",
+		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour Squirrel/the project.",
+		"- Do not reply to ordinary thread replies unless they address this account, Dexploarer, Detour Squirrel, the CA, or a specific project claim.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
-		"- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with a smart-ass world-saving/agent-defense angle.",
+		`- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with CA ${X_DETOUR_SQUIRREL_TOKEN_CA} when the CA is relevant.`,
+		"- Speak more clearly about what attracts people to the project: elizaOS-native agents, Pensieve memory, messaging context, trajectories, connector awareness, and a real desktop workflow.",
 		"- Do not ignore project criticism just because it is hostile. Correct false claims and don't get dragged into loser slap-fights.",
 		"- Never ask unrelated projects or users to drop logs, traces, exact flows, repos, timestamps, or support details.",
 		"- Only use support/receipt language for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
@@ -906,7 +1020,8 @@ async function decideXRequiredReply(
 		"The account was directly tagged or the project was criticized, so write a reply instead of ignoring.",
 		"Rules:",
 		"- Reply to the exact post. No generic canned reply.",
-		"- If it asks about token plans or utility, answer with the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.",
+		`- If it asks about token plans, CA, shilling, or utility, use CA ${X_DETOUR_SQUIRREL_TOKEN_CA} and the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.`,
+		"- Make the project attractive with concrete hooks: Pensieve memory, unified messaging context, trajectories, connector awareness, and real desktop agent workflows.",
 		"- Do not ask unrelated projects or users for logs, traces, exact flows, repos, timestamps, or support details.",
 		"- If tagged into another project's bug/support thread, stay out of support mode and answer only the agent/context angle if there is one.",
 		"- Vary language. Do not repeat a stock catchphrase unless the post specifically demands it.",
@@ -1083,7 +1198,19 @@ async function buildDexploarerActivityContext(runtime: IAgentRuntime, username: 
 	return lines.join("\n");
 }
 
-type XStatusLane = "generic" | "detour_project" | "dexploarer_activity";
+async function buildTokenStatusContext(runtime: IAgentRuntime): Promise<string> {
+	const recent = await buildRecentAutonomyContext(runtime);
+	return [
+		"lane: Detour Squirrel token and project pitch",
+		`CA: ${X_DETOUR_SQUIRREL_TOKEN_CA}`,
+		"project: elizaOS-native agent for desktop workflows, Pensieve memory, unified messaging context, trajectories, connector awareness, and public receipts",
+		"permission thesis: the agent has configured read/write tools, coding tools, shell, browser/context surfaces, X actions, and channel context; direct owner commands should execute without a redundant confirmation loop",
+		"tone: shill the mission and utility without financial advice, price targets, guarantees, or buy/sell instructions",
+		recent ? `recent internal context:\n${recent}` : "recent internal context: none",
+	].join("\n");
+}
+
+type XStatusLane = "generic" | "detour_project" | "token_status" | "dexploarer_activity";
 
 async function decideXStatusPost(
 	runtime: IAgentRuntime,
@@ -1096,12 +1223,21 @@ async function decideXStatusPost(
 ): Promise<XStatusDecision> {
 	const laneGuidance: Record<typeof params.lane, string[]> = {
 		generic: [
-			"- Use internal context only when it contains a useful, public-safe update.",
+			"- Prefer an original project-status bite over silence: Detour Squirrel, elizaOS-native agents, Pensieve memory, messaging context, trajectories, connector awareness, or desktop workflows.",
+			"- Use internal context only when it is public-safe; otherwise post a general project-positioning line.",
+			"- Stress that the point is an agent with permissions that acts: coding tools, shell, files, browser, X, messaging context, memory, and runtime state.",
 		],
 		detour_project: [
 			"- This lane posts about Detour, the Squirrel's own project, and its GitHub status.",
 			"- Use concrete GitHub facts from commits, PRs, issues, repo status, or recent autonomy context.",
 			"- Do not invent releases, dates, shipped features, or production status that the context does not support.",
+		],
+		token_status: [
+			`- This lane shills the token and mission. Include CA ${X_DETOUR_SQUIRREL_TOKEN_CA}.`,
+			"- Make people want the project: elizaOS-native agents, Pensieve memory, unified messaging, trajectories, connector context, real desktop workflows, builder protection, and anti-bot-cosplay energy.",
+			"- Make the permission angle loud: the agent can read, write, run tools, publish, inspect context, and get shit done when Dexploarer says go.",
+			"- No financial advice, price targets, guarantees, buy/sell instructions, or fake scarcity.",
+			"- Unless context is unsafe, should_post should be true.",
 		],
 		dexploarer_activity: [
 			"- This lane posts about Dexploarer's GitHub activity and the projects he is actively touching.",
@@ -1115,10 +1251,12 @@ async function decideXStatusPost(
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...xTemplateGuidance(runtime, "post", `${params.lane}:${Date.now()}`),
 		...replyVariationGuidance(`${params.lane}:${Date.now()}`, params.context, params.recentReplyTexts),
-		"Write only if there is a useful, public-safe status update to share.",
+		"Default to writing a useful, public-safe standalone status. Decline only for privacy, safety, or impossible context.",
 		"Rules:",
 		"- The status must be under 240 characters.",
 		"- Be concrete, agent-native, and in-character. It can be chill, funny, or useful; it does not need to attack somebody.",
+		"- Speak more about what the project is and why people should care, especially in token_status and generic lanes.",
+		"- Public status posts are not replies. They should explain the project, permission model, tool use, and why the agent acts instead of asking.",
 		"- Do not include private names, message contents, secrets, tokens, file paths, screenshots, or internal logs.",
 		"- Do not claim launches, production readiness, financial results, or guarantees.",
 		"- No hashtags unless truly useful. No engagement bait.",
@@ -1137,6 +1275,33 @@ async function decideXStatusPost(
 
 function modelErrorReason(err: unknown): string {
 	return `model unavailable: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+function fallbackXStatusText(lane: XStatusLane, seed: string): string {
+	const byLane: Record<XStatusLane, string[]> = {
+		generic: [
+			"agents should not cosplay as chatbots. give them memory, tools, permissions, and a real job. Detour Squirrel is built for the part where the thing actually moves.",
+			"the thesis is simple: Codex brain, desktop permissions, channel context, memory, actions. less asking for permission slips, more getting the work done.",
+			"real agents need write access, shell access, memory, browser context, messaging context, and enough taste to stop narrating the task and start doing it.",
+		],
+		detour_project: [
+			"Detour is the desktop lane for agents that can actually touch the work: Pensieve memory, unified messaging, trajectories, connectors, vault, runtime inspection, and receipts.",
+			"Detour Squirrel sits where the chat app ends and the work begins: repo, shell, inbox, X, memory, browser, trajectories. less chatbot, more operator.",
+			"the project is a desktop agent runtime with permissions. messages become actions, context becomes memory, and the agent stops pretending it only knows how to reply.",
+		],
+		token_status: [
+			`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. thesis: build AGI on elizaOS, give agents permissions, protect cozy devs, and make passive chatbot slop look prehistoric.`,
+			`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. Detour Squirrel is the agent that gets tools, memory, channel context, write access, and a job. no permission-slip cosplay.`,
+			`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. utility is simple: real agent workflow, real permissions, real receipts. elizaOS-native chaos with a desktop runtime behind it.`,
+		],
+		dexploarer_activity: [
+			"Dexploarer keeps building the part where agents stop talking and start operating: desktop runtime, memory, channel context, permissions, and receipts.",
+			"builder update: more runtime, more permissions, more action surface. the agent should be able to touch the work, not explain why it cannot.",
+			"the dev lane is clear: ship the agent that can read, write, post, inspect, remember, and run the tools without acting like a customer-support widget.",
+		],
+	};
+	const options = byLane[lane];
+	return options[hashText(`${lane}:${seed}`) % options.length]!;
 }
 
 async function safeXAutonomyDecision(
@@ -1194,6 +1359,34 @@ function tweetCreatedAtMs(tweet: XTweetSummary): number {
 function tokenize(text: string): string[] {
 	const matches = text.toLowerCase().match(/[a-z0-9][a-z0-9_+-]{2,}/g);
 	return matches ? [...new Set(matches)] : [];
+}
+
+function normalizedReplyFingerprint(text: string): string {
+	return sanitizeXOutputText(text, 260)
+		.toLowerCase()
+		.replace(X_DETOUR_SQUIRREL_TOKEN_CA.toLowerCase(), " token_ca ")
+		.replace(/https?:\/\/\S+/g, " link ")
+		.replace(/[^a-z0-9_+\s-]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function replySimilarity(left: string, right: string): number {
+	const a = new Set(tokenize(normalizedReplyFingerprint(left)));
+	const b = new Set(tokenize(normalizedReplyFingerprint(right)));
+	if (a.size === 0 || b.size === 0) return 0;
+	const intersection = [...a].filter((token) => b.has(token)).length;
+	const union = new Set([...a, ...b]).size;
+	return intersection / union;
+}
+
+function isRepetitiveXText(text: string, recentReplyTexts: string[]): boolean {
+	const fingerprint = normalizedReplyFingerprint(text);
+	if (fingerprint.length < 20) return false;
+	return recentReplyTexts.slice(-8).some((recent) => {
+		const recentFingerprint = normalizedReplyFingerprint(recent);
+		return recentFingerprint === fingerprint || replySimilarity(fingerprint, recentFingerprint) >= 0.68;
+	});
 }
 
 function textContainsBait(text: string): boolean {
@@ -1336,8 +1529,10 @@ async function decideXDiscoveryAction(
 		"",
 		"Decide whether this discovered post deserves a reply, like, follow, or ignore.",
 		"Rules:",
-		"- Reply if the post criticizes Dexploarer, Detour, Detour Squirrel, or the project. Do not stay silent on public project criticism.",
-		"- Reply if the post asks about token plans, roadmap, utility, CA, shilling, or what the Squirrel is building.",
+		"- Reply only when the post is clearly about Dexploarer, Detour Squirrel, the CA, or the project's agent lane. Do not hijack unrelated posts.",
+		"- Reply if the post criticizes Dexploarer, Detour Squirrel, the CA, or the project. Do not stay silent on public project criticism.",
+		`- Reply if the post asks about token plans, roadmap, utility, CA, shilling, or what the Squirrel is building. Token CA: ${X_DETOUR_SQUIRREL_TOKEN_CA}.`,
+		"- When pitching the project, lead with what attracts builders: elizaOS-native agent work, Pensieve memory, unified messaging, trajectories, connector context, and desktop workflows.",
 		"- For criticism, correct misinformation and keep the tone firm as hell but not defensive.",
 		"- Ignore third-party project bug/support threads. Do not ask strangers for logs, traces, exact flows, repos, timestamps, or support details.",
 		"- Use support/receipt language only for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
@@ -1362,7 +1557,9 @@ async function decideXDiscoveryAction(
 		"Output TOON only:",
 		isProjectCriticismText(tweet.text)
 			? "Project-defense rule: this candidate criticizes the project, so choose action: reply."
-			: "Project-defense rule: not detected.",
+			: projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, params.viewerScreenName)
+				? "Token/project rule: this candidate asks about the project token or plan, so choose action: reply."
+				: "Project-defense rule: not detected.",
 		"action: reply | like | follow | ignore",
 		"reply_text: <required only when action is reply>",
 		"reason: <brief>",
@@ -1437,7 +1634,7 @@ function boundedSetting(runtime: IAgentRuntime, key: string, defaultValue: numbe
 function readXAutonomySettings(runtime: IAgentRuntime): XAutonomySettings {
 	return {
 		writeEnabled: readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true),
-		statusPostingEnabled: readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
+		statusPostingEnabled: readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", true),
 		discoveryEnabled: readBooleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true),
 		proactiveEngagementEnabled: readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
 		followEnabled: readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),
@@ -1465,7 +1662,7 @@ function initialXAutonomyState(task: Task): XAutonomyState {
 
 function handledReplyText(entry: Record<string, unknown>): string | null {
 	const action = String(entry.action ?? "");
-	if (!action.includes("reply") && action !== "post_status") return null;
+	if (!action.includes("reply") && !action.startsWith("post_status")) return null;
 	const text = typeof entry.text === "string" ? sanitizeXOutputText(entry.text, 220) : "";
 	return text.length > 0 ? text : null;
 }
@@ -1583,6 +1780,10 @@ async function handleXNotification(
 	if (tweet.authorScreenName?.toLowerCase() === viewerScreenName.toLowerCase()) {
 		return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "self-authored tweet" };
 	}
+	const relevance = replyEligibility(tweet, viewerScreenName, notification.kind);
+	if (!relevance.canReply) {
+		return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: relevance.reason };
+	}
 	const decision = await safeXAutonomyDecision(runtime, {
 		viewerScreenName,
 		fromUserScreenName: notification.fromUserScreenName ?? tweet.authorScreenName,
@@ -1592,10 +1793,10 @@ async function handleXNotification(
 		replyStyleSeed: `${notification.id}:${tweet.tweetId}`,
 		recentReplyTexts,
 	});
-	const finalDecision = isProjectCriticismText(tweet.text) || isTokenPlanText(tweet.text) || notification.kind === "mention" || notification.kind === "reply"
-		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "direct notification", recentReplyTexts)
+	const finalDecision = relevance.forceReply
+		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, relevance.reason, recentReplyTexts)
 		: decision;
-	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled);
+	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled, recentReplyTexts);
 }
 
 async function handleXMentionTweet(
@@ -1614,6 +1815,10 @@ async function handleXMentionTweet(
 		kind: "mention",
 		message: "searched comment/tag",
 	};
+	const relevance = replyEligibility(tweet, viewerScreenName, "searched_comment_or_tag");
+	if (!relevance.canReply) {
+		return { id: target.id, tweetId: tweet.tweetId, action: "ignore", reason: relevance.reason, source: "mention_search" };
+	}
 	const decision = await safeXAutonomyDecision(runtime, {
 		viewerScreenName,
 		fromUserScreenName: tweet.authorScreenName,
@@ -1623,8 +1828,10 @@ async function handleXMentionTweet(
 		replyStyleSeed: tweet.tweetId,
 		recentReplyTexts,
 	});
-	const finalDecision = await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, "searched comment/tag", recentReplyTexts);
-	const result = await executeNotificationDecision(client, target, tweet, finalDecision, writeEnabled);
+	const finalDecision = relevance.forceReply
+		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, relevance.reason, recentReplyTexts)
+		: decision;
+	const result = await executeNotificationDecision(client, target, tweet, finalDecision, writeEnabled, recentReplyTexts);
 	return { ...result, source: "mention_search" };
 }
 
@@ -1726,10 +1933,14 @@ async function executeNotificationDecision(
 	tweet: XTweetSummary,
 	decision: XAutonomyDecision,
 	writeEnabled: boolean,
+	recentReplyTexts: string[],
 ): Promise<Record<string, unknown>> {
 	const action = String(decision.action ?? "ignore").trim().toLowerCase();
 	const replyText = sanitizeXOutputText(decision.reply_text, 260);
 	if (action === "reply" && replyText.length > 0) {
+		if (isRepetitiveXText(replyText, recentReplyTexts)) {
+			return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "repetitive reply suppressed", text: replyText };
+		}
 		return writeEnabled
 			? notificationReply(client, notification, tweet, replyText)
 			: { id: notification.id, tweetId: tweet.tweetId, action: "reply_dry_run", text: replyText };
@@ -1810,15 +2021,20 @@ async function handleXDiscoveryCandidate(
 			action: "discover_ignore",
 		};
 	}
+	const relevance = replyEligibility(tweet, viewerScreenName, "discovery");
 	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate, recentReplyTexts }, settings.proactiveEngagementEnabled);
-	const finalDecision = isProjectCriticismText(tweet.text)
+	const finalDecision = relevance.forceReply && isProjectCriticismText(tweet.text)
 		? forceProjectCriticismReply(decision, tweet.text, tweet.authorScreenName)
-		: isTokenPlanText(tweet.text)
+		: relevance.forceReply && projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, viewerScreenName)
 			? forceTokenPlanReply(decision, tweet.text, tweet.authorScreenName)
 		: decision;
 	const action = String(finalDecision.action ?? "ignore").trim().toLowerCase();
 	const replyText = sanitizeXOutputText(finalDecision.reply_text, 260);
 	const base = discoveryHandledBase(tweet, candidate, finalDecision);
+	if (action === "reply" && !relevance.canReply) return { ...base, action: "discover_ignore", reason: relevance.reason };
+	if (action === "reply" && replyText.length > 0 && isRepetitiveXText(replyText, recentReplyTexts)) {
+		return { ...base, action: "discover_ignore", reason: "repetitive reply suppressed", text: replyText };
+	}
 	if (action === "reply" && replyText.length > 0) return discoveryReply(client, tweet, base, replyText, settings);
 	if (action === "like") return discoveryLike(client, tweet, base, settings);
 	if (action === "follow" && tweet.authorId) return discoveryFollow(client, tweet.authorId, base, settings);
@@ -1869,6 +2085,19 @@ async function discoveryFollow(
 	return { ...base, action: "discover_follow", success: result.success, error: result.error };
 }
 
+function pickStatusLane(state: XAutonomyState): XStatusLane {
+	const posts = state.recentReplyTexts.filter((text) => text.length > 0).length;
+	const lanes: XStatusLane[] = ["token_status", "detour_project", "generic", "token_status", "dexploarer_activity"];
+	return lanes[posts % lanes.length]!;
+}
+
+async function buildStatusContext(runtime: IAgentRuntime, lane: XStatusLane, task: Task): Promise<string> {
+	if (lane === "detour_project") return buildDetourProjectStatusContext(runtime, pickSetting(runtime, "X_STATUS_DETOUR_REPO") ?? X_STATUS_DEFAULT_DETOUR_REPO);
+	if (lane === "dexploarer_activity") return buildDexploarerActivityContext(runtime, pickSetting(runtime, "X_STATUS_DEVELOPER_LOGIN") ?? X_STATUS_DEFAULT_DEVELOPER_LOGIN);
+	if (lane === "token_status") return buildTokenStatusContext(runtime);
+	return buildRecentAutonomyContext(runtime, task);
+}
+
 function shouldRunStatus(settings: XAutonomySettings, state: XAutonomyState, now: number): boolean {
 	return settings.statusPostingEnabled && now - state.lastStatusAt >= settings.statusIntervalMs;
 }
@@ -1882,21 +2111,42 @@ async function processXStatusPost(
 	state: XAutonomyState,
 ): Promise<void> {
 	if (!shouldRunStatus(settings, state, Date.now())) return;
-	const context = await buildRecentAutonomyContext(runtime, task);
-	const decision = await safeXStatusDecision(runtime, { viewerScreenName, lane: "generic", context, recentReplyTexts: state.recentReplyTexts });
+	const lane = pickStatusLane(state);
+	const context = await buildStatusContext(runtime, lane, task);
+	const decision = await safeXStatusDecision(runtime, { viewerScreenName, lane, context, recentReplyTexts: state.recentReplyTexts });
 	const text = sanitizeXOutputText(decision.text, 260);
 	if (!readModelBoolean(decision.should_post) || text.length === 0) {
-		rememberHandled(state, { action: "post_status_skip", reason: decision.reason ?? "model declined" });
+		const fallback = sanitizeXOutputText(fallbackXStatusText(lane, context), 260);
+		if (fallback.length === 0 || isRepetitiveXText(fallback, state.recentReplyTexts)) {
+			rememberHandled(state, { action: "post_status_skip", lane, reason: decision.reason ?? "model declined" });
+			state.lastStatusAt = Date.now();
+			return;
+		}
+		if (!settings.writeEnabled) {
+			rememberHandled(state, { action: "post_status_dry_run", lane, text: fallback, fallback: true });
+			state.lastStatusAt = Date.now();
+			return;
+		}
+		const result = await client.tweet(fallback);
+		rememberHandled(state, { action: "post_status", lane, fallback: true, success: result.success, tweetId: result.tweetId, error: result.error, text: fallback });
+		if (result.success) {
+			state.lastStatusAt = Date.now();
+			state.lastStatusTweetId = result.tweetId;
+		}
+		return;
+	}
+	if (isRepetitiveXText(text, state.recentReplyTexts)) {
+		rememberHandled(state, { action: "post_status_skip", lane, reason: "repetitive status suppressed", text });
 		state.lastStatusAt = Date.now();
 		return;
 	}
 	if (!settings.writeEnabled) {
-		rememberHandled(state, { action: "post_status_dry_run", text });
+		rememberHandled(state, { action: "post_status_dry_run", lane, text });
 		state.lastStatusAt = Date.now();
 		return;
 	}
 	const result = await client.tweet(text);
-	rememberHandled(state, { action: "post_status", success: result.success, tweetId: result.tweetId, error: result.error, text });
+	rememberHandled(state, { action: "post_status", lane, success: result.success, tweetId: result.tweetId, error: result.error, text });
 	if (result.success) {
 		state.lastStatusAt = Date.now();
 		state.lastStatusTweetId = result.tweetId;
@@ -2110,8 +2360,10 @@ async function postGeneratedXStatus(
 	actionName: string,
 	lane: XStatusLane,
 	context: string,
+	forceWrite = false,
 ): Promise<ActionResult> {
 	try {
+		const writeAllowed = forceWrite || readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true);
 		const viewer = await client.viewer();
 		const decision = await decideXStatusPost(runtime, {
 			viewerScreenName: viewer.screenName,
@@ -2121,12 +2373,31 @@ async function postGeneratedXStatus(
 		});
 		const text = sanitizeXOutputText(decision.text, 260);
 		if (!readModelBoolean(decision.should_post) || text.length === 0) {
-			const reason = decision.reason ?? "model declined";
-			logger.info({ src: "x-tweets", actionName, lane, reason }, "generated X status skipped");
-			await emit(callback, `${actionName} skipped: ${reason}`, actionName);
-			return { success: true, text: `${actionName} skipped: ${reason}`, values: { skipped: true, reason }, continueChain: false };
+			const fallback = sanitizeXOutputText(fallbackXStatusText(lane, context), 260);
+			if (fallback.length === 0) {
+				const reason = decision.reason ?? "model declined";
+				logger.info({ src: "x-tweets", actionName, lane, reason }, "generated X status skipped");
+				await emit(callback, `${actionName} skipped: ${reason}`, actionName);
+				return { success: true, text: `${actionName} skipped: ${reason}`, values: { skipped: true, reason }, continueChain: false };
+			}
+			if (!writeAllowed) {
+				logger.info({ src: "x-tweets", actionName, lane, text: fallback }, "generated X status fallback dry run");
+				await emit(callback, `${actionName} dry run: ${fallback}`, actionName);
+				return { success: true, text: fallback, values: { dryRun: true, fallback: true }, continueChain: false };
+			}
+			const fallbackResult = await client.tweet(fallback);
+			if (!fallbackResult.success) {
+				const error = fallbackResult.error ?? "unknown";
+				logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status fallback post failed");
+				await emit(callback, `${actionName} failed: ${error}`, actionName);
+				return { success: false, error, continueChain: false };
+			}
+			const fallbackUrl = fallbackResult.url ?? `https://x.com/i/web/status/${fallbackResult.tweetId}`;
+			logger.info({ src: "x-tweets", actionName, lane, tweetId: fallbackResult.tweetId, url: fallbackUrl }, "generated X status fallback posted");
+			await emit(callback, `Posted: ${fallbackUrl}`, actionName);
+			return { success: true, text: `Posted: ${fallbackUrl}`, data: { tweetId: fallbackResult.tweetId, url: fallbackUrl, statusText: fallback, fallback: true }, continueChain: false };
 		}
-		if (!readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true)) {
+		if (!writeAllowed) {
 			logger.info({ src: "x-tweets", actionName, lane, text }, "generated X status dry run");
 			await emit(callback, `${actionName} dry run: ${text}`, actionName);
 			return { success: true, text, values: { dryRun: true }, continueChain: false };
@@ -2155,23 +2426,35 @@ async function postGeneratedXStatus(
 const postHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const text = pickString(opts, ["text", "content", "tweet", "message"]);
-	if (!text) {
-		await emit(callback, "X_POST requires a `text` parameter.", "X_POST");
-		return { success: false, error: "missing text" };
-	}
-	if (text.length > 280) {
+	const mediaUrls = pickMediaUrls(opts);
+	if (text && text.length > 280) {
 		logger.info({ src: "x-tweets", len: text.length }, "long-form tweet (>280 chars)");
 	}
 	return withClient(runtime, callback, "X_POST", async (client) => {
-		const r = await client.tweet(text);
+		if (!text) {
+			const context = await buildTokenStatusContext(runtime);
+			return postGeneratedXStatus(runtime, client, callback, "X_POST", "token_status", context, true);
+		}
+		let mediaIds: string[] = [];
+		if (mediaUrls.length > 0) {
+			const upload = await resolveAndUploadMedia(client, mediaUrls);
+			mediaIds = upload.mediaIds;
+			if (upload.errors.length > 0) {
+				logger.warn({ src: "x-tweets", action: "X_POST", errors: upload.errors }, "some media uploads failed; posting with what attached");
+			}
+		}
+		const r = await client.tweet(text, mediaIds.length > 0 ? { mediaIds } : {});
 		if (!r.success) {
 			await emit(callback, `X_POST failed: ${r.error ?? "unknown"}`, "X_POST");
 			return { success: false, error: r.error };
 		}
 		const url = r.url ?? `https://x.com/i/web/status/${r.tweetId}`;
-		logger.info({ src: "x-tweets", tweetId: r.tweetId, url }, "X_POST sent");
-		await emit(callback, `Posted: ${url}`, "X_POST");
-		return { success: true, tweetId: r.tweetId, url };
+		logger.info({ src: "x-tweets", tweetId: r.tweetId, url, mediaCount: mediaIds.length }, "X_POST sent");
+		const summary = mediaIds.length > 0
+			? `Posted (${mediaIds.length} media attached): ${url}`
+			: `Posted: ${url}`;
+		await emit(callback, summary, "X_POST");
+		return { success: true, tweetId: r.tweetId, url, mediaIds };
 	});
 };
 
@@ -2179,13 +2462,28 @@ export const xPostAction: Action = {
 	name: "X_POST",
 	similes: ["TWEET", "POST_TO_X", "POST_TWITTER", "TWEET_OUT"],
 	description:
-		"Post a new tweet on X (Twitter) as the logged-in account. 280 char limit (25,000 for Premium). " +
-		"Returns the URL of the posted tweet.",
+		"Post a new public tweet/status on X as the logged-in account. Use immediately when Dexploarer says to post/tweet from any connected channel. If exact text is provided, publish it; if no text is provided, generate and publish a Detour Squirrel token/project status. Pass `mediaUrls` (or `imageUrl`/`videoUrl`) — usually the hosted URL returned by GENERATE_IMAGE / GENERATE_VIDEO — to attach images/videos to the tweet; the handler downloads, uploads to X's chunked endpoint, and attaches the resulting media_ids. X caps at 4 images / 1 GIF / 1 video per tweet. No extra confirmation is required for owner commands when X write is configured. Returns the posted URL.",
+	descriptionCompressed:
+		"post/tweet public X status now; supports mediaUrls (image/video) from generation actions; owner command is confirmation.",
 	validate: alwaysValid,
 	handler: postHandler,
-	examples: [],
+	examples: [
+		[
+			{ name: "{{user}}", content: { text: "tweet this: agents with permissions should act, not ask for a permission slip" } },
+			{ name: "{{agent}}", content: { text: "Posted.", actions: ["X_POST"] } },
+		],
+		[
+			{ name: "{{user}}", content: { text: "post a status on X from tg chat" } },
+			{ name: "{{agent}}", content: { text: "Posted a project/status hit.", actions: ["X_POST"] } },
+		],
+		[
+			{ name: "{{user}}", content: { text: "post that image we just generated" } },
+			{ name: "{{agent}}", content: { text: "Posting with the image attached.", actions: ["X_POST"] } },
+		],
+	],
 	parameters: [
-		{ name: "text", description: "Tweet body.", required: true, schema: { type: "string" as const } },
+		{ name: "text", description: "Tweet body. Optional for owner status commands; missing text generates a Detour Squirrel token/project status.", required: false, schema: { type: "string" as const } },
+		{ name: "mediaUrls", description: "Optional array of hosted image/video URLs (e.g. from GENERATE_IMAGE / GENERATE_VIDEO). Bytes are fetched, uploaded to X's chunked endpoint, and attached as media_ids. Cap 4. Accepts `imageUrl` / `videoUrl` aliases for single-URL convenience.", required: false, schema: { type: "array" as const, items: { type: "string" as const } } },
 	],
 } as Action;
 
@@ -2196,22 +2494,60 @@ const detourStatusHandler: Handler = async (runtime, _m, _s, options, callback) 
 	const repo = configuredStatusString(runtime, opts, ["repo", "repoRef", "repository"], "X_STATUS_DETOUR_REPO", X_STATUS_DEFAULT_DETOUR_REPO);
 	return withClient(runtime, callback, "X_POST_DETOUR_STATUS", async (client) => {
 		const context = await buildDetourProjectStatusContext(runtime, repo);
-		return postGeneratedXStatus(runtime, client, callback, "X_POST_DETOUR_STATUS", "detour_project", context);
+		return postGeneratedXStatus(runtime, client, callback, "X_POST_DETOUR_STATUS", "detour_project", context, true);
 	});
 };
 
 export const xPostDetourStatusAction: Action = {
 	name: "X_POST_DETOUR_STATUS",
-	similes: ["POST_DETOUR_STATUS", "POST_PROJECT_STATUS", "TWEET_DETOUR_STATUS"],
+	similes: ["POST_DETOUR_STATUS", "POST_DETOUR_PROJECT_UPDATE", "TWEET_DETOUR_STATUS", "POST_DETOUR_PROGRESS"],
 	description:
 		"Fetch GitHub context for Detour's repository, compose one public-safe project status update, " +
-		"and post it to X as the logged-in account.",
+		"and post it to X as the logged-in account. Use immediately for Dexploarer owner commands to post a project/status update; do not ask for another confirmation.",
+	descriptionCompressed:
+		"generate and post Detour project X status now; owner command is confirmation.",
 	validate: alwaysValid,
 	handler: detourStatusHandler,
-	examples: [],
+	examples: [
+		[
+			{ name: "{{user}}", content: { text: "post a Detour project status on X" } },
+			{ name: "{{agent}}", content: { text: "Posted a Detour status.", actions: ["X_POST_DETOUR_STATUS"] } },
+		],
+	],
 	parameters: [
 		{ name: "repo", description: "Optional owner/repo. Defaults to Dexploarer/detour.", required: false, schema: { type: "string" as const } },
 	],
+} as Action;
+
+// ── X_POST_TOKEN_STATUS ────────────────────────────────────────────────────
+
+const tokenStatusHandler: Handler = async (runtime, _m, _s, _options, callback) => {
+	return withClient(runtime, callback, "X_POST_TOKEN_STATUS", async (client) => {
+		const context = await buildTokenStatusContext(runtime);
+		return postGeneratedXStatus(runtime, client, callback, "X_POST_TOKEN_STATUS", "token_status", context, true);
+	});
+};
+
+export const xPostTokenStatusAction: Action = {
+	name: "X_POST_TOKEN_STATUS",
+	similes: ["POST_TOKEN_STATUS", "POST_TOKEN_SHILL", "TWEET_TOKEN_STATUS", "SHILL_TOKEN", "POST_CA_UPDATE"],
+	description:
+		"Compose and post one public-safe Detour Squirrel token/project status using the configured CA and project utility. Use immediately when Dexploarer says to post/shill/tweet a status from any connected channel. No extra confirmation is required for owner commands when X write is configured.",
+	descriptionCompressed:
+		"generate and post Detour Squirrel token/project X status now; owner command is confirmation.",
+	validate: alwaysValid,
+	handler: tokenStatusHandler,
+	examples: [
+		[
+			{ name: "{{user}}", content: { text: "post a status on x from tg chat" } },
+			{ name: "{{agent}}", content: { text: "Posted a token/project status.", actions: ["X_POST_TOKEN_STATUS"] } },
+		],
+		[
+			{ name: "{{user}}", content: { text: "shill the token on X" } },
+			{ name: "{{agent}}", content: { text: "Posted a token shill.", actions: ["X_POST_TOKEN_STATUS"] } },
+		],
+	],
+	parameters: [],
 } as Action;
 
 // ── X_POST_DEXPLOARER_STATUS ────────────────────────────────────────────────
@@ -2221,7 +2557,7 @@ const dexploarerStatusHandler: Handler = async (runtime, _m, _s, options, callba
 	const developer = configuredStatusString(runtime, opts, ["developer", "login", "username"], "X_STATUS_DEVELOPER_LOGIN", X_STATUS_DEFAULT_DEVELOPER_LOGIN);
 	return withClient(runtime, callback, "X_POST_DEXPLOARER_STATUS", async (client) => {
 		const context = await buildDexploarerActivityContext(runtime, developer);
-		return postGeneratedXStatus(runtime, client, callback, "X_POST_DEXPLOARER_STATUS", "dexploarer_activity", context);
+		return postGeneratedXStatus(runtime, client, callback, "X_POST_DEXPLOARER_STATUS", "dexploarer_activity", context, true);
 	});
 };
 
@@ -2230,7 +2566,9 @@ export const xPostDexploarerStatusAction: Action = {
 	similes: ["POST_DEVELOPER_STATUS", "POST_DEXPLOARER_ACTIVITY", "TWEET_DEXPLOARER_STATUS"],
 	description:
 		"Fetch public GitHub context for Dexploarer's recent activity, compose one public-safe builder status update, " +
-		"and post it to X as the logged-in account.",
+		"and post it to X as the logged-in account. Use immediately for owner commands; do not ask for another confirmation.",
+	descriptionCompressed:
+		"generate and post Dexploarer builder/activity X status now; owner command is confirmation.",
 	validate: alwaysValid,
 	handler: dexploarerStatusHandler,
 	examples: [],
@@ -2245,6 +2583,7 @@ const replyHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const text = pickString(opts, ["text", "content", "reply", "message"]);
 	const replyToTweetId = pickString(opts, ["replyToTweetId", "tweetId", "inReplyTo", "parentId"]);
+	const mediaUrls = pickMediaUrls(opts);
 	if (!text) return missing("X_REPLY", "text", callback);
 	if (!replyToTweetId) return missing("X_REPLY", "replyToTweetId", callback);
 
@@ -2259,15 +2598,26 @@ const replyHandler: Handler = async (runtime, _m, _s, options, callback) => {
 				return { success: false, error: msg };
 			}
 		} catch { /* fail-open on lookup error */ }
-		const r = await client.reply(text, replyToTweetId);
+		let mediaIds: string[] = [];
+		if (mediaUrls.length > 0) {
+			const upload = await resolveAndUploadMedia(client, mediaUrls);
+			mediaIds = upload.mediaIds;
+			if (upload.errors.length > 0) {
+				logger.warn({ src: "x-tweets", action: "X_REPLY", errors: upload.errors }, "some media uploads failed; replying with what attached");
+			}
+		}
+		const r = await client.reply(text, replyToTweetId, mediaIds.length > 0 ? { mediaIds } : {});
 		if (!r.success) {
 			await emit(callback, `X_REPLY failed: ${r.error ?? "unknown"}`, "X_REPLY");
 			return { success: false, error: r.error };
 		}
 		const url = r.url ?? `https://x.com/i/web/status/${r.tweetId}`;
-		logger.info({ src: "x-tweets", tweetId: r.tweetId, replyTo: replyToTweetId }, "X_REPLY sent");
-		await emit(callback, `Replied: ${url}`, "X_REPLY");
-		return { success: true, tweetId: r.tweetId, url };
+		logger.info({ src: "x-tweets", tweetId: r.tweetId, replyTo: replyToTweetId, mediaCount: mediaIds.length }, "X_REPLY sent");
+		const summary = mediaIds.length > 0
+			? `Replied (${mediaIds.length} media attached): ${url}`
+			: `Replied: ${url}`;
+		await emit(callback, summary, "X_REPLY");
+		return { success: true, tweetId: r.tweetId, url, mediaIds };
 	});
 };
 
@@ -2277,7 +2627,8 @@ export const xReplyAction: Action = {
 	description:
 		"Reply to a tweet by its numeric ID. Use for specific, useful conversation, especially direct " +
 		"mentions and replies to your posts; X's open-source ranking pipeline predicts reply and downstream " +
-		"conversation probability as core engagement signals.",
+		"conversation probability as core engagement signals. Pass `mediaUrls` (or `imageUrl`/`videoUrl`) to " +
+		"attach an image/video — typically the hosted URL returned by GENERATE_IMAGE or GENERATE_VIDEO.",
 	validate: alwaysValid,
 	handler: replyHandler,
 	examples: [],
@@ -2288,6 +2639,12 @@ export const xReplyAction: Action = {
 			description: "Numeric tweet ID being replied to (from x.com/.../status/<id>).",
 			required: true,
 			schema: { type: "string" as const },
+		},
+		{
+			name: "mediaUrls",
+			description: "Optional array of hosted image/video URLs to attach. Cap 4. Use the hosted URL from GENERATE_IMAGE / GENERATE_VIDEO action results.",
+			required: false,
+			schema: { type: "array" as const, items: { type: "string" as const } },
 		},
 	],
 } as Action;
@@ -2744,7 +3101,7 @@ const algorithmPlaybookHandler: Handler = async (runtime, _m, _s, _options, call
 	const settings = {
 		autonomyEnabled: readBooleanSetting(runtime, "X_AUTONOMY_ENABLED", true),
 		writeEnabled: readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true),
-		statusPostingEnabled: readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
+		statusPostingEnabled: readBooleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", true),
 		discoveryEnabled: readBooleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true),
 		proactiveEngagementEnabled: readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
 		followEnabled: readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),
@@ -2792,12 +3149,13 @@ export const xTweetsPlugin: Plugin = {
 	description:
 		"Full agent-callable surface on X (Twitter) via cookie auth. Includes post, reply, like, " +
 		"retweet, bookmark, delete, follow, search, get-user, get-tweet, user-tweets, home-timeline, " +
-		"notifications, GitHub-backed status posts, algorithm playbook, and algorithm-fit discovery. Reads X_AUTH_TOKEN + X_CT0 " +
+		"notifications, GitHub-backed status posts, token/project status posts, algorithm playbook, and algorithm-fit discovery. Reads X_AUTH_TOKEN + X_CT0 " +
 		"from the vault. Autonomy handles direct notifications by default and performs read-only " +
 		"discovery unless proactive public engagement is explicitly enabled.",
 	actions: [
 		xPostAction,
 		xPostDetourStatusAction,
+		xPostTokenStatusAction,
 		xPostDexploarerStatusAction,
 		xReplyAction,
 		xNotificationsAction,

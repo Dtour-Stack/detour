@@ -85,6 +85,7 @@ type MemoryWriteRuntime = {
 	agentId?: string;
 	createMemory?: (m: Memory, table?: string) => Promise<UUID>;
 	addEmbeddingToMemory?: (m: Memory) => Promise<Memory>;
+	getRoom?: (roomId: UUID) => Promise<unknown | null>;
 	getRoomsForParticipant?: (entityId: string) => Promise<string[]>;
 };
 type MemoryCreateRuntime = MemoryWriteRuntime & {
@@ -162,7 +163,15 @@ export class PensieveMemoryService {
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
 
 	private async resolveWriteRoom(inputRoomId: string | undefined, runtime: MemoryWriteRuntime): Promise<string | null> {
-		if (inputRoomId) return inputRoomId;
+		if (inputRoomId) {
+			if (typeof runtime.getRoom !== "function") return inputRoomId;
+			try {
+				const room = await runtime.getRoom(inputRoomId as UUID);
+				if (room) return inputRoomId;
+			} catch {
+				// Fall through to the agent's canonical room.
+			}
+		}
 		if (typeof runtime.getRoomsForParticipant !== "function" || !runtime.agentId) return null;
 		try {
 			const rooms = await runtime.getRoomsForParticipant(runtime.agentId);
@@ -173,11 +182,10 @@ export class PensieveMemoryService {
 	}
 
 	private async writeMemory(runtime: MemoryCreateRuntime, memory: Memory, tableName: string): Promise<{ id: string }> {
+		let writeTarget = memory;
 		if (typeof runtime.addEmbeddingToMemory === "function") {
 			try {
-				const enriched = await runtime.addEmbeddingToMemory(memory);
-				const id = await runtime.createMemory(enriched, tableName);
-				return { id: String(id) };
+				writeTarget = await runtime.addEmbeddingToMemory(memory);
 			} catch (err) {
 				logger.warn(
 					{ src: "pensieve:memory", err: err instanceof Error ? err.message : err, tableName },
@@ -185,7 +193,7 @@ export class PensieveMemoryService {
 				);
 			}
 		}
-		const id = await runtime.createMemory(memory, tableName);
+		const id = await runtime.createMemory(writeTarget, tableName);
 		return { id: String(id) };
 	}
 

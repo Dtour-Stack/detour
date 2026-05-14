@@ -8,19 +8,63 @@
  * `createAgentProject()` here.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type ProjectType = "app" | "page";
 
 /**
- * Scaffold templates. `app` projects pick from `carrot` (default) or
- * `nextjs` (Next.js + Tailwind v4, modeled on v0's starter). `page`
- * projects only have `static` for now. The template field is persisted
- * in project.json so subsequent operations (deploy, preview, promote)
- * can branch on framework specifics.
+ * Scaffold templates. `app` projects pick from `carrot` (default),
+ * `nextjs` (Next.js + Tailwind v4, modeled on v0's starter), or
+ * `electrobun:<name>` (any template under `~/Electrobun/templates/`).
+ * `page` projects only have `static` for now. The template field is
+ * persisted in project.json so subsequent operations (deploy, preview,
+ * promote) can branch on framework specifics.
+ *
+ * `electrobun:*` lets the agent scaffold real desktop apps with the
+ * same templates the Electrobun CLI ships: tray-app, react-tailwind-vite,
+ * notes-app, multitab-browser, photo-booth, multi-window, etc.
  */
-export type ProjectTemplate = "carrot" | "nextjs" | "static";
+export type ProjectTemplate = "carrot" | "nextjs" | "static" | `electrobun:${string}`;
+
+/**
+ * Resolve the local Electrobun templates directory. Defaults to
+ * `~/Electrobun/templates` (where the Electrobun monorepo ships them)
+ * but overridable via `DETOUR_ELECTROBUN_TEMPLATES_DIR` so tests can
+ * point at a fixture.
+ */
+export function electrobunTemplatesDir(): string {
+	const override = process.env.DETOUR_ELECTROBUN_TEMPLATES_DIR;
+	if (typeof override === "string" && override.length > 0) return override;
+	return join(homedir(), "Electrobun", "templates");
+}
+
+/**
+ * Enumerate available Electrobun template slugs (folder names). Returns
+ * an empty array if the templates dir is missing — that's the normal
+ * state when Electrobun isn't checked out alongside Detour.
+ */
+export function listElectrobunTemplates(): string[] {
+	const dir = electrobunTemplatesDir();
+	if (!existsSync(dir)) return [];
+	try {
+		return readdirSync(dir, { withFileTypes: true })
+			.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+			.map((entry) => entry.name)
+			.sort();
+	} catch {
+		return [];
+	}
+}
+
+export function isElectrobunTemplate(value: string): value is `electrobun:${string}` {
+	return value.startsWith("electrobun:") && value.length > "electrobun:".length;
+}
+
+function electrobunTemplateName(value: `electrobun:${string}`): string {
+	return value.slice("electrobun:".length);
+}
 
 export type ProjectMeta = {
 	type: ProjectType;
@@ -365,6 +409,30 @@ function scaffoldPage(dir: string, meta: ProjectMeta): void {
 }
 
 /**
+ * Scaffold from an Electrobun template under `~/Electrobun/templates/`.
+ * Copies the template tree as-is, then overlays a `README.md` describing
+ * the project name + description. The template's own `package.json` /
+ * `electrobun.config.ts` / source layout is preserved; the agent's
+ * follow-up turn is responsible for filling in actual logic via FILE/EDIT.
+ *
+ * Throws when the template directory doesn't exist so the caller surfaces
+ * a clear error instead of producing a blank scaffold.
+ */
+function scaffoldElectrobun(dir: string, meta: ProjectMeta, templateName: string): void {
+	const src = join(electrobunTemplatesDir(), templateName);
+	if (!existsSync(src) || !statSync(src).isDirectory()) {
+		throw new Error(
+			`electrobun template "${templateName}" not found at ${src} — run \`listElectrobunTemplates()\` to see what's installed.`,
+		);
+	}
+	cpSync(src, dir, { recursive: true, errorOnExist: false });
+	writeFileSync(
+		join(dir, "README.md"),
+		`# ${meta.name}\n\n${meta.description}\n\nGenerated on ${new Date(meta.createdAt).toISOString()} from Electrobun template \`${templateName}\`.\n\nNext steps:\n- \`cd ${dir} && bun install\`\n- \`bun run dev\` (or \`electrobun dev\` if installed globally) to launch.\n- Edit \`src/\` to fill in real behavior.\n`,
+	);
+}
+
+/**
  * Create a new GitHub repo under the agent's PAT identity and push the
  * project's git history to it. Used by both the RPC handler (workspace
  * UI) and the plugin action (chat-driven). Caller supplies the PAT —
@@ -611,7 +679,12 @@ export async function createAgentProject({
 	if (type === "page" && resolvedTemplate !== "static") {
 		throw new Error(`template "${resolvedTemplate}" is not valid for type=page`);
 	}
-	if (type === "app" && resolvedTemplate !== "carrot" && resolvedTemplate !== "nextjs") {
+	if (
+		type === "app" &&
+		resolvedTemplate !== "carrot" &&
+		resolvedTemplate !== "nextjs" &&
+		!isElectrobunTemplate(resolvedTemplate)
+	) {
 		throw new Error(`template "${resolvedTemplate}" is not valid for type=app`);
 	}
 	const slug = uniqueSlug(slugify(name));
@@ -630,6 +703,8 @@ export async function createAgentProject({
 	try {
 		if (type === "page") scaffoldPage(dir, meta);
 		else if (resolvedTemplate === "nextjs") scaffoldNextjs(dir, meta);
+		else if (isElectrobunTemplate(resolvedTemplate))
+			scaffoldElectrobun(dir, meta, electrobunTemplateName(resolvedTemplate));
 		else scaffoldApp(dir, meta);
 		writeProjectMeta(meta);
 	} catch (err) {

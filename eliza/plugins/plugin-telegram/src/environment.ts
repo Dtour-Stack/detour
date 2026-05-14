@@ -1,14 +1,8 @@
 import { type IAgentRuntime, logger } from '@elizaos/core';
-import { z } from 'zod';
 
-export const telegramEnvSchema = z.object({
-  TELEGRAM_BOT_TOKEN: z.string().min(1, 'Telegram bot token is required'),
-});
-
-/**
- * Represents the type definition for configuring a Telegram bot based on the inferred schema.
- */
-export type TelegramConfig = z.infer<typeof telegramEnvSchema>;
+export interface TelegramConfig {
+  TELEGRAM_BOT_TOKEN: string;
+}
 
 /**
  * Validates the Telegram configuration by retrieving the Telegram bot token from the runtime settings or environment variables.
@@ -20,28 +14,21 @@ export type TelegramConfig = z.infer<typeof telegramEnvSchema>;
 export async function validateTelegramConfig(
   runtime: IAgentRuntime,
 ): Promise<TelegramConfig | null> {
-  try {
-    const rawToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
-    const fromRuntime =
-      typeof rawToken === 'string' && rawToken.trim() ? rawToken.trim() : '';
-    const fromEnv = process.env.TELEGRAM_BOT_TOKEN;
-    const config = {
-      TELEGRAM_BOT_TOKEN:
-        fromRuntime ||
-        (typeof fromEnv === 'string' && fromEnv.trim() ? fromEnv.trim() : ''),
-    };
+  const rawToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
+  const fromRuntime =
+    typeof rawToken === 'string' && rawToken.trim() ? rawToken.trim() : '';
+  const fromEnv = process.env.TELEGRAM_BOT_TOKEN;
+  const token =
+    fromRuntime ||
+    (typeof fromEnv === 'string' && fromEnv.trim() ? fromEnv.trim() : '');
 
-    return telegramEnvSchema.parse(config);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      const errorMessages = error.issues
-        .map((err) => `${err.path.join('.')}: ${err.message}`)
-        .join('\n');
-      logger.warn(
-        { src: 'plugin:telegram', errors: errorMessages },
-        'Telegram configuration validation failed',
-      );
-    }
+  if (!token) {
+    logger.warn(
+      { src: 'plugin:telegram', errors: 'TELEGRAM_BOT_TOKEN: Telegram bot token is required' },
+      'Telegram configuration validation failed',
+    );
     return null;
   }
+
+  return { TELEGRAM_BOT_TOKEN: token };
 }

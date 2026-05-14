@@ -1040,7 +1040,7 @@ export async function handleMultiAgent(
           label: specLabel,
           multiAgentIndex: i,
           // Carry the originating message routing context so deployments can
-          // post async session updates back to the originating channel.
+          // post async session updates back to the originating connector.
           roomId: message.roomId,
           worldId: message.worldId,
           source: (message.content as { source?: string } | undefined)?.source,

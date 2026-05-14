@@ -20,13 +20,17 @@ const X_AUTONOMY_TASK_TAGS = ["queue", "repeat", "x-autonomy"];
 const AUTONOMY_TASK_NAMES = new Set(["AUTONOMY_THINK", X_AUTONOMY_TASK_NAME, "BATCHER_DRAIN", CONTINUOUS_IMPROVEMENT_TASK_NAME]);
 const AUTONOMY_TASK_TAGS = new Set(["autonomy", "x-autonomy", "batcher", "continuous-improvement"]);
 const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
-const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 30 * 60 * 1000;
 const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
 const X_AUTONOMY_DEFAULT_MAX_REPLIES = 2;
 const X_AUTONOMY_DEFAULT_MAX_DISCOVERY = 2;
 const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
 	"elizaOS",
 	"Dexploarer",
+	"Dexploarer token",
+	"Detour Squirrel token",
+	"Detour Squirrel CA",
+	"Detour Squirrel",
 	"ai agents",
 	"autonomous agents",
 	"agent framework",
@@ -145,7 +149,7 @@ const EMPTY: ActivityAutonomySnapshot = {
 		available: false,
 		enabled: false,
 		writeEnabled: false,
-		statusPostingEnabled: false,
+		statusPostingEnabled: true,
 		discoveryEnabled: false,
 		proactiveEngagementEnabled: false,
 		followEnabled: false,
@@ -366,7 +370,7 @@ function xSnapshot(runtime: RuntimeTaskShape, tasks: ActivityAutonomyTask[], raw
 		available: tasks.some((task) => task.name === X_AUTONOMY_TASK_NAME) || Boolean(runtime.taskWorkers?.has(X_AUTONOMY_TASK_NAME)),
 		enabled: booleanSetting(runtime, "X_AUTONOMY_ENABLED", true),
 		writeEnabled: booleanSetting(runtime, "X_AUTONOMY_WRITE", true),
-		statusPostingEnabled: booleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", false),
+		statusPostingEnabled: booleanSetting(runtime, "X_AUTONOMY_POST_STATUS_ENABLED", true),
 		discoveryEnabled: booleanSetting(runtime, "X_AUTONOMY_DISCOVERY_ENABLED", true),
 		proactiveEngagementEnabled: booleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
 		followEnabled: booleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),

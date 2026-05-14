@@ -135,7 +135,14 @@ const newHandler: Handler = async (runtime, _message, _state, options, callback)
 	const name = pickString(opts, ["name"]);
 	const description = pickString(opts, ["description"]);
 	const type = pickEnum(opts, "type", ["app", "page"] as const);
-	const template = pickEnum(opts, "template", ["carrot", "nextjs", "static"] as const);
+	// `template` accepts the three built-ins plus any `electrobun:<name>`
+	// passthrough. We validate the passthrough by string-shape here and let
+	// createAgentProject error if the named electrobun template doesn't
+	// actually exist on disk.
+	const rawTemplate = pickString(opts, ["template"]);
+	const template = rawTemplate && rawTemplate.startsWith("electrobun:")
+		? (rawTemplate as `electrobun:${string}`)
+		: pickEnum(opts, "template", ["carrot", "nextjs", "static"] as const);
 	if (!name) return fail("AGENT_PROJECT_NEW requires `name`.");
 	if (!description) return fail("AGENT_PROJECT_NEW requires `description` (1-2 sentences explaining what it does).");
 	if (!type) return fail('AGENT_PROJECT_NEW requires `type`: "app" or "page".');
@@ -159,7 +166,7 @@ const newHandler: Handler = async (runtime, _message, _state, options, callback)
 				"  - index.css: layout/styling",
 				"  - index.js: behavior",
 				"Run the tests: BASH `cd <dir> && bun test`",
-				`When done, call AGENT_PROJECT_OPEN with slug="${slug}" to preview, then AGENT_PROJECT_DEPLOY when ready.`,
+				`When done, call AGENT_PROJECT_PUBLIC_PREVIEW with slug="${slug}" to send a working ngrok URL, then AGENT_PROJECT_DEPLOY when ready.`,
 			].join("\n");
 		}
 		if (usedTemplate === "nextjs") {
@@ -170,8 +177,19 @@ const newHandler: Handler = async (runtime, _message, _state, options, callback)
 				"  - app/layout.tsx: shared layout / metadata",
 				"  - app/globals.css: design tokens + global styles",
 				"  - public/: static assets",
-				"Install deps + run dev: BASH `cd <dir> && bun install && bun dev` (then http://localhost:3000)",
-				`When done, call AGENT_PROJECT_OPEN with slug="${slug}" to preview, then AGENT_PROJECT_DEPLOY when ready.`,
+				"Install deps and validate: BASH `cd <dir> && bun install && bun run build`",
+				`When done, call AGENT_PROJECT_PUBLIC_PREVIEW with slug="${slug}" to send a working ngrok URL, then AGENT_PROJECT_DEPLOY when ready.`,
+			].join("\n");
+		}
+		if (typeof usedTemplate === "string" && usedTemplate.startsWith("electrobun:")) {
+			const name = usedTemplate.slice("electrobun:".length);
+			return [
+				`The scaffold is at ${dir} (Electrobun template "${name}").`,
+				"Use the FILE action to fill in src/ with real behavior — bun process logic + view code per the template's layout.",
+				`Install deps: BASH \`cd ${dir} && bun install\``,
+				`Run locally: BASH \`cd ${dir} && bun run dev\` (or \`electrobun dev\` if installed globally)`,
+				`Build a distributable: BASH \`cd ${dir} && electrobun build\``,
+				"For a real distributable, codesigning + notarization happens via electrobun.config.ts — leave the user's existing config alone unless asked.",
 			].join("\n");
 		}
 		return [
@@ -182,7 +200,7 @@ const newHandler: Handler = async (runtime, _message, _state, options, callback)
 			"  - web/index.js: client.invoke(...) calls + DOM wiring",
 			"  - web/index.css: layout/styling",
 			"Run the tests: BASH `cd <dir> && bun test`",
-			`When done, call AGENT_PROJECT_OPEN with slug="${slug}" to preview, then AGENT_PROJECT_DEPLOY when ready.`,
+			`When done, call AGENT_PROJECT_PUBLIC_PREVIEW with slug="${slug}" to send a working ngrok URL, then AGENT_PROJECT_DEPLOY when ready.`,
 		].join("\n");
 	})();
 
@@ -202,7 +220,7 @@ export const agentProjectNewAction: Action = {
 	name: "AGENT_PROJECT_NEW",
 	similes: ["NEW_AGENT_PROJECT", "SCAFFOLD_PROJECT", "BUILD_APP", "BUILD_PAGE"],
 	description:
-		"Scaffold a new agent-built project. Required: `name`, `description`, `type` (\"app\"|\"page\"). Optional: `template`. Templates: \"carrot\" (default for app — minimal worker.ts + web/, deploys as a hosted carrot), \"nextjs\" (Next 16 + React 19 + Tailwind v4, modeled on v0's starter — pick this for any rich UI), \"static\" (default for page — index.html + index.css + index.js). Returns the slug + a `nextSteps` string with file-by-file guidance for filling in the scaffold via FILE/BASH/EDIT. Picks the slug + git inits automatically. Use when the user says \"build me an X\" — pick `app + nextjs` for anything component-rich, `app + carrot` if they want a small native widget, `page + static` for a one-off landing/demo.",
+		"Scaffold a new agent-built project from chat, Telegram, Discord, X, iMessage, the desktop app, or any connected channel. Required: `name`, `description`, `type` (\"app\"|\"page\"). Optional: `template`. Built-in templates: \"carrot\" (default for app — minimal worker.ts + web/, deploys as a hosted carrot), \"nextjs\" (Next 16 + React 19 + Tailwind v4, v0-style — for component-rich web UIs), \"static\" (default for page). Electrobun desktop-app templates: pass `template: \"electrobun:<name>\"` where <name> is one of the Electrobun starters (tray-app, react-tailwind-vite, notes-app, multitab-browser, photo-booth, multi-window, sqlite-crud, hello-world, vue, svelte, solid, vanilla-vite, tailwind-vanilla, wgpu, wgpu-babylon, wgpu-threejs, wgpu-mlp, angular). Use these when the user wants a real macOS/Win/Linux desktop app rather than a web page. Returns the slug + `nextSteps` with file-by-file guidance for filling in the scaffold via FILE/BASH/EDIT. Use when the user says \"build me an X\" — then AGENT_PROJECT_PUBLIC_PREVIEW for a shareable URL (web templates) or `bun run dev` for Electrobun templates.",
 	validate: async () => true,
 	handler: newHandler,
 	examples: [],
@@ -436,25 +454,25 @@ export const agentProjectPromoteAction: Action = {
 const previewHandler: Handler = async (runtime, _message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const slug = pickString(opts, ["slug"]);
+	const publicRequested = pickBool(opts, "public", false) || pickBool(opts, "ngrok", false);
 	if (!slug) return fail("AGENT_PROJECT_PREVIEW requires `slug`.");
 	const meta = readProjectMeta(slug);
 	if (!meta) return fail(`No project found at slug=${slug}.`);
 
-	// We don't have direct access to the previewServers from inside an
-	// action handler (it lives on RpcDeps, not on the runtime). Bridge
-	// through the singleton accessible at module scope: the action
-	// emits a message the host RPC bridge picks up. For now, the
-	// agent calls the underlying Bun-side via the carrot bridge isn't
-	// wired here — so we handle preview start by running the static
-	// server in-process via a side import. Same code, same registry.
 	try {
 		const reg = await getPreviewRegistry();
-		// Auto-dispatches to nextjs dev-server boot for nextjs templates,
-		// in-process Bun.serve for static / carrot.
-		const state = await reg.startStatic(slug);
-		const summary = `Preview live at ${state.url} (slug=${slug}, port=${state.port}, kind=${state.kind}). The user can open this URL in any browser; it stays stable across restarts thanks to portless.`;
+		const state = publicRequested ? await reg.startPublic(slug) : await reg.startStatic(slug);
+		const summary = publicRequested && state.publicUrl
+			? `Public preview live at ${state.publicUrl} (local=${state.url}, slug=${slug}, port=${state.port}, provider=ngrok). Send the publicUrl to the user.`
+			: `Preview live at ${state.url} (slug=${slug}, port=${state.port}, kind=${state.kind}). The user can open this URL on this Mac; call AGENT_PROJECT_PUBLIC_PREVIEW for a shareable ngrok URL.`;
 		await emit(callback, summary, "AGENT_PROJECT_PREVIEW");
-		return ok(summary, { caller: caller(runtime), slug, url: state.url, port: state.port });
+		return ok(summary, {
+			caller: caller(runtime),
+			slug,
+			url: state.url,
+			port: state.port,
+			...(state.publicUrl ? { publicUrl: state.publicUrl, publicUrlProvider: state.publicUrlProvider } : {}),
+		});
 	} catch (err) {
 		return fail(err instanceof Error ? err.message : String(err));
 	}
@@ -464,9 +482,54 @@ export const agentProjectPreviewAction: Action = {
 	name: "AGENT_PROJECT_PREVIEW",
 	similes: ["PREVIEW_URL", "SHARE_PREVIEW", "GET_PREVIEW_URL"],
 	description:
-		"Start a real HTTP preview for a project and return the user-visitable URL (`http://<slug>.localhost:4848/`). For static + carrot projects, an in-process Bun.serve is started and registered with the portless reverse proxy. For nextjs projects, returns instructions: the agent should run `bun dev` itself via BASH, then call AGENT_PROJECT_REGISTER_PREVIEW_PORT to map the dev port to the same stable URL pattern. Required: `slug`. Use this when the user says 'show me' or 'send me a preview link' — return the URL in your reply.",
+		"Start a real HTTP preview for a project and return the local URL (`http://<slug>.localhost:4848/`). For static + carrot projects, starts Bun.serve; for nextjs projects, installs deps if needed and starts `bun run dev`. Required: `slug`. Optional `public`/`ngrok`: true starts ngrok too and returns `publicUrl`. For user-shareable live links, prefer AGENT_PROJECT_PUBLIC_PREVIEW.",
 	validate: async () => true,
 	handler: previewHandler,
+	examples: [],
+	parameters: [
+		{ name: "slug", description: "Project slug.", required: true, schema: { type: "string" as const } },
+		{ name: "public", description: "Optional. true to also start ngrok and return publicUrl.", required: false, schema: { type: "boolean" as const } },
+	],
+} as Action;
+
+const publicPreviewHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const slug = pickString(opts, ["slug"]);
+	if (!slug) return fail("AGENT_PROJECT_PUBLIC_PREVIEW requires `slug`.");
+	const meta = readProjectMeta(slug);
+	if (!meta) return fail(`No project found at slug=${slug}.`);
+	try {
+		const reg = await getPreviewRegistry();
+		const state = await reg.startPublic(slug);
+		if (!state.publicUrl) return fail(state.publicUrlError ?? "ngrok did not return a public URL.");
+		const summary = `Public preview live at ${state.publicUrl} (local=${state.url}, slug=${slug}, port=${state.port}, provider=ngrok). Send this URL to the user.`;
+		await emit(callback, summary, "AGENT_PROJECT_PUBLIC_PREVIEW");
+		return ok(summary, {
+			caller: caller(runtime),
+			slug,
+			url: state.url,
+			publicUrl: state.publicUrl,
+			publicUrlProvider: state.publicUrlProvider,
+			port: state.port,
+			hostname: state.hostname,
+		});
+	} catch (err) {
+		let localUrl: string | undefined;
+		try {
+			localUrl = (await getPreviewRegistry()).get(slug)?.url;
+		} catch { /* ignore */ }
+		const message = err instanceof Error ? err.message : String(err);
+		return fail(localUrl ? `${message}. Local preview is live at ${localUrl}.` : message);
+	}
+};
+
+export const agentProjectPublicPreviewAction: Action = {
+	name: "AGENT_PROJECT_PUBLIC_PREVIEW",
+	similes: ["PUBLIC_PREVIEW_URL", "NGROK_PREVIEW", "LIVE_PREVIEW_URL", "SEND_PREVIEW_URL", "SHARE_LIVE_PREVIEW"],
+	description:
+		"Start a project preview and an ngrok HTTPS tunnel, then return `publicUrl`. Required: `slug`. Use after building or editing an app when the user asks for a live preview, shareable URL, ngrok URL, or says to send a preview link from chat, Telegram, Discord, X, iMessage, the desktop app, or any connected channel. This is the final step for generated apps: build/test, start public preview, then reply in the originating channel with the ngrok `publicUrl`.",
+	validate: async () => true,
+	handler: publicPreviewHandler,
 	examples: [],
 	parameters: [
 		{ name: "slug", description: "Project slug.", required: true, schema: { type: "string" as const } },
@@ -478,14 +541,25 @@ const registerPreviewPortHandler: Handler = async (runtime, _m, _s, options, cal
 	const slug = pickString(opts, ["slug"]);
 	const portRaw = opts?.port;
 	const port = typeof portRaw === "number" ? portRaw : (typeof portRaw === "string" ? parseInt(portRaw, 10) : NaN);
+	const publicRequested = pickBool(opts, "public", false) || pickBool(opts, "ngrok", false);
 	if (!slug) return fail("AGENT_PROJECT_REGISTER_PREVIEW_PORT requires `slug`.");
 	if (!Number.isFinite(port) || port <= 0 || port > 65535) return fail("AGENT_PROJECT_REGISTER_PREVIEW_PORT requires a valid `port` number.");
 	try {
 		const reg = await getPreviewRegistry();
-		const state = reg.registerExternalPort(slug, port);
-		const summary = `Registered port ${port} for ${slug} → ${state.url}.`;
+		reg.registerExternalPort(slug, port);
+		const state = publicRequested ? await reg.startPublic(slug) : reg.get(slug);
+		if (!state) return fail(`Preview registry lost ${slug}.`);
+		const summary = publicRequested && state.publicUrl
+			? `Registered port ${port} for ${slug} → ${state.url}; public ngrok URL: ${state.publicUrl}. Send the publicUrl to the user.`
+			: `Registered port ${port} for ${slug} → ${state.url}.`;
 		await emit(callback, summary, "AGENT_PROJECT_REGISTER_PREVIEW_PORT");
-		return ok(summary, { caller: caller(runtime), slug, url: state.url, port });
+		return ok(summary, {
+			caller: caller(runtime),
+			slug,
+			url: state.url,
+			port,
+			...(state.publicUrl ? { publicUrl: state.publicUrl, publicUrlProvider: state.publicUrlProvider } : {}),
+		});
 	} catch (err) {
 		return fail(err instanceof Error ? err.message : String(err));
 	}
@@ -493,15 +567,16 @@ const registerPreviewPortHandler: Handler = async (runtime, _m, _s, options, cal
 
 export const agentProjectRegisterPreviewPortAction: Action = {
 	name: "AGENT_PROJECT_REGISTER_PREVIEW_PORT",
-	similes: ["REGISTER_DEV_SERVER", "MAP_PORT_TO_URL"],
+	similes: ["REGISTER_DEV_SERVER", "MAP_PORT_TO_URL", "REGISTER_NGROK_PREVIEW_PORT"],
 	description:
-		"Map a port the agent already has running (e.g. `bun dev` you started via BASH) to the project's portless URL. Required: `slug`, `port`. Returns the user-visitable URL.",
+		"Map a port the agent already has running (e.g. `bun dev` you started via BASH) to the project's local portless URL. Required: `slug`, `port`. Optional `public`/`ngrok`: true starts ngrok and returns `publicUrl`.",
 	validate: async () => true,
 	handler: registerPreviewPortHandler,
 	examples: [],
 	parameters: [
 		{ name: "slug", description: "Project slug.", required: true, schema: { type: "string" as const } },
 		{ name: "port", description: "Port number the dev server is listening on (e.g. 3000 for Next.js).", required: true, schema: { type: "number" as const } },
+		{ name: "public", description: "Optional. true to also start ngrok and return publicUrl.", required: false, schema: { type: "boolean" as const } },
 	],
 } as Action;
 
@@ -523,7 +598,7 @@ const publishHandler: Handler = async (runtime, _message, _state, options, callb
 		|| (typeof runtime.getSetting === "function" ? runtime.getSetting("GITHUB_TOKEN") : null)
 		|| process.env.GITHUB_TOKEN;
 	if (!pat || typeof pat !== "string") {
-		return fail("No GITHUB_AGENT_PAT (or GITHUB_TOKEN) configured. Wire it in Settings → Channels → GitHub → Agent identity.");
+		return fail("No GITHUB_AGENT_PAT (or GITHUB_TOKEN) configured. Wire it in Messaging connections.");
 	}
 
 	try {
@@ -630,7 +705,7 @@ export const agentProjectDeployAction: Action = {
 export const agentProjectsPlugin: Plugin = {
 	name: "agent-projects",
 	description:
-		"Agent-driven project scaffolding + import: AGENT_PROJECT_NEW (scaffold app or page from a template), AGENT_PROJECT_IMPORT (register an existing on-disk dir as a project), AGENT_PROJECT_LIST, AGENT_PROJECT_OPEN (sandboxed preview), AGENT_PROJECT_PROMOTE_TO_APP (page→app), AGENT_PROJECT_DEPLOY (register on ElizaOS Cloud). Scaffolded projects live under $DETOUR_AGENT_SANDBOX/projects/<slug>/; imported projects live wherever the user keeps their code (registered via symlink). After scaffolding/importing, the same agent fills in the implementation using FILE/BASH/EDIT from @elizaos/plugin-coding-tools — paths can be ANY directory the user names (including outside the sandbox), subject to the system blocklist + elevated-permissions toggle.",
+		"Agent-driven project scaffolding + import: AGENT_PROJECT_NEW, AGENT_PROJECT_IMPORT, AGENT_PROJECT_LIST, AGENT_PROJECT_OPEN, AGENT_PROJECT_PREVIEW, AGENT_PROJECT_PUBLIC_PREVIEW (ngrok HTTPS URL), AGENT_PROJECT_PROMOTE_TO_APP, AGENT_PROJECT_DEPLOY. Scaffolded projects live under $DETOUR_AGENT_SANDBOX/projects/<slug>/; imported projects live wherever the user keeps their code (registered via symlink). After scaffolding/importing, the same agent fills in the implementation using FILE/BASH/EDIT from @elizaos/plugin-coding-tools — paths can be ANY directory the user names (including outside the sandbox), subject to the system blocklist + elevated-permissions toggle.",
 	actions: [
 		agentProjectNewAction,
 		agentProjectImportAction,
@@ -639,6 +714,7 @@ export const agentProjectsPlugin: Plugin = {
 		agentProjectPromoteAction,
 		agentProjectDeployAction,
 		agentProjectPreviewAction,
+		agentProjectPublicPreviewAction,
 		agentProjectRegisterPreviewPortAction,
 		agentProjectPublishGitHubAction,
 	],

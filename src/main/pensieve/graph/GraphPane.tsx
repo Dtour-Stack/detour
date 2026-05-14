@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveGraphSnapshot, PensieveGraphNode, PensieveGraphEdge } from "../../../shared/index";
 import { rpc } from "../../rpc";
+import { MemoryDetail } from "../memories/MemoryDetail";
 
 const KIND_COLORS: Record<string, string> = {
 	memory: "var(--accent)",
@@ -21,7 +22,10 @@ export function GraphPane() {
 	const [snap, setSnap] = useState<PensieveGraphSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [hovered, setHovered] = useState<string | null>(null);
+	const [selected, setSelected] = useState<PositionedNode | null>(null);
+	const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
 	const containerRef = useRef<HTMLDivElement>(null);
+	const dragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
 	const [size, setSize] = useState({ w: 800, h: 600 });
 
 	useEffect(() => {
@@ -47,6 +51,50 @@ export function GraphPane() {
 	}
 
 	const nodeById = new Map(layout?.map((n) => [n.id, n]) ?? []);
+	const selectedMemoryId = selected?.kind === "memory" ? selected.id.replace(/^memory:/, "") : null;
+
+	function zoom(event: React.WheelEvent<SVGSVGElement>) {
+		event.preventDefault();
+		const rect = event.currentTarget.getBoundingClientRect();
+		const mx = event.clientX - rect.left;
+		const my = event.clientY - rect.top;
+		setTransform((current) => {
+			const nextScale = Math.max(0.35, Math.min(3, current.scale * (event.deltaY > 0 ? 0.9 : 1.1)));
+			const worldX = (mx - current.x) / current.scale;
+			const worldY = (my - current.y) / current.scale;
+			return {
+				scale: nextScale,
+				x: mx - worldX * nextScale,
+				y: my - worldY * nextScale,
+			};
+		});
+	}
+
+	function startPan(event: React.PointerEvent<SVGRectElement>) {
+		event.currentTarget.setPointerCapture(event.pointerId);
+		dragRef.current = {
+			pointerId: event.pointerId,
+			x: event.clientX,
+			y: event.clientY,
+			originX: transform.x,
+			originY: transform.y,
+		};
+	}
+
+	function movePan(event: React.PointerEvent<SVGRectElement>) {
+		const drag = dragRef.current;
+		if (!drag || drag.pointerId !== event.pointerId) return;
+		setTransform((current) => ({
+			...current,
+			x: drag.originX + event.clientX - drag.x,
+			y: drag.originY + event.clientY - drag.y,
+		}));
+	}
+
+	function endPan(event: React.PointerEvent<SVGRectElement>) {
+		const drag = dragRef.current;
+		if (drag?.pointerId === event.pointerId) dragRef.current = null;
+	}
 
 	return (
 		<div className="pensieve-graph">
@@ -54,44 +102,87 @@ export function GraphPane() {
 				<span className="hint">
 					{snap.stats.memories} memories · {snap.stats.entities} entities · {snap.stats.edges} edges
 				</span>
+				<button type="button" className="link" onClick={() => setTransform({ x: 0, y: 0, scale: 1 })}>
+					Reset view
+				</button>
 				{hovered && (
 					<span className="hint" style={{ marginLeft: "auto", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11 }}>
 						{hovered}
 					</span>
 				)}
 			</div>
-			<div ref={containerRef} className="pensieve-graph-canvas">
-				<svg width={size.w} height={size.h}>
-					{snap.edges.map((e, i) => {
-						const a = nodeById.get(e.source);
-						const b = nodeById.get(e.target);
-						if (!a || !b) return null;
-						return (
-							<line
-								key={i}
-								x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-								stroke="rgba(127,127,127,0.25)"
-								strokeWidth={Math.max(1, e.weight ?? 1)}
-							/>
-						);
-					})}
-					{layout?.map((n) => (
-						<g key={n.id} onMouseEnter={() => setHovered(n.label)} onMouseLeave={() => setHovered(null)}>
-							<circle
-								cx={n.x} cy={n.y}
-								r={n.kind === "entity" ? 8 : 5}
-								fill={KIND_COLORS[n.kind] ?? "var(--fg-muted)"}
-								stroke="var(--bg)"
-								strokeWidth={1}
-							/>
-							{n.kind === "entity" && (
-								<text x={n.x + 10} y={n.y + 4} fontSize={11} fill="var(--fg-muted)">
-									{n.label.slice(0, 20)}
-								</text>
-							)}
+			<div className={selected ? "pensieve-graph-body with-detail" : "pensieve-graph-body"}>
+				<div ref={containerRef} className="pensieve-graph-canvas">
+					<svg width={size.w} height={size.h} onWheel={zoom}>
+						<rect
+							x={0}
+							y={0}
+							width={size.w}
+							height={size.h}
+							fill="var(--bg)"
+							onPointerDown={startPan}
+							onPointerMove={movePan}
+							onPointerUp={endPan}
+							onPointerCancel={endPan}
+						/>
+						<g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
+							{snap.edges.map((e, i) => {
+								const a = nodeById.get(e.source);
+								const b = nodeById.get(e.target);
+								if (!a || !b) return null;
+								return (
+									<line
+										key={i}
+										x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+										stroke="rgba(127,127,127,0.25)"
+										strokeWidth={Math.max(1, e.weight ?? 1)}
+									/>
+								);
+							})}
+							{layout?.map((n) => (
+								<g
+									key={n.id}
+									onMouseEnter={() => setHovered(n.label)}
+									onMouseLeave={() => setHovered(null)}
+									onClick={() => setSelected(n)}
+									style={{ cursor: "pointer" }}
+								>
+									<circle
+										cx={n.x} cy={n.y}
+										r={n.kind === "entity" ? 8 : 5}
+										fill={KIND_COLORS[n.kind] ?? "var(--fg-muted)"}
+										stroke={selected?.id === n.id ? "var(--fg)" : "var(--bg)"}
+										strokeWidth={selected?.id === n.id ? 2 : 1}
+									/>
+									{n.kind === "entity" && (
+										<text x={n.x + 10} y={n.y + 4} fontSize={11} fill="var(--fg-muted)">
+											{n.label.slice(0, 20)}
+										</text>
+									)}
+								</g>
+							))}
 						</g>
-					))}
-				</svg>
+					</svg>
+				</div>
+				{selected && (
+					<aside className="pensieve-graph-detail">
+						<div className="pensieve-toolbar">
+							<strong>{selected.kind === "memory" ? "Memory" : "Entity"}</strong>
+							<button type="button" className="link" onClick={() => setSelected(null)}>Close</button>
+						</div>
+						{selectedMemoryId ? (
+							<MemoryDetail memoryId={selectedMemoryId} onDelete={() => setSelected(null)} onUpdate={() => {}} />
+						) : (
+							<div className="pensieve-detail">
+								<div className="pensieve-detail-title">{selected.label}</div>
+								<div className="pensieve-detail-section">
+									<label>ID</label>
+									<div className="pensieve-detail-content">{selected.id}</div>
+								</div>
+							</div>
+						)}
+					</aside>
+				)}
 			</div>
 		</div>
 	);

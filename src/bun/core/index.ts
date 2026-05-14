@@ -9,6 +9,9 @@ import { ChannelsService } from "./channels";
 import { ChannelGatewayService } from "./channels/gateway";
 import { ConfigService } from "./config-service";
 import { ContinuousImprovementService } from "./continuous-improvement-service";
+import { DreamService } from "./dream-service";
+import { GoalService } from "./goal-service";
+import { attachGoalService } from "../plugins/detour-goal/index";
 import { CronService } from "./cron-service";
 import { DiscordObservationService } from "./discord-observation-service";
 import { InboxService } from "./inbox";
@@ -146,6 +149,29 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const gateway = new ChannelGatewayService();
 	const improvement = new ContinuousImprovementService(runtime, pensieve.memories, activity.logs);
 	improvement.start();
+	// Goal service: capture explicit user goals + thread into sub-agent
+	// spawns. Resolver passes through RuntimeService.peek() so we never
+	// trigger a runtime rebuild from a goal read.
+	const goal = new GoalService(() => runtime.peek(), pensieve.memories);
+	attachGoalService(goal);
+	runtime.setGoalService(goal);
+	// Guaranteed spawn-action wrap: runs once the AgentRuntime is fully
+	// assembled (orchestrator's PTYService + CodingWorkspaceService have
+	// finished their async start), so CREATE_TASK / SPAWN_AGENT are in
+	// runtime.actions when we walk it. Idempotent — re-builds also fire
+	// the hook but the wrap marker makes subsequent passes no-ops.
+	runtime.onAfterBuild(async (state) => {
+		const { wrapSpawnActionsOnRuntime } = await import("../plugins/detour-goal/index");
+		wrapSpawnActionsOnRuntime(state.runtime);
+	});
+	// Dream service: scheduled memory consolidation (Anthropic-dream pattern).
+	// Registers a task worker on every runtime build via onAfterBuild.
+	const dream = new DreamService({
+		runtimeService: runtime,
+		memories: pensieve.memories,
+		trajectories: activity.trajectories,
+	});
+	dream.start();
 	const discordObservations = new DiscordObservationService(runtime, pensieve.memories, gateway);
 	discordObservations.start();
 	runtime.setGateway(gateway);
@@ -310,6 +336,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const rpcDeps = buildRpcDeps({
 		runtime, vault, auth, backendOps, config, pensieve, activity,
 		channels, gateway, inbox, llama, cron, ownerBind, portless, previewServers,
+		goal, dream,
 	});
 
 	// Eager-build the runtime in the background so Pensieve / Activity have
@@ -334,6 +361,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		stop: async () => {
 			discordObservations.stop();
 			improvement.stop();
+			dream.stop();
 			activity.stop();
 			pensieve.stop();
 			cron.stop();

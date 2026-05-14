@@ -208,7 +208,7 @@ export function ModelsTab() {
 				</div>
 				<div className="hint" style={{ marginBottom: 12 }}>
 					{catalog
-						? `${catalog.models.length} models loaded · ${catalog.buckets.free.length} free · ${catalog.buckets.image.length} image · ${catalog.buckets.embedding.length} embedding`
+						? `${catalog.models.length} models loaded · ${catalog.buckets.free.length} free · ${catalog.buckets.image.length} image · ${catalog.buckets.video.length} video · ${catalog.buckets.embedding.length} embedding`
 						: "Live catalog loads from OpenRouter. If it fails, you can still paste model IDs."}
 				</div>
 				{catalogError && <div className="banner error" style={{ marginBottom: 12 }}>{catalogError}</div>}
@@ -249,6 +249,15 @@ export function ModelsTab() {
 						capability="image"
 						catalog={catalog}
 						onChange={(value) => save({ ...cfg, openRouterImage: value })}
+					/>
+				</div>
+				<div style={{ marginTop: 12 }}>
+					<OpenRouterPicker
+						label="OpenRouter video (GENERATE_VIDEO)"
+						value={cfg.openRouterVideo}
+						capability="video"
+						catalog={catalog}
+						onChange={(value) => save({ ...cfg, openRouterVideo: value })}
 					/>
 				</div>
 			</div>

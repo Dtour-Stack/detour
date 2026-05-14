@@ -39,6 +39,8 @@ import {
 } from "@elizaos/core";
 import { audit } from "./audit";
 import { check } from "./permissions";
+import { browserUseEnabled } from "../agent-tool-permissions";
+import { captureScreen, type ScreenRegion } from "../../core/desktop-control";
 
 const BROWSER_CONTROL_GLOBAL = Symbol.for("detour.browser.control");
 
@@ -78,11 +80,13 @@ type BrowserControl = {
 		| { kind: "open"; url: string; newTab?: boolean; source?: "agent" }
 		| { kind: "inspect"; source?: "agent"; timeoutMs?: number }
 		| { kind: "script"; script: string; source?: "agent"; timeoutMs?: number }
+		| { kind: "screenshot"; source?: "agent"; timeoutMs?: number }
 		| { kind: "fill-login"; source: "in-house" | "1password" | "bitwarden"; identifier: string; targetUrl?: string; newTab?: boolean; timeoutMs?: number }
 	): { id: string; time: number };
 	enqueueAndWait(command:
 		| { kind: "inspect"; source?: "agent"; timeoutMs?: number }
 		| { kind: "script"; script: string; source?: "agent"; timeoutMs?: number }
+		| { kind: "screenshot"; source?: "agent"; timeoutMs?: number }
 		| { kind: "fill-login"; source: "in-house" | "1password" | "bitwarden"; identifier: string; targetUrl?: string; newTab?: boolean; timeoutMs?: number },
 		timeoutMs?: number,
 	): Promise<{ ok: boolean; result?: unknown; error?: string; text?: string; time: number }>;
@@ -524,6 +528,7 @@ export const loginSaveAction: Action = {
 // ── BROWSER_OPEN ───────────────────────────────────────────────────────────
 
 const browserOpenHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	if (!browserUseEnabled()) return fail("Browser use is disabled in Settings → Agent Permissions.");
 	const opts = options as Record<string, unknown> | undefined;
 	const url = pickStringOption(opts, ["url", "target", "site", "query"]);
 	if (!url || url.length > 2048) return fail("BROWSER_OPEN requires `url`.");
@@ -553,6 +558,7 @@ export const browserOpenAction: Action = {
 // ── BROWSER_INSPECT ────────────────────────────────────────────────────────
 
 const browserInspectHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	if (!browserUseEnabled()) return fail("Browser use is disabled in Settings → Agent Permissions.");
 	const opts = options as Record<string, unknown> | undefined;
 	const browser = getBrowserControl();
 	if (!browser) return fail("Browser control is unavailable. Open the Detour app runtime first.");
@@ -587,6 +593,7 @@ export const browserInspectAction: Action = {
 // ── BROWSER_SCRIPT ─────────────────────────────────────────────────────────
 
 const browserScriptHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	if (!browserUseEnabled()) return fail("Browser use is disabled in Settings → Agent Permissions.");
 	const opts = options as Record<string, unknown> | undefined;
 	const script = pickStringOption(opts, ["script", "javascript", "js"]);
 	if (!script) return fail("BROWSER_SCRIPT requires `script`.");
@@ -622,9 +629,64 @@ export const browserScriptAction: Action = {
 	],
 } as Action;
 
+// ── BROWSER_SCREENSHOT ─────────────────────────────────────────────────────
+
+function browserScreenshotRegion(result: unknown): ScreenRegion | null {
+	const value = result && typeof result === "object" ? result as Record<string, unknown> : {};
+	const rect = value.rect && typeof value.rect === "object" ? value.rect as Record<string, unknown> : {};
+	const x = rect.x;
+	const y = rect.y;
+	const width = rect.width;
+	const height = rect.height;
+	if (
+		typeof x !== "number"
+		|| typeof y !== "number"
+		|| typeof width !== "number"
+		|| typeof height !== "number"
+	) return null;
+	return { x, y, width, height };
+}
+
+const browserScreenshotHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	if (!browserUseEnabled()) return fail("Browser use is disabled in Settings → Agent Permissions.");
+	const opts = options as Record<string, unknown> | undefined;
+	const browser = getBrowserControl();
+	if (!browser) return fail("Browser control is unavailable. Open the Detour app runtime first.");
+	const timeoutMs = pickNumberOption(opts, ["timeoutMs", "timeout_ms"], 30_000);
+	const result = await browser.enqueueAndWait({ kind: "screenshot", source: "agent", timeoutMs }, timeoutMs + 2_000);
+	if (!result.ok) return fail(result.error ?? "BROWSER_SCREENSHOT failed.");
+	const region = browserScreenshotRegion(result.result);
+	if (!region) return fail("BROWSER_SCREENSHOT could not locate the active browser view.");
+	try {
+		const screenshot = await captureScreen({ label: "browser", region, timeoutMs });
+		audit({ action: "browser_screenshot", success: true, caller: caller(runtime), ts: Date.now() });
+		const text = `Browser screenshot saved: ${screenshot.path}`;
+		await emit(callback, text, "BROWSER_SCREENSHOT");
+		return ok(text, { screenshot });
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		audit({ action: "browser_screenshot", success: false, error, caller: caller(runtime), ts: Date.now() });
+		return fail(error);
+	}
+};
+
+export const browserScreenshotAction: Action = {
+	name: "BROWSER_SCREENSHOT",
+	similes: ["CAPTURE_BROWSER", "SCREENSHOT_BROWSER", "SEE_BROWSER"],
+	description:
+		"Take a screenshot of the active Detour browser view and save it under ~/.detour/screenshots. Use this when the user wants to see what the agent browser is doing.",
+	validate: alwaysValid,
+	handler: browserScreenshotHandler,
+	examples: [],
+	parameters: [
+		{ name: "timeoutMs", description: "Optional timeout in milliseconds.", required: false, schema: { type: "number" as const } },
+	],
+} as Action;
+
 // ── BROWSER_FILL_LOGIN ─────────────────────────────────────────────────────
 
 const browserFillLoginHandler: Handler = async (runtime, _message, _state, options, callback) => {
+	if (!browserUseEnabled()) return fail("Browser use is disabled in Settings → Agent Permissions.");
 	const opts = options as Record<string, unknown> | undefined;
 	const source = pickStringOption(opts, ["source"]);
 	const identifier = pickStringOption(opts, ["identifier", "id"]);
@@ -697,6 +759,7 @@ export const vaultToolsPlugin: Plugin = {
 		browserOpenAction,
 		browserInspectAction,
 		browserScriptAction,
+		browserScreenshotAction,
 		browserFillLoginAction,
 	],
 };

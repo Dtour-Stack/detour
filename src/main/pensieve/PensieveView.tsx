@@ -6,13 +6,10 @@ import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";
 import { TemplatesPane } from "./templates/TemplatesPane";
 import { EmbeddingMapPane } from "./embeddings/EmbeddingMapPane";
-import { InboxPane } from "./inbox/InboxPane";
-import { GatewayPane } from "./gateway/GatewayPane";
 import { ChroniclerPane } from "./chronicler/ChroniclerPane";
+import { DreamsPane } from "./dreams/DreamsPane";
 
 type Section =
-	| "inbox"
-	| "gateway"
 	| "chronicler"
 	| "notes"
 	| "knowledge"
@@ -20,67 +17,96 @@ type Section =
 	| "templates"
 	| "relationships"
 	| "graph"
-	| "embeddings";
-
-const LIVE_SECTIONS: { id: Section; label: string }[] = [
-	{ id: "inbox", label: "Inbox" },
-	{ id: "gateway", label: "Channel feed" },
-	{ id: "chronicler", label: "Chronicler" },
-];
+	| "embeddings"
+	| "dreams";
 
 const KNOWLEDGE_SECTIONS: { id: Section; label: string }[] = [
 	{ id: "notes", label: "Notes" },
 	{ id: "knowledge", label: "Knowledge" },
 	{ id: "memories", label: "Memories" },
+	{ id: "dreams", label: "Dreams" },
+	{ id: "chronicler", label: "Chronicler" },
 	{ id: "templates", label: "Templates" },
 	{ id: "relationships", label: "Relationships" },
 	{ id: "graph", label: "Graph" },
 	{ id: "embeddings", label: "Embedding map" },
 ];
 
+const SECTION_IDS = new Set<Section>(KNOWLEDGE_SECTIONS.map((section) => section.id));
+
+function storedSection(): Section {
+	try {
+		const stored = localStorage.getItem("pensieve.section") as Section | null;
+		return stored && SECTION_IDS.has(stored) ? stored : "memories";
+	} catch {
+		return "memories";
+	}
+}
+
 /**
- * Top-level Pensieve window: agent memory + relationships + cross-corpus graph.
- * Mounts when the React app is loaded with location.hash === "#pensieve".
+ * Top-level Pensieve view: agent memory + relationships + cross-corpus graph.
  *
- * Layout matches settings-shell — left sidebar with section + sub-nav buttons,
- * main content area for the active pane.
+ * Two render modes:
+ *   - standalone window (the legacy `views://main/pensieve.html` entrypoint):
+ *     left-side `.settings-sidebar` nav. Same as Settings windows.
+ *   - embedded inside the Detour hub (App.tsx mounts <PensieveView embedded />):
+ *     section nav becomes a right-side `.embedded-right-rail`, collapsed to a
+ *     thin icon strip by default and expanding to show labels on hover. This
+ *     keeps the unified left rail (channels + tools) as the single source of
+ *     top-level navigation.
+ *
+ * Section state is persisted to localStorage so picking a section in one mode
+ * carries over when the user switches to the other.
  */
-export function PensieveView() {
+export function PensieveView({ embedded = false }: { embedded?: boolean } = {}) {
 	useDetourTheme();
-	const [section, setSection] = useState<Section>(() => {
-		try {
-			return (localStorage.getItem("pensieve.section") as Section) ?? "inbox";
-		} catch {
-			return "inbox";
-		}
-	});
+	const [section, setSection] = useState<Section>(storedSection);
 
 	useEffect(() => {
 		try { localStorage.setItem("pensieve.section", section); } catch { /* ignore */ }
 	}, [section]);
 
+	const content = (
+		<>
+			{section === "chronicler" && <ChroniclerPane />}
+			{section === "notes" && <MemoriesPane scope="notes" />}
+			{section === "knowledge" && <MemoriesPane scope="knowledge" />}
+			{section === "memories" && <MemoriesPane />}
+			{section === "dreams" && <DreamsPane />}
+			{section === "templates" && <TemplatesPane />}
+			{section === "relationships" && <RelationshipsPane />}
+			{section === "graph" && <GraphPane />}
+			{section === "embeddings" && <EmbeddingMapPane />}
+		</>
+	);
+
+	if (embedded) {
+		return (
+			<div className="embedded-view">
+				<main className="embedded-main">{content}</main>
+				<aside className="embedded-right-rail" aria-label="Pensieve sections">
+					<div className="embedded-right-rail-section-label">Knowledge</div>
+					{KNOWLEDGE_SECTIONS.map((s) => (
+						<button
+							key={s.id}
+							type="button"
+							className={section === s.id ? "embedded-right-rail-btn active" : "embedded-right-rail-btn"}
+							onClick={() => setSection(s.id)}
+							title={s.label}
+						>
+							<span className="embedded-right-rail-glyph">{s.label.slice(0, 2).toUpperCase()}</span>
+							<span className="embedded-right-rail-label">{s.label}</span>
+						</button>
+					))}
+				</aside>
+			</div>
+		);
+	}
+
 	return (
 		<div className="settings-shell">
 			<aside className="settings-sidebar">
 				<div className="window-brand">Pensieve</div>
-				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden title="Live">
-						<SidebarIcon name="wave" />
-						<span className="section-btn-label">Live</span>
-					</div>
-					<div className="sub-nav">
-						{LIVE_SECTIONS.map((s) => (
-							<button
-								key={s.id}
-								type="button"
-								className={section === s.id ? "sub-nav-btn active" : "sub-nav-btn"}
-								onClick={() => setSection(s.id)}
-							>
-								{s.label}
-							</button>
-						))}
-					</div>
-				</div>
 				<div className="sidebar-section">
 					<div className="section-btn active" aria-hidden title="Knowledge">
 						<SidebarIcon name="book" />
@@ -101,18 +127,7 @@ export function PensieveView() {
 				</div>
 				<div style={{ flex: 1 }} />
 			</aside>
-			<main className="settings-main settings-main-flush">
-				{section === "inbox" && <InboxPane />}
-				{section === "gateway" && <GatewayPane />}
-				{section === "chronicler" && <ChroniclerPane />}
-				{section === "notes" && <MemoriesPane scope="notes" />}
-				{section === "knowledge" && <MemoriesPane scope="knowledge" />}
-				{section === "memories" && <MemoriesPane />}
-				{section === "templates" && <TemplatesPane />}
-				{section === "relationships" && <RelationshipsPane />}
-				{section === "graph" && <GraphPane />}
-				{section === "embeddings" && <EmbeddingMapPane />}
-			</main>
+			<main className="settings-main settings-main-flush">{content}</main>
 		</div>
 	);
 }

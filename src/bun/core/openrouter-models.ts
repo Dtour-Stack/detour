@@ -2,6 +2,7 @@ import type { OpenRouterModelBuckets, OpenRouterModelCapability, OpenRouterModel
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=all";
 const OPENROUTER_EMBEDDING_MODELS_URL = "https://openrouter.ai/api/v1/embeddings/models";
+const OPENROUTER_VIDEO_MODELS_URL = "https://openrouter.ai/api/v1/videos/models";
 
 type FetchModelsOptions = {
 	apiKey?: string;
@@ -15,13 +16,19 @@ export async function fetchOpenRouterModels(options: FetchModelsOptions = {}): P
 		: {};
 	const base = await fetchModelList(OPENROUTER_MODELS_URL, headers);
 	let embeddings: OpenRouterModelInfo[] = [];
+	let videos: OpenRouterModelInfo[] = [];
 	try {
 		embeddings = await fetchModelList(OPENROUTER_EMBEDDING_MODELS_URL, headers);
 	} catch {
 		embeddings = [];
 	}
+	try {
+		videos = await fetchVideoModelList(headers);
+	} catch {
+		videos = [];
+	}
 	const byId = new Map<string, OpenRouterModelInfo>();
-	for (const model of [...base, ...embeddings]) {
+	for (const model of [...base, ...embeddings, ...videos]) {
 		byId.set(model.id, mergeModel(byId.get(model.id), model));
 	}
 	const models = [...byId.values()].sort(compareModels);
@@ -32,6 +39,35 @@ export async function fetchOpenRouterModels(options: FetchModelsOptions = {}): P
 		}
 	}
 	return { fetchedAt: Date.now(), models, buckets };
+}
+
+async function fetchVideoModelList(headers: HeadersInit): Promise<OpenRouterModelInfo[]> {
+	const res = await fetch(OPENROUTER_VIDEO_MODELS_URL, { headers });
+	if (!res.ok) {
+		const body = await res.text().catch(() => "");
+		throw new Error(`OpenRouter video models HTTP ${res.status}: ${body.slice(0, 240)}`);
+	}
+	const json = await res.json() as { data?: unknown };
+	if (!Array.isArray(json.data)) throw new Error("OpenRouter video models response missing data array");
+	return json.data.flatMap((item): OpenRouterModelInfo[] => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+		const raw = item as RawOpenRouterModel;
+		const id = stringValue(raw.id);
+		if (!id) return [];
+		const name = stringValue(raw.name) ?? id;
+		const passthrough = stringArray(raw.allowed_passthrough_parameters);
+		return [{
+			id,
+			name,
+			...(stringValue(raw.description) ? { description: stringValue(raw.description) } : {}),
+			inputModalities: ["text", "image"],
+			outputModalities: ["video"],
+			supportedParameters: ["prompt", "duration", "resolution", "aspect_ratio", "size", "frame_images", "input_references", "generate_audio", "seed", ...passthrough],
+			pricing: {},
+			isFree: false,
+			capabilities: ["video"],
+		}];
+	});
 }
 
 async function fetchModelList(url: string, headers: HeadersInit): Promise<OpenRouterModelInfo[]> {
@@ -104,6 +140,7 @@ function capabilitiesFor(model: {
 	if (output.has("text") || output.size === 0) capabilities.add("text");
 	if (input.has("image")) capabilities.add("vision");
 	if (output.has("image")) capabilities.add("image");
+	if (output.has("video")) capabilities.add("video");
 	if (output.has("embeddings") || output.has("embedding") || needle.includes("embedding")) capabilities.add("embedding");
 	if (model.isFree) capabilities.add("free");
 	return [...capabilities];
@@ -151,6 +188,7 @@ function emptyBuckets(): OpenRouterModelBuckets {
 		embedding: [],
 		vision: [],
 		image: [],
+		video: [],
 	};
 }
 

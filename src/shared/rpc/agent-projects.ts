@@ -30,7 +30,11 @@ export type AgentProjectGitCommit = {
 	timestamp: number; // unix seconds
 };
 
-export type AgentProjectTemplate = "carrot" | "nextjs" | "static";
+export type AgentProjectTemplate =
+	| "carrot"
+	| "nextjs"
+	| "static"
+	| `electrobun:${string}`;
 
 export type AgentProjectSummary = {
 	slug: string;
@@ -146,7 +150,30 @@ export type AgentProjectsRequests = {
 	 */
 	agentProjectStartPreview: {
 		params: { slug: string };
-		response: { ok: true; url: string; port: number; hostname: string };
+		response: {
+			ok: true;
+			url: string;
+			port: number;
+			hostname: string;
+			publicUrl?: string;
+			publicUrlProvider?: "ngrok";
+			publicUrlPid?: number;
+			publicUrlStartedAt?: number;
+			publicUrlError?: string;
+		};
+	};
+	agentProjectStartPublicPreview: {
+		params: { slug: string };
+		response: {
+			ok: true;
+			url: string;
+			publicUrl: string;
+			publicUrlProvider: "ngrok";
+			port: number;
+			hostname: string;
+			publicUrlPid?: number;
+			publicUrlStartedAt?: number;
+		};
 	};
 	agentProjectStopPreview: {
 		params: { slug: string };

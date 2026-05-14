@@ -99,13 +99,13 @@ const { settingsFeature } = await import("./features/settings");
 const { pensieveFeature } = await import("./features/pensieve");
 const { activityFeature } = await import("./features/activity");
 const { browserFeature } = await import("./features/browser");
-const { channelsFeature } = await import("./features/channels");
 const { shortcutsFeature } = await import("./features/shortcuts");
 const { notificationsFeature } = await import("./features/notifications");
 const { menusFeature } = await import("./features/menus");
 const { portlessFeature } = await import("./features/portless");
 const { workspaceFeature } = await import("./features/workspace");
 const { petFeature } = await import("./features/pet");
+const { galleryFeature } = await import("./features/gallery");
 
 console.log("[main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
@@ -117,13 +117,13 @@ await loadFeatures(kernel, [
 	pensieveFeature,
 	activityFeature,
 	browserFeature,
-	channelsFeature,
 	shortcutsFeature,
 	notificationsFeature,
 	menusFeature,
 	portlessFeature,
 	workspaceFeature,
 	petFeature,
+	galleryFeature,
 ]);
 
 console.log("[main] tray-app ready");

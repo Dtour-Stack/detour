@@ -68,6 +68,12 @@ export default {
 			// Character knowledge bundled with the app, surfaced via
 			// resolveBundledIndex() / KnowledgeService.
 			"src/bun/core/knowledge/detour-squirrel": "knowledge/detour-squirrel",
+			// Runtime-loaded eliza skills and PTY peer packages. These are
+			// resolved from disk by upstream packages via path/require probes.
+			"eliza/packages/skills/skills": "eliza/packages/skills/skills",
+			"node_modules/.bun/pty-manager@1.11.0/node_modules/pty-manager": "node_modules/pty-manager",
+			"node_modules/.bun/node-pty@1.1.0/node_modules/node-pty": "node_modules/node-pty",
+			"node_modules/.bun/adapter-types@0.2.0/node_modules/adapter-types": "node_modules/adapter-types",
 			// HTML shells for the single React entrypoint. Each window loads
 			// its own per-view HTML that sets window.__detourView before the
 			// shared bundle runs — this avoids electrobun's views:// scheme
@@ -79,10 +85,10 @@ export default {
 			"src/main/activity.html": "views/main/activity.html",
 			"src/main/pensieve.html": "views/main/pensieve.html",
 			"src/main/browser.html": "views/main/browser.html",
-			"src/main/channels.html": "views/main/channels.html",
 			"src/main/pet.html": "views/main/pet.html",
 			"src/main/portless.html": "views/main/portless.html",
 			"src/main/workspace.html": "views/main/workspace.html",
+			"src/main/gallery.html": "views/main/gallery.html",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk
 			// (Bun.Worker reads .ts source directly). Worker import of the SDK
 			// resolves via the path-preserving copy of carrot-sdk/index.ts, so

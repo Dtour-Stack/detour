@@ -12,6 +12,9 @@
  */
 
 import { decodeCodexJwt } from "./jwt";
+import { parseQuotaError } from "./quota-error";
+
+export { QuotaExceededError, type QuotaExceededDetails } from "./quota-error";
 
 export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 export const CODEX_RESPONSES_PATH = "/codex/responses";
@@ -126,6 +129,10 @@ export class CodexResponsesClient {
 		});
 		if (!res.ok) {
 			const body = await res.text().catch(() => "");
+			if (res.status === 429) {
+				const quota = parseQuotaError(body);
+				if (quota) throw quota;
+			}
 			throw new Error(`Codex Responses API ${res.status}: ${body.slice(0, 600)}`);
 		}
 		return res.json() as Promise<Record<string, unknown>>;
@@ -147,6 +154,10 @@ export class CodexResponsesClient {
 		});
 		if (!res.ok || !res.body) {
 			const body = await res.text().catch(() => "");
+			if (res.status === 429) {
+				const quota = parseQuotaError(body);
+				if (quota) throw quota;
+			}
 			throw new Error(`Codex Responses API ${res.status}: ${body.slice(0, 600)}`);
 		}
 		const reader = res.body.getReader();

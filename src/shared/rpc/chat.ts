@@ -65,7 +65,7 @@ export type ChatMessages = {
 	// UI navigation broadcasts. Emitted by the windowOpen RPC handler
 	// when the command palette (or anywhere else) requests opening a
 	// named target. Each window listens for the messages relevant to
-	// it — the chat window handles uiOpenSettings/uiOpenChannels by
+	// it — the chat window handles uiOpenSettings by
 	// toggling its drawer/view, the pensieve window handles
 	// uiOpenPensieve by showing/focusing itself, etc.
 	uiOpenChat: Record<string, never>;
@@ -73,10 +73,10 @@ export type ChatMessages = {
 	uiOpenSettings: Record<string, never>;
 	uiOpenPensieve: Record<string, never>;
 	uiOpenActivity: Record<string, never>;
-	uiOpenChannels: Record<string, never>;
 	uiOpenBrowser: Record<string, never>;
 	uiOpenAgents: Record<string, never>;
 	uiOpenPet: Record<string, never>;
+	uiOpenGallery: Record<string, never>;
 	// Bun → chat view broadcast: insert this command into the chat
 	// composer (and optionally submit). Round-trip pattern — the
 	// palette emits chatCommandRun via rpc.send.chatCommandRun, the

@@ -277,6 +277,8 @@ export function getKnowledgeFileContentType(extension: string): string | null {
 		".bat": "text/x-batch",
 		".cmd": "text/x-batch",
 		".json": "application/json",
+		".jsonl": "application/x-ndjson",
+		".ndjson": "application/x-ndjson",
 		".yaml": "text/x-yaml",
 		".yml": "text/x-yaml",
 		".toml": "text/x-toml",

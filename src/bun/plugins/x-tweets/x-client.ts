@@ -28,6 +28,21 @@ const GQL_BASE = "https://x.com/i/api/graphql";
 const REST_V11_BASE = "https://x.com/i/api/1.1";
 const TWITTER_STATUS_UPDATE_URL = `${REST_V11_BASE}/statuses/update.json`;
 const NOTIFICATIONS_URL = "https://x.com/i/api/2/notifications/all.json";
+const MEDIA_UPLOAD_URL = "https://upload.twitter.com/i/media/upload.json";
+const MEDIA_CHUNK_SIZE = 1_000_000; // 1MB; X's docs cap individual APPEND chunks at 5MB
+
+/**
+ * X requires `media_category` set on uploads — picking the right value
+ * gates which file types are accepted and whether the processing pipeline
+ * waits for transcode. Map common MIME types here; unknown types fall
+ * back to `tweet_image` which is the most permissive on the upload side.
+ */
+export function mediaCategoryForMime(mimeType: string): "tweet_image" | "tweet_gif" | "tweet_video" {
+	const m = mimeType.toLowerCase();
+	if (m.startsWith("video/")) return "tweet_video";
+	if (m === "image/gif") return "tweet_gif";
+	return "tweet_image";
+}
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -157,23 +172,145 @@ export class XClient {
 
 	// ── WRITE ────────────────────────────────────────────────────────────────
 
-	async tweet(text: string): Promise<XPostResult> {
+	async tweet(text: string, opts: { mediaIds?: string[] } = {}): Promise<XPostResult> {
 		return this.createTweet({
 			tweet_text: text,
 			dark_request: false,
-			media: { media_entities: [], possibly_sensitive: false },
+			media: {
+				media_entities: (opts.mediaIds ?? []).map((id) => ({ media_id: id, tagged_users: [] })),
+				possibly_sensitive: false,
+			},
 			semantic_annotation_ids: [],
 		});
 	}
 
-	async reply(text: string, replyToTweetId: string): Promise<XPostResult> {
+	async reply(
+		text: string,
+		replyToTweetId: string,
+		opts: { mediaIds?: string[] } = {},
+	): Promise<XPostResult> {
 		return this.createTweet({
 			tweet_text: text,
 			reply: { in_reply_to_tweet_id: replyToTweetId, exclude_reply_user_ids: [] },
 			dark_request: false,
-			media: { media_entities: [], possibly_sensitive: false },
+			media: {
+				media_entities: (opts.mediaIds ?? []).map((id) => ({ media_id: id, tagged_users: [] })),
+				possibly_sensitive: false,
+			},
 			semantic_annotation_ids: [],
 		});
+	}
+
+	/**
+	 * Upload media bytes to X using the chunked v1.1 endpoint (INIT → APPEND →
+	 * FINALIZE → STATUS), returning the `media_id_string` the create-tweet
+	 * mutation accepts in `media.media_entities[].media_id`.
+	 *
+	 *   const id = await client.uploadMedia(bytes, "image/png");
+	 *   await client.tweet("look at this:", { mediaIds: [id] });
+	 *
+	 * For video uploads, the server may return `pending` / `in_progress`
+	 * after FINALIZE; we poll `command=STATUS` up to ~60s before failing.
+	 *
+	 * `mediaCategory` is one of "tweet_image" / "tweet_gif" / "tweet_video"
+	 * — the upload host rejects videos that come in without the category
+	 * set explicitly. Caller passes the right value based on the MIME type
+	 * (helper `mediaCategoryForMime` below does the mapping).
+	 */
+	async uploadMedia(
+		bytes: Uint8Array,
+		mimeType: string,
+		mediaCategory: "tweet_image" | "tweet_gif" | "tweet_video" = mediaCategoryForMime(mimeType),
+	): Promise<{ mediaId: string }> {
+		const init = await this.mediaCommand({
+			command: "INIT",
+			total_bytes: String(bytes.length),
+			media_type: mimeType,
+			media_category: mediaCategory,
+		});
+		const initJson = (await init.json()) as { media_id_string?: string };
+		const mediaId = initJson.media_id_string;
+		if (!mediaId) throw new Error("INIT did not return media_id_string");
+
+		let segmentIndex = 0;
+		for (let offset = 0; offset < bytes.length; offset += MEDIA_CHUNK_SIZE) {
+			const chunk = bytes.subarray(offset, Math.min(offset + MEDIA_CHUNK_SIZE, bytes.length));
+			const form = new FormData();
+			form.set("command", "APPEND");
+			form.set("media_id", mediaId);
+			form.set("segment_index", String(segmentIndex));
+			// Slice to a fresh ArrayBuffer so the Blob constructor's
+			// BlobPart signature accepts it (rejects ArrayBufferLike from
+			// Uint8Array's polymorphic backing under TS 5.x).
+			const arrayBuffer = chunk.buffer.slice(
+				chunk.byteOffset,
+				chunk.byteOffset + chunk.byteLength,
+			) as ArrayBuffer;
+			form.set("media", new Blob([arrayBuffer], { type: mimeType }));
+			const res = await this.fetchWithTimeout(MEDIA_UPLOAD_URL, {
+				method: "POST",
+				headers: this.getBaseHeaders(),
+				body: form,
+			});
+			if (!res.ok) {
+				const errText = await res.text().catch(() => "");
+				throw new Error(`APPEND segment=${segmentIndex} failed: HTTP ${res.status} ${errText.slice(0, 200)}`);
+			}
+			segmentIndex++;
+		}
+
+		const finalize = await this.mediaCommand({
+			command: "FINALIZE",
+			media_id: mediaId,
+		});
+		const finalizeJson = (await finalize.json()) as {
+			processing_info?: { state?: string; check_after_secs?: number };
+		};
+		if (finalizeJson.processing_info?.state && finalizeJson.processing_info.state !== "succeeded") {
+			await this.waitForMediaProcessing(mediaId);
+		}
+		return { mediaId };
+	}
+
+	private async mediaCommand(params: Record<string, string>): Promise<Response> {
+		const form = new FormData();
+		for (const [k, v] of Object.entries(params)) form.set(k, v);
+		const res = await this.fetchWithTimeout(MEDIA_UPLOAD_URL, {
+			method: "POST",
+			headers: this.getBaseHeaders(),
+			body: form,
+		});
+		if (!res.ok) {
+			const errText = await res.text().catch(() => "");
+			throw new Error(`${params.command} failed: HTTP ${res.status} ${errText.slice(0, 200)}`);
+		}
+		return res;
+	}
+
+	private async waitForMediaProcessing(mediaId: string): Promise<void> {
+		const deadline = Date.now() + 60_000;
+		let waitMs = 2_000;
+		while (Date.now() < deadline) {
+			const url = `${MEDIA_UPLOAD_URL}?command=STATUS&media_id=${encodeURIComponent(mediaId)}`;
+			const res = await this.fetchWithTimeout(url, { method: "GET", headers: this.getBaseHeaders() });
+			if (!res.ok) {
+				const errText = await res.text().catch(() => "");
+				throw new Error(`STATUS failed: HTTP ${res.status} ${errText.slice(0, 200)}`);
+			}
+			const json = (await res.json()) as {
+				processing_info?: { state?: string; check_after_secs?: number; error?: { message?: string } };
+			};
+			const state = json.processing_info?.state;
+			if (state === "succeeded") return;
+			if (state === "failed") {
+				const msg = json.processing_info?.error?.message ?? "unknown processing error";
+				throw new Error(`media processing failed: ${msg}`);
+			}
+			const checkAfter = json.processing_info?.check_after_secs;
+			waitMs = typeof checkAfter === "number" && checkAfter > 0 ? checkAfter * 1000 : Math.min(waitMs * 2, 8_000);
+			await new Promise((resolve) => setTimeout(resolve, waitMs));
+		}
+		throw new Error("media processing timed out after 60s");
 	}
 
 	async like(tweetId: string): Promise<{ success: boolean; error?: string }> {

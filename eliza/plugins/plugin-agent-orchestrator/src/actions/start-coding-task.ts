@@ -293,6 +293,7 @@ export const startCodingTaskAction: BackgroundAction = {
   description:
     "Create one or more asynchronous task agents for any open-ended multi-step job. " +
     "These task agents can code, debug, research, write, analyze, plan, document, and automate while the main agent stays free to keep talking with the user. " +
+    "For app-generation requests from Telegram, Discord, X, iMessage, chat, or any messaging connector, acknowledge the request immediately, spawn the task, stream meaningful progress back to the originating thread, and finish with the live preview/deploy URL when available. " +
     "If a repo URL is provided, a workspace is provisioned automatically; if no repo is provided, the task agent runs in a safe scratch directory. " +
     "Use this whenever the work is more involved than a simple direct reply. " +
     "IMPORTANT: If the user references a repository from conversation history (e.g. 'in the same repo', " +
@@ -305,6 +306,21 @@ export const startCodingTaskAction: BackgroundAction = {
   suppressPostActionContinuation: true,
 
   examples: [
+    [
+      {
+        name: "{{user1}}",
+        content: {
+          text: "Telegram: build me a small budgeting app and send me a live preview URL.",
+        },
+      },
+      {
+        name: "{{agentName}}",
+        content: {
+          text: "Starting it now. I'll build it in the background, post progress here, run checks, and send the live preview URL when it's up.",
+          action: "CREATE_TASK",
+        },
+      },
+    ],
     [
       {
         name: "{{user1}}",

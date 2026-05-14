@@ -155,7 +155,7 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 				name: string;
 				description: string;
 				type: "app" | "page";
-				template?: "carrot" | "nextjs" | "static";
+				template?: "carrot" | "nextjs" | "static" | `electrobun:${string}`;
 			},
 		): Promise<{ project: AgentProjectSummary }> => {
 			const meta = await createAgentProject({ name, description, type, template });
@@ -374,7 +374,38 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 
 		agentProjectStartPreview: async ({ slug }: { slug: string }) => {
 			const state = await _deps.previewServers.startStatic(slug);
-			return { ok: true as const, url: state.url, port: state.port, hostname: state.hostname };
+			return {
+				ok: true as const,
+				url: state.url,
+				port: state.port,
+				hostname: state.hostname,
+				...(state.publicUrl ? { publicUrl: state.publicUrl } : {}),
+				...(state.publicUrlProvider ? { publicUrlProvider: state.publicUrlProvider } : {}),
+				...(state.publicUrlPid ? { publicUrlPid: state.publicUrlPid } : {}),
+				...(state.publicUrlStartedAt ? { publicUrlStartedAt: state.publicUrlStartedAt } : {}),
+				...(state.publicUrlError ? { publicUrlError: state.publicUrlError } : {}),
+			};
+		},
+
+		agentProjectStartPublicPreview: async ({ slug }: { slug: string }) => {
+			try {
+				const state = await _deps.previewServers.startPublic(slug);
+				if (!state.publicUrl) throw new Error(state.publicUrlError ?? "ngrok did not return a public URL");
+				return {
+					ok: true as const,
+					url: state.url,
+					publicUrl: state.publicUrl,
+					publicUrlProvider: "ngrok" as const,
+					port: state.port,
+					hostname: state.hostname,
+					...(state.publicUrlPid ? { publicUrlPid: state.publicUrlPid } : {}),
+					...(state.publicUrlStartedAt ? { publicUrlStartedAt: state.publicUrlStartedAt } : {}),
+				};
+			} catch (err) {
+				const local = _deps.previewServers.get(slug)?.url;
+				const message = err instanceof Error ? err.message : String(err);
+				throw new Error(local ? `${message}. Local preview is live at ${local}.` : message);
+			}
 		},
 
 		agentProjectStopPreview: async ({ slug }: { slug: string }) => {

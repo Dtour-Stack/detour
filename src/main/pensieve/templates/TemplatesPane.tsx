@@ -16,6 +16,7 @@ import type {
 import { rpc } from "../../rpc";
 import { TemplateEditor } from "./TemplateEditor";
 import { VariablesPanel } from "./VariablesPanel";
+import { PromptSlotsPanel } from "./PromptSlotsPanel";
 
 export function TemplatesPane() {
 	const [items, setItems] = useState<PensieveTemplateSummary[]>([]);
@@ -24,6 +25,7 @@ export function TemplatesPane() {
 	const [detail, setDetail] = useState<PensieveTemplateDetail | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [creating, setCreating] = useState(false);
+	const [section, setSection] = useState<"slots" | "all">("slots");
 
 	const loadList = useCallback(async () => {
 		try {
@@ -102,37 +104,62 @@ export function TemplatesPane() {
 					<span className="hint" style={{ flex: 1, fontWeight: 600 }}>Templates</span>
 					<button type="button" className="link" disabled={creating} onClick={create}>＋ New</button>
 				</div>
-				<div className="memory-tree">
-					{items.length === 0 ? (
-						<div className="empty" style={{ margin: 8 }}>
-							No templates yet. Use “New” to create one or import a character sheet.
-						</div>
-					) : (
-						items.map((t) => (
-							<div
-								key={t.id}
-								className={`memory-tree-row ${selected === t.id ? "active" : ""}`}
-								style={{ paddingLeft: 8 }}
-							>
-								<button
-									type="button"
-									className="memory-tree-label"
-									onClick={() => setSelected(t.id)}
-									title={t.path}
-								>
-									<span className="memory-tree-name">{t.name}</span>
-									<span className="memory-tree-count">{t.variables.length} var{t.variables.length === 1 ? "" : "s"}</span>
-								</button>
-							</div>
-						))
-					)}
+				<div className="templates-section-tabs">
+					<button
+						type="button"
+						className={section === "slots" ? "templates-section-tab active" : "templates-section-tab"}
+						onClick={() => setSection("slots")}
+					>
+						Slots
+					</button>
+					<button
+						type="button"
+						className={section === "all" ? "templates-section-tab active" : "templates-section-tab"}
+						onClick={() => setSection("all")}
+					>
+						All
+					</button>
 				</div>
+				{section === "all" && (
+					<div className="memory-tree">
+						{items.length === 0 ? (
+							<div className="empty" style={{ margin: 8 }}>
+								No templates yet. Use “New” to create one or import a character sheet.
+							</div>
+						) : (
+							items.map((t) => (
+								<div
+									key={t.id}
+									className={`memory-tree-row ${selected === t.id ? "active" : ""}`}
+									style={{ paddingLeft: 8 }}
+								>
+									<button
+										type="button"
+										className="memory-tree-label"
+										onClick={() => setSelected(t.id)}
+										title={t.path}
+									>
+										<span className="memory-tree-name">{t.name}</span>
+										<span className="memory-tree-count">{t.variables.length} var{t.variables.length === 1 ? "" : "s"}</span>
+									</button>
+								</div>
+							))
+						)}
+					</div>
+				)}
+				{section === "slots" && (
+					<PromptSlotsPanel
+						onSelectTemplate={(id) => setSelected(id)}
+						onReload={() => { void loadList(); }}
+					/>
+				)}
 			</aside>
 
 			<div className="pensieve-tri-list" style={{ minWidth: 0 }}>
 				{!detail ? (
 					<div className="empty" style={{ margin: 30 }}>
-						Select a template on the left, or create a new one.
+						Pick a slot on the left to override its prompt, or open the All tab to
+						create a free-form template.
 					</div>
 				) : (
 					<TemplateEditor

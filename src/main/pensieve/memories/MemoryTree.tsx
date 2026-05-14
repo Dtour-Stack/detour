@@ -61,12 +61,16 @@ function TreeNode({
 			<div
 				className={`memory-tree-row ${isSelected ? "active" : ""}`}
 				style={{ paddingLeft: 6 + depth * 12 }}
+				onClick={() => onSelectPath(node.path)}
 			>
 				{hasChildren ? (
 					<button
 						type="button"
 						className="memory-tree-twirl"
-						onClick={() => setOpen((o) => !o)}
+						onClick={(event) => {
+							event.stopPropagation();
+							setOpen((o) => !o);
+						}}
 						aria-label={open ? "Collapse" : "Expand"}
 					>
 						{open ? "▾" : "▸"}

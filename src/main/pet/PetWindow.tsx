@@ -30,13 +30,12 @@ type PetMenuItem =
 	| { label: string; action: "spawn" };
 
 const PET_MENU_ITEMS: PetMenuItem[] = [
-	{ label: "Chat", target: "chat" },
+	{ label: "Detour", target: "chat" },
 	{ label: "Commands", target: "command-palette" },
 	{ label: "Settings", target: "settings" },
 	{ label: "Activity", target: "activity" },
 	{ label: "Agents", target: "agents" },
 	{ label: "Pensieve", target: "pensieve" },
-	{ label: "Channels", target: "channels" },
 	{ label: "Browser", target: "browser" },
 	{ label: "Spawn Pet", action: "spawn" },
 ];

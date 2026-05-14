@@ -1,5 +1,5 @@
 /**
- * Pensieve > Inbox pane.
+ * Detour hub > Inbox pane.
  *
  * Lists incoming notifications + auto-promoted channel signals, lets the user
  * post test notifications (which the agent can act on via its real reply
@@ -116,7 +116,7 @@ export function InboxPane() {
 					<h2 style={{ margin: 0 }}>Inbox</h2>
 					<div style={{ fontSize: 12, opacity: 0.7 }}>
 						{loading ? "Loading…" : `${total} item${total === 1 ? "" : "s"}`}
-						{" · auto-promoted channel messages and programmatic notifications"}
+						{" · auto-promoted connector messages and programmatic notifications"}
 					</div>
 				</div>
 				<button
@@ -160,7 +160,7 @@ export function InboxPane() {
 
 			{items.length === 0 ? (
 				<div className="empty">
-					No inbox items yet. Channel messages from Discord/Telegram/iMessage auto-promote here,
+					No inbox items yet. Messages from Discord/Telegram/iMessage auto-promote here,
 					or click "+ New notification" to push one programmatically.
 				</div>
 			) : (

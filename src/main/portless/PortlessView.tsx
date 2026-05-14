@@ -11,7 +11,7 @@ import type { PortlessSnapshot } from "../../shared/index";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
-export function PortlessView() {
+export function PortlessView({ embedded: _embedded = false }: { embedded?: boolean } = {}) {
 	useDetourTheme();
 	const [snapshot, setSnapshot] = useState<PortlessSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);

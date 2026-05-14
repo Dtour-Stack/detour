@@ -47,6 +47,11 @@ const PROVIDERS: ReadonlyArray<{
 ];
 
 const ACTIVE_PROVIDER_KEY = "trayapp.activeProvider";
+const FALLBACK_ORDER_KEY = "trayapp.providerFallbackOrder";
+
+function isProviderId(value: string): value is ProviderId {
+	return value === "anthropic" || value === "openai" || value === "openrouter" || value === "elizacloud";
+}
 
 export class VaultService {
 	private managerPromise: Promise<SecretsManager> | null = null;
@@ -126,6 +131,34 @@ export class VaultService {
 		const v = await this.vault();
 		this.providerById(id);
 		await v.set(ACTIVE_PROVIDER_KEY, id);
+	}
+
+	/**
+	 * User-configured fallback order — providers the runtime walks AFTER the
+	 * active one when the active credentials are all rate-capped. Returns
+	 * an empty array when the user hasn't set it (preserves fb54849b's
+	 * default of "pick a provider, that's what runs").
+	 *
+	 * The returned list filters out invalid / unknown ids defensively so a
+	 * stale vault entry can't crash the runtime.
+	 */
+	async getProviderFallbackOrder(): Promise<ProviderId[]> {
+		const v = await this.vault();
+		if (!(await v.has(FALLBACK_ORDER_KEY))) return [];
+		const raw = await v.get(FALLBACK_ORDER_KEY);
+		try {
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return [];
+			return parsed.filter((x): x is ProviderId => typeof x === "string" && isProviderId(x));
+		} catch {
+			return [];
+		}
+	}
+
+	async setProviderFallbackOrder(order: ProviderId[]): Promise<void> {
+		const v = await this.vault();
+		const sanitized = order.filter((id) => isProviderId(id));
+		await v.set(FALLBACK_ORDER_KEY, JSON.stringify(sanitized));
 	}
 
 	async loadKeysIntoEnv(): Promise<ProviderId | null> {

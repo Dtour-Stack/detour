@@ -16,10 +16,10 @@ const openChatSubs = new Set<(p: EmptyPayload) => void>();
 const openPaletteSubs = new Set<(p: EmptyPayload) => void>();
 const openPensieveSubs = new Set<(p: EmptyPayload) => void>();
 const openActivitySubs = new Set<(p: EmptyPayload) => void>();
-const openChannelsSubs = new Set<(p: EmptyPayload) => void>();
 const openBrowserSubs = new Set<(p: EmptyPayload) => void>();
 const openAgentsSubs = new Set<(p: EmptyPayload) => void>();
 const openPetSubs = new Set<(p: EmptyPayload) => void>();
+const openGallerySubs = new Set<(p: EmptyPayload) => void>();
 
 export function onChatDelta(fn: (p: DeltaPayload) => void): () => void {
 	deltaSubs.add(fn);
@@ -57,10 +57,6 @@ export function onUiOpenActivity(fn: (p: EmptyPayload) => void): () => void {
 	openActivitySubs.add(fn);
 	return () => openActivitySubs.delete(fn);
 }
-export function onUiOpenChannels(fn: (p: EmptyPayload) => void): () => void {
-	openChannelsSubs.add(fn);
-	return () => openChannelsSubs.delete(fn);
-}
 export function onUiOpenBrowser(fn: (p: EmptyPayload) => void): () => void {
 	openBrowserSubs.add(fn);
 	return () => openBrowserSubs.delete(fn);
@@ -72,6 +68,10 @@ export function onUiOpenAgents(fn: (p: EmptyPayload) => void): () => void {
 export function onUiOpenPet(fn: (p: EmptyPayload) => void): () => void {
 	openPetSubs.add(fn);
 	return () => openPetSubs.delete(fn);
+}
+export function onUiOpenGallery(fn: (p: EmptyPayload) => void): () => void {
+	openGallerySubs.add(fn);
+	return () => openGallerySubs.delete(fn);
 }
 
 function fanout<P>(subs: Set<(p: P) => void>, payload: P, label: string): void {
@@ -93,9 +93,9 @@ export function chatMessages() {
 		uiOpenCommandPalette: (payload: EmptyPayload) => fanout(openPaletteSubs, payload, "uiOpenCommandPalette"),
 		uiOpenPensieve: (payload: EmptyPayload) => fanout(openPensieveSubs, payload, "uiOpenPensieve"),
 		uiOpenActivity: (payload: EmptyPayload) => fanout(openActivitySubs, payload, "uiOpenActivity"),
-		uiOpenChannels: (payload: EmptyPayload) => fanout(openChannelsSubs, payload, "uiOpenChannels"),
 		uiOpenBrowser: (payload: EmptyPayload) => fanout(openBrowserSubs, payload, "uiOpenBrowser"),
 		uiOpenAgents: (payload: EmptyPayload) => fanout(openAgentsSubs, payload, "uiOpenAgents"),
 		uiOpenPet: (payload: EmptyPayload) => fanout(openPetSubs, payload, "uiOpenPet"),
+		uiOpenGallery: (payload: EmptyPayload) => fanout(openGallerySubs, payload, "uiOpenGallery"),
 	};
 }

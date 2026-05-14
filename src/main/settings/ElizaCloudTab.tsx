@@ -34,7 +34,7 @@ const selectStyle = {
 const BUCKET_FIELDS: Array<{
 	key: keyof Pick<
 		ModelConfig,
-		"elizaCloudLarge" | "elizaCloudMedium" | "elizaCloudSmall" | "elizaCloudNano" | "elizaCloudMega" | "elizaCloudResponseHandler"
+		"elizaCloudLarge" | "elizaCloudMedium" | "elizaCloudSmall" | "elizaCloudNano" | "elizaCloudMega" | "elizaCloudResponseHandler" | "elizaCloudImage" | "elizaCloudVideo"
 	>;
 	label: string;
 	hint: string;
@@ -45,6 +45,8 @@ const BUCKET_FIELDS: Array<{
 	{ key: "elizaCloudNano", label: "Nano (TEXT_NANO)", hint: "Smallest/fastest" },
 	{ key: "elizaCloudMega", label: "Mega (TEXT_MEGA)", hint: "Frontier-tier (use sparingly)" },
 	{ key: "elizaCloudResponseHandler", label: "Response handler", hint: "Reply / format / paraphrase" },
+	{ key: "elizaCloudImage", label: "Image generation", hint: "Pictures" },
+	{ key: "elizaCloudVideo", label: "Video generation", hint: "Videos" },
 ];
 
 function fmtCredits(balance: number): string {

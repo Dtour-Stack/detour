@@ -3,6 +3,7 @@ import {
 	browserFillLoginAction,
 	browserInspectAction,
 	browserOpenAction,
+	browserScreenshotAction,
 	browserScriptAction,
 	loginListAction,
 	loginRevealAction,
@@ -42,6 +43,7 @@ describe("vaultToolsPlugin shape", () => {
 			"BROWSER_FILL_LOGIN",
 			"BROWSER_INSPECT",
 			"BROWSER_OPEN",
+			"BROWSER_SCREENSHOT",
 			"BROWSER_SCRIPT",
 			"LOGIN_LIST",
 			"LOGIN_REVEAL",
@@ -65,6 +67,7 @@ describe("vaultToolsPlugin shape", () => {
 			browserOpenAction,
 			browserInspectAction,
 			browserScriptAction,
+			browserScreenshotAction,
 			browserFillLoginAction,
 		]) {
 			const params = (a as unknown as { parameters?: unknown[] }).parameters;

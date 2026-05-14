@@ -24,14 +24,17 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 /**
- * Top-level Activity window: trajectories + logs + tasks + runtime introspection.
- * Mounts when the React app is loaded with location.hash === "#activity"
- * (the tray's activityFeature opens a new BrowserWindow with that URL).
+ * Top-level Activity view: trajectories + logs + tasks + runtime introspection.
  *
- * Layout matches settings-shell — left sidebar with section + sub-nav buttons,
- * main content area for the active pane.
+ * Two render modes (see PensieveView for the same pattern):
+ *   - standalone window: legacy `views://main/activity.html` entrypoint, full
+ *     left sidebar.
+ *   - embedded inside the Detour hub (`<ActivityView embedded />`): tab nav
+ *     becomes a right-side rail that collapses to icons and expands on hover.
+ *
+ * Tab state is persisted to localStorage so it survives mode switches.
  */
-export function ActivityView() {
+export function ActivityView({ embedded = false }: { embedded?: boolean } = {}) {
 	useDetourTheme();
 	const [tab, setTab] = useState<Tab>(() => {
 		try {
@@ -44,6 +47,42 @@ export function ActivityView() {
 	useEffect(() => {
 		try { localStorage.setItem("activity.tab", tab); } catch { /* ignore */ }
 	}, [tab]);
+
+	const content = (
+		<>
+			{tab === "trajectories" && <TrajectoriesPane />}
+			{tab === "logs" && <LogsPane />}
+			{tab === "tasks" && <TasksPane />}
+			{tab === "subagents" && <SubagentsPane />}
+			{tab === "autonomy" && <AutonomyPane />}
+			{tab === "plugins" && <PluginsPane />}
+			{tab === "db" && <DbPane />}
+			{tab === "runtime" && <RuntimePane />}
+		</>
+	);
+
+	if (embedded) {
+		return (
+			<div className="embedded-view">
+				<main className="embedded-main">{content}</main>
+				<aside className="embedded-right-rail" aria-label="Activity tabs">
+					<div className="embedded-right-rail-section-label">Runtime</div>
+					{TABS.map((t) => (
+						<button
+							key={t.id}
+							type="button"
+							className={tab === t.id ? "embedded-right-rail-btn active" : "embedded-right-rail-btn"}
+							onClick={() => setTab(t.id)}
+							title={t.label}
+						>
+							<span className="embedded-right-rail-glyph">{t.label.slice(0, 2).toUpperCase()}</span>
+							<span className="embedded-right-rail-label">{t.label}</span>
+						</button>
+					))}
+				</aside>
+			</div>
+		);
+	}
 
 	return (
 		<div className="settings-shell">
@@ -69,16 +108,7 @@ export function ActivityView() {
 				</div>
 				<div style={{ flex: 1 }} />
 			</aside>
-			<main className="settings-main settings-main-flush">
-				{tab === "trajectories" && <TrajectoriesPane />}
-				{tab === "logs" && <LogsPane />}
-				{tab === "tasks" && <TasksPane />}
-				{tab === "subagents" && <SubagentsPane />}
-				{tab === "autonomy" && <AutonomyPane />}
-				{tab === "plugins" && <PluginsPane />}
-				{tab === "db" && <DbPane />}
-				{tab === "runtime" && <RuntimePane />}
-			</main>
+			<main className="settings-main settings-main-flush">{content}</main>
 		</div>
 	);
 }

@@ -20,6 +20,7 @@ export type AuditAction =
 	| "browser_open"
 	| "browser_inspect"
 	| "browser_script"
+	| "browser_screenshot"
 	| "browser_fill_login";
 
 export interface AuditEvent {

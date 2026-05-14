@@ -13,6 +13,8 @@ import { newTraceId, traceScope } from "../../trace";
 const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/browser", usage: "/browser <url or search>", description: "Open the agent browser.", insert: "/browser ", aliases: ["/open", "/web", "/internet"], source: "native" },
 	{ name: "/inspect", usage: "/inspect", description: "Read the active browser tab.", insert: "/inspect", aliases: ["/read-page"], source: "native" },
+	{ name: "/browser-screenshot", usage: "/browser-screenshot", description: "Take a screenshot of the agent browser.", insert: "/browser-screenshot", aliases: ["/screenshot-browser"], source: "native" },
+	{ name: "/screenshot", usage: "/screenshot", description: "Take a screenshot of the computer screen.", insert: "/screenshot", aliases: ["/screen", "/computer-screenshot"], source: "native" },
 	{ name: "/script", usage: "/script <javascript>", description: "Run JavaScript in the browser tab.", insert: "/script ", aliases: ["/js"], source: "native" },
 	{ name: "/logins", usage: "/logins [domain]", description: "List saved logins from vault backends.", insert: "/logins ", aliases: ["/passwords"], source: "native" },
 	{ name: "/login", usage: "/login <source> <identifier> [url]", description: "Fill a saved login in the browser.", insert: "/login 1password ", source: "native" },
@@ -21,6 +23,8 @@ const NATIVE_CHAT_COMMANDS: ChatCommandInfo[] = [
 	{ name: "/claude", usage: "/claude [cwd=/path] <task>", description: "Run a Claude coding subagent and wait for the result.", insert: "/claude ", source: "native" },
 	{ name: "/spawn-codex", usage: "/spawn-codex [cwd=/path] <task>", description: "Start a Codex coding subagent in the background.", insert: "/spawn-codex ", source: "native" },
 	{ name: "/spawn-claude", usage: "/spawn-claude [cwd=/path] <task>", description: "Start a Claude coding subagent in the background.", insert: "/spawn-claude ", source: "native" },
+	{ name: "/video", usage: "/video <prompt>", description: "Generate a video via ElizaCloud and save it to Gallery.", insert: "/video ", source: "native" },
+	{ name: "/gallery", usage: "/gallery", description: "Open generated media gallery.", insert: "/gallery", source: "native" },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help", aliases: ["/commands"], source: "native" },
 ];
 

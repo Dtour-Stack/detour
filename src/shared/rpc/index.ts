@@ -42,6 +42,10 @@ import type { GitHubChannelRequests } from "./github-channel";
 import type { TasksRequests, TasksMessages } from "./tasks";
 import type { PetsRequests, PetsMessages } from "./pets";
 import type { PhantomBunRequests, PhantomWebviewRequests } from "./phantom";
+import type { MediaRequests } from "./media";
+import type { GoalsRequests, GoalsMessages } from "./goals";
+import type { DreamsRequests, DreamsMessages } from "./dreams";
+import type { PromptSlotsRequests } from "./prompt-slots";
 
 export type DetourBunRequests =
 	& VaultRequests
@@ -66,6 +70,10 @@ export type DetourBunRequests =
 	& GitHubChannelRequests
 	& TasksRequests
 	& PetsRequests
+	& MediaRequests
+	& GoalsRequests
+	& DreamsRequests
+	& PromptSlotsRequests
 	& PhantomBunRequests;
 
 // All `messages` (both bun→view and view→bun) live in DetourBunMessages.
@@ -84,7 +92,9 @@ export type DetourBunMessages =
 	& ChatMessages
 	& LogWebviewMessages
 	& TasksMessages
-	& PetsMessages;
+	& PetsMessages
+	& GoalsMessages
+	& DreamsMessages;
 
 export type DetourWebviewRequests = PhantomWebviewRequests;
 

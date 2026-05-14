@@ -54,7 +54,7 @@ function langForPath(path: string): string {
 	return MONACO_LANG_FROM_EXT[ext] ?? "plaintext";
 }
 
-export function WorkspaceView() {
+export function WorkspaceView({ embedded: _embedded = false }: { embedded?: boolean } = {}) {
 	useDetourTheme();
 	const [projects, setProjects] = useState<AgentProjectSummary[]>([]);
 	const [activeSlug, setActiveSlug] = useState<string | null>(null);
@@ -464,14 +464,27 @@ function InAppEditor({ slug }: { slug: string }) {
 	// started the preview server. Falls back to file:// for quick render
 	// without a server.
 	const [serverUrl, setServerUrl] = useState<string | null>(null);
+	const [publicUrl, setPublicUrl] = useState<string | null>(null);
 	const previewUrl = serverUrl ?? fileUrl;
 
 	const startPreviewServer = useCallback(async () => {
 		try {
 			const r = await rpc.request.agentProjectStartPreview({ slug });
 			setServerUrl(r.url);
+			if (r.publicUrl) setPublicUrl(r.publicUrl);
 		} catch (e) {
 			setError(`Preview server failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}, [slug]);
+
+	const startPublicPreview = useCallback(async () => {
+		try {
+			const r = await rpc.request.agentProjectStartPublicPreview({ slug });
+			setServerUrl(r.url);
+			setPublicUrl(r.publicUrl);
+			setShowPreview(true);
+		} catch (e) {
+			setError(`ngrok preview failed: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}, [slug]);
 
@@ -479,6 +492,7 @@ function InAppEditor({ slug }: { slug: string }) {
 		try {
 			await rpc.request.agentProjectStopPreview({ slug });
 			setServerUrl(null);
+			setPublicUrl(null);
 		} catch { /* ignore */ }
 	}, [slug]);
 
@@ -652,6 +666,34 @@ function InAppEditor({ slug }: { slug: string }) {
 						</button>
 					</div>
 				)}
+				{publicUrl && (
+					<div className="canvas-server-banner">
+						<span className="hint">Public preview:</span>
+						<a
+							href="#"
+							onClick={(e) => { e.preventDefault(); rpc.request.externalOpen({ url: publicUrl }).catch(() => {}); }}
+							className="canvas-server-url"
+						>
+							{publicUrl}
+						</a>
+						<button
+							type="button"
+							className="btn-icon"
+							title="Copy public URL"
+							onClick={() => navigator.clipboard?.writeText(publicUrl).catch(() => {})}
+						>
+							⧉
+						</button>
+						<button
+							type="button"
+							className="btn-icon"
+							title="Open public URL in system browser"
+							onClick={() => rpc.request.externalOpen({ url: publicUrl }).catch(() => {})}
+						>
+							↗
+						</button>
+					</div>
+				)}
 				{activePath && (
 					<>
 						<div className="workspace-canvas-head">
@@ -676,6 +718,14 @@ function InAppEditor({ slug }: { slug: string }) {
 									title={serverUrl ? "Stop the local HTTP preview server" : "Start a local HTTP preview server (portless URL)"}
 								>
 									{serverUrl ? "Stop server" : "Start server"}
+								</button>
+								<button
+									type="button"
+									className={publicUrl ? "btn-secondary active" : "btn-secondary"}
+									onClick={() => publicUrl ? rpc.request.externalOpen({ url: publicUrl }).catch(() => {}) : void startPublicPreview()}
+									title={publicUrl ? "Open the ngrok public preview" : "Start ngrok public preview"}
+								>
+									{publicUrl ? "Open public" : "Public link"}
 								</button>
 								<button
 									type="button"

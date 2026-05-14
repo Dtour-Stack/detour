@@ -1,16 +1,3 @@
-/**
- * Top-level Channels window.
- *
- * Stacked expandable cards — one per channel (Discord / Telegram / iMessage).
- * Header shows status + toggle/expand control; expanded body shows credential
- * form, channel description, and a live message-history feed pulled from the
- * agent's *trajectories* table filtered by source (discord/telegram/imessage).
- *
- * The trajectories table already records every conversation turn (input,
- * LLM calls, actions) so we don't build a parallel store — the channel's
- * "message history" is just /api/activity/trajectories?source=<channel>.
- */
-
 import { useCallback, useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type {
@@ -26,10 +13,10 @@ import { useDetourTheme } from "../useDetourTheme";
 import { SidebarIcon } from "../SidebarIcon";
 
 const CHANNEL_ICONS: Record<string, string> = {
-	discord: "💬",
-	telegram: "✈️",
+	discord: "DC",
+	telegram: "TG",
 	github: "GH",
-	imessage: "💙",
+	imessage: "IM",
 };
 
 export function ChannelsView() {
@@ -57,14 +44,14 @@ export function ChannelsView() {
 	return (
 		<div className="settings-shell">
 			<aside className="settings-sidebar">
-				<div className="window-brand">Channels</div>
+				<div className="window-brand">Connections</div>
 				<div className="hint section-btn-label" style={{ padding: "0 12px 12px", lineHeight: 1.5 }}>
-					Wire messaging connectors. Per-channel history comes from the agent's trajectory log.
+					Wire messaging connectors. Recent activity comes from the agent's trajectory log.
 				</div>
 				<div className="sidebar-section">
 					<div className="section-btn active" aria-hidden title="Configured">
 						<SidebarIcon name="chat" />
-						<span className="section-btn-label">Configured</span>
+						<span className="section-btn-label">Connectors</span>
 					</div>
 					<div className="sub-nav">
 						{(snap?.channels ?? []).map((c) => (
@@ -388,7 +375,7 @@ function ChannelCardHeader({
 				onClick={onToggleExpand}
 				aria-expanded={expanded}
 			>
-				<span className="channel-card-icon" aria-hidden>{CHANNEL_ICONS[channel.id] ?? "🔌"}</span>
+				<span className="channel-card-icon" aria-hidden>{CHANNEL_ICONS[channel.id] ?? "CN"}</span>
 				<div className="channel-card-title">
 					<div className="channel-card-name">{channel.label}</div>
 					<div className="channel-card-sub">{channel.description}</div>
@@ -500,7 +487,7 @@ function ChannelAlerts({ channel, actionError }: { channel: ChannelStatus; actio
 			{actionError && <div className="banner error" style={{ marginBottom: 8 }}>{actionError}</div>}
 			{!channel.platformAvailable && (
 				<div className="banner warn" style={{ marginBottom: 8 }}>
-					This channel requires {channel.platform}.
+					This connector requires {channel.platform}.
 				</div>
 			)}
 			{channel.liveDetail && (channel.liveStatus === "invalid-token" || channel.liveStatus === "error" || channel.liveStatus === "connecting") && (
@@ -510,7 +497,7 @@ function ChannelAlerts({ channel, actionError }: { channel: ChannelStatus; actio
 			)}
 			{channel.liveStatus === "online" && channel.liveDetail && (
 				<div className="banner ok" style={{ marginBottom: 8, fontSize: 12 }}>
-					✓ {channel.liveDetail}
+					OK {channel.liveDetail}
 				</div>
 			)}
 		</>
@@ -914,7 +901,7 @@ function ImessageTccBanner() {
 	if (granted === true) {
 		return (
 			<div className="banner ok" style={{ marginBottom: 8, fontSize: 12 }}>
-				✓ Full Disk Access granted — Detour can read your iMessages.
+				Full Disk Access granted. Detour can read your iMessages.
 			</div>
 		);
 	}

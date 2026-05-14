@@ -11,6 +11,30 @@ export type ProviderInfo = {
 	oauthAccountCount?: number;
 };
 
+/**
+ * Snapshot of a paid-plan quota cap currently in effect on a provider's
+ * credential. Surfaced by `providersGetQuotaState` and the
+ * `providerQuotaChanged` broadcast so the chat banner and Settings tab
+ * can show the cap, when it resets, and which backup provider is
+ * available without polling the upstream.
+ */
+export type ProviderQuotaCap = {
+	providerId: ProviderId;
+	accountId: string;
+	accountLabel: string;
+	planType: string;
+	resetsAtMs: number;
+	upstreamMessage: string;
+	markedAtMs: number;
+	/** True when this cap is on the credential the runtime is currently
+	 * using — drives the prominent chat banner. */
+	active: boolean;
+};
+
+export type ProviderQuotaState = {
+	caps: ProviderQuotaCap[];
+};
+
 export type ChatCommandInfo = {
 	name: string;
 	usage: string;
@@ -26,10 +50,10 @@ export type WindowOpenTarget =
 	| "settings"
 	| "pensieve"
 	| "activity"
-	| "channels"
 	| "browser"
 	| "agents"
-	| "pet";
+	| "pet"
+	| "gallery";
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
@@ -84,7 +108,8 @@ export type OpenRouterModelCapability =
 	| "free"
 	| "embedding"
 	| "vision"
-	| "image";
+	| "image"
+	| "video";
 
 export type OpenRouterModelInfo = {
 	id: string;
@@ -284,6 +309,12 @@ export type BrowserCommandInput =
 				timeoutMs?: number;
 		  }
 		| {
+				kind: "screenshot";
+				tabId?: string;
+				source?: BrowserCommandSource;
+				timeoutMs?: number;
+		  }
+		| {
 				kind: "fill-login";
 				source: "in-house" | "1password" | "bitwarden";
 				identifier: string;
@@ -336,6 +367,8 @@ export type AgentConfig = {
 	mode: AgentVaultMode;
 	allowedPrefixes: string[];
 	deniedPrefixes: string[];
+	browserUse?: boolean;
+	computerUse?: boolean;
 	/** When true, the coding-tools sandbox path restriction is lifted —
 	 * FILE/BASH/EDIT/etc can operate outside DETOUR_AGENT_SANDBOX. Read by
 	 * runtime.buildRuntimeSettings as DETOUR_ELEVATED_CODING. */
@@ -378,6 +411,7 @@ export type ModelConfig = {
 	openRouterTextSmall: string;
 	openRouterEmbedding: string;
 	openRouterImage: string;
+	openRouterVideo: string;
 	openRouterVision: string;
 	// ElizaOS Cloud model bucket overrides — flow into the
 	// `ELIZAOS_CLOUD_*_MODEL` env vars that
@@ -388,6 +422,8 @@ export type ModelConfig = {
 	elizaCloudNano: string;
 	elizaCloudMega: string;
 	elizaCloudResponseHandler: string;
+	elizaCloudImage: string;
+	elizaCloudVideo: string;
 };
 
 export type WindowConfig = {

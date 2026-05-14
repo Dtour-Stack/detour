@@ -16,7 +16,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { ProviderId } from "../../shared/index";
 import type { VaultService } from "./vault";
 import type { AuthService } from "./auth";
-import { listAccounts, type AccountCredentialRecord } from "@elizaos/agent/auth";
+import { listAccounts, saveAccount, refreshAnthropicToken, type AccountCredentialRecord } from "@elizaos/agent/auth";
 import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // Note: plugin-local-embedding (eliza's bundled choice) drags in node-llama-cpp,
 // transformers, and whisper — too heavy for our bundle and hangs startup.
@@ -37,6 +37,7 @@ import {
 	browserFillLoginAction,
 	browserInspectAction,
 	browserOpenAction,
+	browserScreenshotAction,
 	browserScriptAction,
 	loginListAction,
 	vaultToolsPlugin,
@@ -46,10 +47,17 @@ import { codingToolsPlugin } from "@elizaos/plugin-coding-tools";
 import { cloudAppsPlugin } from "../plugins/cloud-apps/index";
 import { agentProjectsPlugin } from "../plugins/agent-projects/index";
 import { capabilitiesPlugin } from "../plugins/capabilities/index";
+import { detourGoalPlugin } from "../plugins/detour-goal/index";
+import { detourDiscordMediaPlugin } from "../plugins/discord-media/index";
+import { detourTelegramMediaPlugin } from "../plugins/telegram-media/index";
+import { detourIMessageMediaPlugin } from "../plugins/imessage-media/index";
 import { portlessToolsPlugin } from "../plugins/portless-tools/index";
 import { agentSkillsPlugin } from "../plugins/agent-skills/index";
 import { agentPublicLogPlugin } from "../plugins/agent-public-log/index";
 import { phantomWalletToolsPlugin } from "../plugins/phantom-wallet-tools/index";
+import { audioGenerationPlugin, audioSettingKeys } from "../plugins/audio-generation/index";
+import { mediaGenerationPlugin, mediaGenerationSettingKeys } from "../plugins/media-generation/index";
+import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
 // build can fail on first install; if the dist isn't there the plugin
 // stays null. Service start() failures are absorbed by the wrapper below
@@ -101,6 +109,8 @@ import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { discordContextPlugin } from "./discord-context-provider";
 import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
+import { getProviderQuotaService } from "./provider-quota-service";
+import { installAnthropicAccountPool } from "./anthropic-account-pool";
 import { runDiscordCatchUp } from "./discord-catchup";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -203,6 +213,13 @@ function nativeSlashCommand(text: string): NativeSlashDispatch | null {
 		case "/inspect":
 		case "/read-page":
 			return { kind: "action", action: browserInspectAction, options: {} };
+		case "/browser-screenshot":
+		case "/screenshot-browser":
+			return { kind: "action", action: browserScreenshotAction, options: {} };
+		case "/screenshot":
+		case "/screen":
+		case "/computer-screenshot":
+			return { kind: "action", action: computerScreenshotAction, options: {} };
 		case "/script":
 		case "/js":
 			return slashScript(tail);
@@ -252,6 +269,8 @@ function slashHelp(): NativeSlashDispatch {
 			"/browser <url or search>",
 			"/open <url or search>",
 			"/inspect",
+			"/browser-screenshot",
+			"/screenshot",
 			"/script <javascript>",
 			"/logins [domain]",
 			"/login <source> <identifier> [url]",
@@ -384,6 +403,11 @@ export class RuntimeService {
 		private readonly config?: ConfigService,
 	) {
 		void _auth;
+		// Plug Detour into plugin-anthropic's multi-account pool shim. The
+		// plugin's 429 handler reports rate-limits + the OAuth fetch picks
+		// the next account through this shim — without it, Claude Pro caps
+		// are silent and account rotation never happens.
+		installAnthropicAccountPool();
 	}
 
 	setGateway(gateway: import("./channels/gateway").ChannelGatewayService): void {
@@ -392,6 +416,17 @@ export class RuntimeService {
 
 	setOwnerBind(svc: import("./owner-bind").OwnerBindService): void {
 		this.ownerBind = svc;
+	}
+
+	/**
+	 * Wire the GoalService AFTER the runtime is constructed. core/index.ts
+	 * builds GoalService once Pensieve is up; from then on every
+	 * `sendMessage` turn checks for an active conversation goal and lazily
+	 * extracts one from the first substantive user turn.
+	 */
+	private goalService?: import("./goal-service").GoalService;
+	setGoalService(svc: import("./goal-service").GoalService): void {
+		this.goalService = svc;
 	}
 
 	async getOrBuild(): Promise<RuntimeState | null> {
@@ -404,7 +439,19 @@ export class RuntimeService {
 
 	private async activateState(state: RuntimeState | null): Promise<RuntimeState | null> {
 		this.current = state;
-		if (!state) return null;
+		if (!state) {
+			getProviderQuotaService().setActiveCredential(null, null);
+			return null;
+		}
+		// Tell the quota service which credential is now live so
+		// `getActiveCap()` resolves to the correct one and the chat banner
+		// surfaces the matching cap. The account-id env vars are set by
+		// the attempt's `prepare()` step a few stack frames up.
+		const activeAccountId =
+			process.env.CODEX_CHATGPT_ACCOUNT_ID ??
+			process.env.ANTHROPIC_ACCOUNT_ID ??
+			"primary";
+		getProviderQuotaService().setActiveCredential(state.providerId, activeAccountId);
 		for (const hook of this.afterBuildHooks) {
 			try { await hook(state); } catch (err) {
 				console.warn("[runtime] afterBuild hook failed:", err instanceof Error ? err.message : err);
@@ -565,6 +612,33 @@ export class RuntimeService {
 	}
 
 	/**
+	 * The credential variant currently bound to the live runtime — used by
+	 * cap-driven rotation to ask the next rebuild to skip this specific
+	 * attempt (the one that just 429'd).
+	 */
+	getCurrentAttemptId(): string | null {
+		return this.current?.attemptId ?? null;
+	}
+
+	/**
+	 * Cap-driven rebuild. Walks past credentials currently blocked on
+	 * `ProviderQuotaService` (caller assembles the blocked set from quota
+	 * state) and activates the next usable one. Returns the new state or
+	 * null if no provider is wired at all. Throws when every attempt is
+	 * blocked / errored — the user sees the "all credentials capped"
+	 * banner with the next reset time.
+	 */
+	private async rebuildSkipping(
+		blockedAttemptIds: ReadonlySet<string>,
+	): Promise<RuntimeState | null> {
+		return this.enqueueSerializedBuild(async () => {
+			await this.stopCurrentRuntime();
+			const state = await this.build(blockedAttemptIds);
+			return this.activateState(state);
+		});
+	}
+
+	/**
 	 * Deliver one chat turn through the chosen provider.
 	 *
 	 * Single-shot — no silent rebuild-and-retry-with-a-different-provider
@@ -580,17 +654,97 @@ export class RuntimeService {
 		text: string,
 		onDelta: (delta: string) => void,
 	): Promise<void> {
-		const state = await this.getOrBuild();
+		let state = await this.getOrBuild();
 		if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
+		// Pre-flight: if the active credential is currently quota-capped, try
+		// to rotate to the next non-capped attempt in the user's fallback
+		// order before failing. fb54849b's intent stands — this walk is only
+		// for `usage_limit_reached` (not transient 429s or 503s), the order
+		// is USER-set in Settings → Providers, and the rotation is surfaced
+		// in the chat banner. It is not a silent walk.
+		state = await this.rotatePastCapsIfNeeded(state);
+		const activeCap = getProviderQuotaService().getActiveCap();
+		if (activeCap) {
+			const resetText = new Date(activeCap.resetsAtMs).toLocaleString();
+			throw new Error(
+				`${activeCap.accountLabel} cap reached (resets ${resetText}) and no uncapped fallback is configured. ` +
+				`Switch active provider in Settings → Providers, add a fallback to the order, or wait for the cap to reset.`,
+			);
+		}
 		const slashEarly = nativeSlashCommand(text);
 		if (slashEarly?.kind === "prompt") {
 			// Skill-rendered prompt: route through the regular chat
 			// pipeline (LLM + tools) by replacing the user's text
 			// and falling out of the slash branch.
+			this.maybeCaptureGoal(slashEarly.text);
 			await this.deliverMessage(state, slashEarly.text, onDelta, /* asNativeSlash */ false);
 			return;
 		}
+		this.maybeCaptureGoal(text);
 		await this.deliverMessage(state, text, onDelta);
+	}
+
+	/**
+	 * Background goal extraction. Returns immediately so the chat pipeline
+	 * never waits on the extraction LLM call. By the time the user's NEXT
+	 * turn composes state, the goal will be persisted and the
+	 * DETOUR_ACTIVE_GOAL provider will surface it. Losing the goal on turn
+	 * 1 is acceptable; blocking the first reply by 2-5s while we extract
+	 * is not. Failure is logged but never propagated.
+	 */
+	private maybeCaptureGoal(text: string): void {
+		const service = this.goalService;
+		if (!service) return;
+		void service.ensureGoalForTurn(String(ROOM_ID), text).catch((err) => {
+			console.warn(
+				"[runtime] goal extraction failed:",
+				err instanceof Error ? err.message : err,
+			);
+		});
+	}
+
+	/**
+	 * If the currently-active credential is rate-capped, attempt to rebuild
+	 * with that credential blocked so the runtime walks to the next entry
+	 * in the user's fallback chain. Returns the new state when a rotation
+	 * happened, or the original state when no cap was active. Returns null
+	 * only when no provider is wired at all — caller throws the actionable
+	 * "no provider" message.
+	 *
+	 * Idempotent: collects ALL currently-capped credential ids in one shot
+	 * and rebuilds once with them excluded, instead of looping rebuilds
+	 * per cap (which would compound across turns).
+	 */
+	private async rotatePastCapsIfNeeded(
+		state: RuntimeState,
+	): Promise<RuntimeState> {
+		const service = getProviderQuotaService();
+		const cap = service.getActiveCap();
+		if (!cap) return state;
+		const currentAttempt = this.getCurrentAttemptId();
+		const blocked = new Set<string>();
+		if (currentAttempt) blocked.add(currentAttempt);
+		// Pull every currently-capped credential into the blocklist so a
+		// single rebuild jumps past all of them rather than swapping into
+		// another already-capped attempt.
+		for (const c of service.listCaps()) {
+			blocked.add(`${c.providerId}:oauth:${c.accountId}`);
+			blocked.add(`${c.providerId}:oauth:system-codex`);
+			blocked.add(`${c.providerId}:api`);
+			blocked.add(`${c.providerId}:api:${c.accountId}`);
+		}
+		try {
+			const next = await this.rebuildSkipping(blocked);
+			return next ?? state;
+		} catch (err) {
+			// Every credential is blocked — let the caller throw the
+			// actionable error in sendMessage's pre-flight branch.
+			console.warn(
+				"[runtime] cap-driven rebuild exhausted all attempts:",
+				err instanceof Error ? err.message : err,
+			);
+			return state;
+		}
 	}
 
 	private async deliverMessage(
@@ -726,22 +880,36 @@ export class RuntimeService {
 	 * Build a live runtime for the user's chosen provider.
 	 *
 	 * Walks the active provider's credential variants (e.g. Codex OAuth
-	 * then OPENAI_API_KEY for `openai`, or multiple OAuth accounts) and
-	 * returns the first one that initialises cleanly. Does NOT walk to a
-	 * different provider — that decision is the user's, not ours.
+	 * then OPENAI_API_KEY for `openai`, or multiple OAuth accounts).
+	 * After all active-provider credentials are exhausted (either uninit-
+	 * failed OR currently quota-capped + blockedAttemptIds includes them),
+	 * walks the user-configured fallback chain in the order they set.
 	 *
-	 * - Returns `null` when no provider is selected (or the chosen one
-	 *   has zero usable credentials). Callers surface the
-	 *   "No LLM provider configured" message in the UI.
-	 * - Throws when the chosen provider has credentials but they all
-	 *   failed to initialise (expired OAuth, bad key, plugin throw).
-	 *   The error names the provider explicitly so the user knows
-	 *   exactly what to fix.
+	 * - Returns `null` when no provider is selected (or no provider has
+	 *   any usable credential). Callers surface "No LLM provider
+	 *   configured" in the UI.
+	 * - Throws when there are credentials but they all failed to init.
+	 *   The error names the active provider so the user knows what to fix.
+	 *
+	 * `blockedAttemptIds` is consulted only for cap-driven rebuilds — the
+	 * caller passes the set of credential ids we already know are rate-
+	 * capped on `ProviderQuotaService`, so we don't pick them again this
+	 * pass. Empty set = first-build / normal rebuild.
 	 */
-	private async build(): Promise<RuntimeState | null> {
+	private async build(
+		blockedAttemptIds: ReadonlySet<string> = new Set(),
+	): Promise<RuntimeState | null> {
 		await this.vault.loadKeysIntoEnv();
-		const attempts = await this.providerAttempts();
-		if (attempts.length === 0) return null;
+		const allAttempts = await this.providerAttempts();
+		const attempts = allAttempts.filter((a) => !blockedAttemptIds.has(a.id));
+		if (attempts.length === 0) {
+			if (allAttempts.length === 0) return null;
+			throw new Error(
+				`All configured credentials are rate-capped right now (${allAttempts.length} blocked). ` +
+				`Wait for a cap to reset, add another provider key in Settings → Providers, ` +
+				`or extend the fallback order.`,
+			);
+		}
 		const activeProvider = attempts[0]!.providerId;
 		const errors: string[] = [];
 		for (const attempt of attempts) {
@@ -762,7 +930,7 @@ export class RuntimeService {
 		options: BuildAttemptOptions = { channels: true },
 	): Promise<RuntimeState> {
 		await attempt.prepare();
-		const llmPlugin = await PROVIDER_PLUGINS[attempt.runtimeProvider]();
+		const llmPlugins = await this.llmPluginsForAttempt(attempt);
 		const character = await this.buildCharacter();
 		const channelResolved = options.channels
 			? await this.resolveChannelPlugins()
@@ -771,7 +939,7 @@ export class RuntimeService {
 		this.mergeEmbeddingSettingsIntoCharacter(character, settings);
 		const runtime = new AgentRuntime({
 			character,
-			plugins: this.basePlugins(llmPlugin),
+			plugins: this.basePlugins(llmPlugins),
 			enableAutonomy: true,
 			settings,
 		});
@@ -818,8 +986,8 @@ export class RuntimeService {
 	 * Hook the orchestrator's swarm coordinator into detour's plumbing.
 	 *
 	 * - chatCallback: coordinator emits "task-agent says X". If the task was
-	 *   spawned in response to a Discord/X/iMessage thread the routing
-	 *   helper sends X back to that thread. Otherwise we drop X into the
+	 *   spawned in response to a Telegram/Discord/X/iMessage/etc thread,
+	 *   the routing helper sends X back to that thread. Otherwise we drop X into the
 	 *   in-app chat via gateway.recordChatReply + chatDelta broadcast so
 	 *   the user sees the task progress in the chat panel they spawned it
 	 *   from.
@@ -950,8 +1118,12 @@ export class RuntimeService {
 			// Names not registered at runtime are ignored by composeState.
 			ADDITIONAL_RESPONSE_STATE_PROVIDERS: [
 				"AGENT_CHARACTER_ANCHOR",
+				"DETOUR_ACTIVE_GOAL",
 				"AGENT_CAPABILITIES",
 				"AGENT_CODING_BRIEF",
+				"DESKTOP_USE_STATUS",
+				"MEDIA_GENERATION_STATUS",
+				"AUDIO_GENERATION_STATUS",
 				"AGENT_SKILL_CATALOG",
 				"USER_ACTIVITY_CONTEXT",
 				"FACTS",
@@ -1012,6 +1184,8 @@ export class RuntimeService {
 		if (cloudKey) settings.ELIZAOS_CLOUD_API_KEY = cloudKey;
 		this.loadEmbeddingSettings(settings);
 		await this.loadXSettings(settings);
+		await this.loadAudioSettings(settings);
+		await this.loadMediaGenerationSettings(settings);
 		return settings;
 	}
 
@@ -1082,10 +1256,63 @@ export class RuntimeService {
 		}
 	}
 
-	private basePlugins(llmPlugin: Plugin): Plugin[] {
+	private async loadAudioSettings(settings: Record<string, string>): Promise<void> {
+		try {
+			const v = await this.vault.vault();
+			for (const key of audioSettingKeys()) {
+				if (await v.has(key)) {
+					const val = await v.get(key);
+					if (typeof val === "string" && val.length > 0) {
+						settings[key] = val;
+						process.env[key] = val;
+					}
+				}
+			}
+		} catch (err) {
+			console.warn("[runtime] audio settings load failed:", err instanceof Error ? err.message : err);
+		}
+	}
+
+	private async loadMediaGenerationSettings(settings: Record<string, string>): Promise<void> {
+		try {
+			const v = await this.vault.vault();
+			for (const key of mediaGenerationSettingKeys()) {
+				if (await v.has(key)) {
+					const val = await v.get(key);
+					if (typeof val === "string" && val.length > 0) {
+						settings[key] = val;
+						process.env[key] = val;
+					}
+				}
+			}
+		} catch (err) {
+			console.warn("[runtime] media generation settings load failed:", err instanceof Error ? err.message : err);
+		}
+	}
+
+	private async llmPluginsForAttempt(attempt: ProviderAttempt): Promise<Plugin[]> {
+		const directKeys = {
+			openai: await this.providerApiKey("openai", "OPENAI_API_KEY"),
+			anthropic: await this.providerApiKey("anthropic", "ANTHROPIC_API_KEY"),
+			openrouter: await this.providerApiKey("openrouter", "OPENROUTER_API_KEY"),
+			elizacloud: await this.providerApiKey("elizacloud", "ELIZAOS_CLOUD_API_KEY"),
+		};
+		const providers: RuntimeProvider[] = [attempt.runtimeProvider];
+		const push = (provider: RuntimeProvider, key: string | null) => {
+			if (!key || providers.includes(provider)) return;
+			providers.push(provider);
+		};
+		push("openrouter", directKeys.openrouter);
+		push("elizacloud", directKeys.elizacloud);
+		push("anthropic", directKeys.anthropic);
+		push("openai", directKeys.openai);
+		return await Promise.all(providers.map((provider) => PROVIDER_PLUGINS[provider]()));
+	}
+
+	private basePlugins(llmPlugins: Plugin[]): Plugin[] {
 		return [
 			sqlPlugin,
-			llmPlugin,
+			...llmPlugins,
 			embeddingOpenAIPlugin,
 			embeddingStubPlugin,
 			vaultToolsPlugin,
@@ -1100,10 +1327,17 @@ export class RuntimeService {
 			cloudAppsPlugin,
 			agentProjectsPlugin,
 			capabilitiesPlugin,
+			detourGoalPlugin,
+			detourDiscordMediaPlugin,
+			detourTelegramMediaPlugin,
+			detourIMessageMediaPlugin,
 			portlessToolsPlugin,
 			agentSkillsPlugin,
 			agentPublicLogPlugin,
 			phantomWalletToolsPlugin,
+			audioGenerationPlugin,
+			mediaGenerationPlugin,
+			desktopControlPlugin,
 			...(agentOrchestratorPlugin ? [agentOrchestratorPlugin] : []),
 			// cronToolsPlugin: replaced by `cron-tools` carrot loaded via the
 			// carrot bridge — see core/index.ts and src/bun/core/carrots/. The
@@ -1203,32 +1437,123 @@ export class RuntimeService {
 			openrouter: await this.providerApiKey("openrouter", "OPENROUTER_API_KEY"),
 			elizacloud: await this.providerApiKey("elizacloud", "ELIZAOS_CLOUD_API_KEY"),
 		};
-		for (const provider of order) {
+		console.log(`[runtime] provider order=[${order.join(",")}] direct-keys: openai=${!!directKeys.openai} anthropic=${!!directKeys.anthropic} openrouter=${!!directKeys.openrouter} elizacloud=${!!directKeys.elizacloud}`);
+		const pushFor = async (provider: ProviderId): Promise<void> => {
 			if (provider === "openai") attempts.push(...await this.openAiAttempts(directKeys.openai));
-			if (provider === "anthropic") attempts.push(...this.anthropicAttempts(directKeys.anthropic));
-			if (provider === "openrouter" && directKeys.openrouter) {
+			else if (provider === "anthropic") attempts.push(...this.anthropicAttempts(directKeys.anthropic));
+			else if (provider === "openrouter" && directKeys.openrouter) {
 				attempts.push(this.apiAttempt("openrouter", "openrouter", "OPENROUTER_API_KEY", directKeys.openrouter, "OpenRouter API key"));
-			}
-			if (provider === "elizacloud" && directKeys.elizacloud) {
+			} else if (provider === "elizacloud" && directKeys.elizacloud) {
 				attempts.push(this.apiAttempt("elizacloud", "elizacloud", "ELIZAOS_CLOUD_API_KEY", directKeys.elizacloud, "ElizaOS Cloud API key"));
+			}
+		};
+		for (const provider of order) await pushFor(provider);
+
+		// Hard fallback: if the active provider + user-configured fallback
+		// chain produced zero usable attempts (e.g. only-Anthropic configured
+		// + OAuth token expired + no refresh), try every other provider that
+		// has a direct API key available. The user almost always prefers a
+		// working agent over a strict no-attempts failure. Surfaces in the
+		// log so the user sees which credential was actually used.
+		if (attempts.length === 0) {
+			const tried = new Set<ProviderId>(order);
+			// ElizaCloud first — typically paid subscription, less rate-limited
+			// than OpenRouter's free tier. Then OpenRouter, then direct API
+			// keys for anthropic/openai if the user keyed one in directly.
+			const directOrder: ProviderId[] = ["elizacloud", "openrouter", "anthropic", "openai"];
+			for (const p of directOrder) {
+				if (tried.has(p)) continue;
+				if (p === "openrouter" && !directKeys.openrouter) continue;
+				if (p === "elizacloud" && !directKeys.elizacloud) continue;
+				if (p === "anthropic" && !directKeys.anthropic) continue;
+				if (p === "openai" && !directKeys.openai) continue;
+				console.log(
+					`[runtime] active provider chain produced no usable attempts; falling back to ${p} (has direct API key in vault)`,
+				);
+				await pushFor(p);
+				if (attempts.length > 0) break;
 			}
 		}
 		return attempts;
 	}
 
 	/**
-	 * The chosen provider, period. There is no fallback chain to other
-	 * providers — pick one, that's what runs. If the user hasn't picked
-	 * one, returns `[]` and `build()` throws "No LLM provider configured".
+	 * The active provider plus any user-configured fallback chain.
 	 *
-	 * Within a single provider we still walk multiple credentials (e.g.
-	 * Codex OAuth then OPENAI_API_KEY for `openai`, or several OAuth
-	 * accounts) — those are equivalent credentials for the same chosen
-	 * backend, not a different provider.
+	 * The active provider is always first — that's the user's primary
+	 * choice and we won't silently bypass it. After that, the runtime
+	 * walks the user-configured `trayapp.providerFallbackOrder` list
+	 * (Settings → Providers), in order, when:
+	 *
+	 *   - the active provider has zero usable credentials at build time, OR
+	 *   - the active credential is currently rate-capped (`usage_limit_reached`
+	 *     recorded on `ProviderQuotaService`), AND `sendMessage` is rebuilding
+	 *     to walk past the cap.
+	 *
+	 * The fallback is EXPLICIT — the user sets the order themselves, sees
+	 * it in Settings, and sees a banner when a rotation happens. fb54849b's
+	 * intent of "no silent walks behind the user's back" is preserved: the
+	 * walk is user-configured, surfaced, and only fires on the specific
+	 * quota-cap case (not on transient 429s, not on 503s, not on timeouts).
+	 *
+	 * Within each provider, multiple credentials (OAuth accounts + vault
+	 * API key) are walked by `openAiAttempts` / `anthropicAttempts` etc.
 	 */
 	private async providerOrder(): Promise<ProviderId[]> {
-		const activeProvider = await this.vault.getActiveProvider();
-		return activeProvider ? [activeProvider] : [];
+		let activeProvider = await this.vault.getActiveProvider();
+		if (!activeProvider) {
+			// vault.activeProvider is only auto-set when the user adds an API
+			// key via setProviderKey(). OAuth-paired accounts (anthropic
+			// subscription, openai codex) don't go through that path — they're
+			// added to @elizaos/agent/auth's account store directly. So a user
+			// who paired OAuth + never typed an API key ends up with usable
+			// credentials in `listAccounts()` and no active marker, and the
+			// runtime previously refused to build despite having a path
+			// forward. Auto-select the first provider that has any
+			// discoverable credential (OAuth > API key) so the runtime boots.
+			activeProvider = await this.autoSelectActiveProviderFromAccounts();
+			if (!activeProvider) return [];
+			console.log(
+				`[runtime] no active provider set in vault; auto-selected ${activeProvider} from discovered OAuth/API credentials for this build`,
+			);
+		}
+		const fallback = await this.vault.getProviderFallbackOrder();
+		const seen = new Set<ProviderId>([activeProvider]);
+		const order: ProviderId[] = [activeProvider];
+		for (const id of fallback) {
+			if (seen.has(id)) continue;
+			seen.add(id);
+			order.push(id);
+		}
+		return order;
+	}
+
+	/**
+	 * Fallback discovery when the vault has no `trayapp.activeProvider`
+	 * marker. Preference order: OAuth subscriptions first (richer context,
+	 * usually pre-paid), then API keys (env-resolved or vault-stored). This
+	 * is BUILD-time only — does not persist into the vault, so the user can
+	 * still pin a different provider in Settings → Providers.
+	 */
+	private async autoSelectActiveProviderFromAccounts(): Promise<ProviderId | null> {
+		const has = (kind: string): boolean => {
+			try {
+				const rows = listAccounts(kind as never) as AccountCredentialRecord[];
+				return Array.isArray(rows) && rows.length > 0;
+			} catch {
+				return false;
+			}
+		};
+		if (has("anthropic-subscription")) return "anthropic";
+		if (has("openai-codex")) return "openai";
+		if (has("anthropic-api")) return "anthropic";
+		if (has("openai-api")) return "openai";
+		// API-key-only providers — check the vault / env directly.
+		if (await this.providerApiKey("openrouter", "OPENROUTER_API_KEY")) return "openrouter";
+		if (await this.providerApiKey("elizacloud", "ELIZAOS_CLOUD_API_KEY")) return "elizacloud";
+		if (await this.providerApiKey("anthropic", "ANTHROPIC_API_KEY")) return "anthropic";
+		if (await this.providerApiKey("openai", "OPENAI_API_KEY")) return "openai";
+		return null;
 	}
 
 	private async providerApiKey(provider: ProviderId, envKey: string): Promise<string | null> {
@@ -1307,7 +1632,39 @@ export class RuntimeService {
 		} catch (err) {
 			console.warn("[runtime] codex OAuth probe failed:", err instanceof Error ? err.message : err);
 		}
-		if (apiKey) attempts.push(this.apiAttempt("openai", "openai", "OPENAI_API_KEY", apiKey, "OpenAI API key"));
+		// Stacked OpenAI API-key accounts (multi-key) — each entry on the
+		// `openai-api` table becomes its own attempt with a stable id, so
+		// the rotation engine can mark just-one-of-them as capped without
+		// nuking the entire provider.
+		try {
+			const apiAccounts = listAccounts("openai-api") as AccountCredentialRecord[];
+			for (const account of apiAccounts) {
+				const key = account.credentials?.access;
+				if (typeof key !== "string" || key.length === 0) continue;
+				attempts.push({
+					id: `openai:api:${account.id}`,
+					label: `OpenAI API key (${account.label})`,
+					providerId: "openai",
+					runtimeProvider: "openai",
+					prepare: () => {
+						process.env.OPENAI_API_KEY = key;
+						delete process.env.CODEX_OAUTH_TOKEN;
+						delete process.env.CODEX_CHATGPT_ACCOUNT_ID;
+						console.log(`[runtime] using openai-api account "${account.label}" (id=${account.id})`);
+					},
+				});
+			}
+		} catch (err) {
+			console.warn("[runtime] openai-api probe failed:", err instanceof Error ? err.message : err);
+		}
+		// Legacy single-slot OPENAI_API_KEY from the vault — kept as the
+		// last OpenAI attempt for back-compat with users who set the key
+		// before multi-key landed. Skips when the same key already appears
+		// in the multi-key table so we don't double-attempt the same value.
+		if (apiKey) {
+			const dedup = attempts.some((a) => a.id.startsWith("openai:api:"));
+			if (!dedup) attempts.push(this.apiAttempt("openai", "openai", "OPENAI_API_KEY", apiKey, "OpenAI API key (primary)"));
+		}
 		return attempts;
 	}
 
@@ -1315,21 +1672,74 @@ export class RuntimeService {
 		const attempts: ProviderAttempt[] = [];
 		try {
 			const anthropicAccounts = listAccounts("anthropic-subscription") as AccountCredentialRecord[];
-			const usable = anthropicAccounts
-				.filter((a) => typeof a.credentials?.access === "string" && a.credentials.access.startsWith("sk-ant-oat"))
-				.filter((a) => {
-					const exp = a.credentials?.expires;
-					return typeof exp !== "number" || exp <= 0 || exp > Date.now();
-				});
+			// Surface expired-OAuth state so user knows why a paired account
+			// isn't being used. Previously this was silent — runtime just
+			// said "no provider configured" with no breadcrumb. The actual
+			// refresh attempt happens inside the `prepare` step (see below)
+			// so it only fires when we're about to use the credential — not
+			// on every build, and not for accounts the user isn't selecting.
+			for (const a of anthropicAccounts) {
+				const c = a.credentials as { access?: unknown; expires?: unknown; refresh?: unknown } | undefined;
+				const exp = c?.expires;
+				if (typeof exp === "number" && exp > 0 && exp <= Date.now()) {
+					const refresh = typeof c?.refresh === "string" ? "(will attempt refresh on use)" : "(no refresh token — re-pair in Settings → Providers)";
+					console.log(
+						`[runtime] anthropic-subscription account "${a.label}" (id=${a.id}) access token expired at ${new Date(exp).toISOString()} ${refresh}`,
+					);
+				}
+			}
+			// Include expired-but-refreshable accounts. The prepare() step
+			// refreshes them just before the runtime initializes, so the
+			// access token in process.env is fresh by the time the LLM
+			// plugin reads it.
+			const usable = anthropicAccounts.filter((a) => {
+				const c = a.credentials;
+				if (typeof c?.access !== "string" || !c.access.startsWith("sk-ant-oat")) return false;
+				const exp = c.expires;
+				if (typeof exp !== "number" || exp <= 0) return true; // never expires
+				if (exp > Date.now()) return true; // not expired yet
+				// Expired — only usable if we have a refresh token to swap in
+				return typeof (c as { refresh?: unknown }).refresh === "string" &&
+					(c as { refresh: string }).refresh.length > 0;
+			});
 			for (const account of usable) {
-				const token = account.credentials!.access;
 				attempts.push({
 					id: `anthropic:oauth:${account.id}`,
 					label: `Anthropic OAuth (${account.label})`,
 					providerId: "anthropic",
 					runtimeProvider: "anthropic",
-					prepare: () => {
-						process.env.ANTHROPIC_API_KEY = token;
+					prepare: async () => {
+						// Refresh JIT if expired. Persist the new access token
+						// back to disk so the next build doesn't re-refresh.
+						const c = account.credentials as {
+							access: string;
+							expires?: number;
+							refresh?: string;
+						};
+						let access = c.access;
+						const exp = c.expires;
+						const expired = typeof exp === "number" && exp > 0 && exp <= Date.now();
+						if (expired && typeof c.refresh === "string" && c.refresh.length > 0) {
+							try {
+								const fresh = await refreshAnthropicToken(c.refresh);
+								access = fresh.access;
+								const updated: AccountCredentialRecord = {
+									...account,
+									credentials: { ...c, ...fresh },
+									updatedAt: Date.now(),
+								};
+								saveAccount(updated);
+								console.log(
+									`[runtime] refreshed anthropic-subscription access token for "${account.label}" (id=${account.id})`,
+								);
+							} catch (err) {
+								console.warn(
+									`[runtime] anthropic OAuth refresh failed for "${account.label}": ${err instanceof Error ? err.message : String(err)} — re-pair in Settings → Providers`,
+								);
+								throw err;
+							}
+						}
+						process.env.ANTHROPIC_API_KEY = access;
 						console.log(`[runtime] using anthropic-subscription account "${account.label}" (id=${account.id})`);
 					},
 				});
@@ -1337,7 +1747,32 @@ export class RuntimeService {
 		} catch (err) {
 			console.warn("[runtime] anthropic OAuth probe failed:", err instanceof Error ? err.message : err);
 		}
-		if (apiKey) attempts.push(this.apiAttempt("anthropic", "anthropic", "ANTHROPIC_API_KEY", apiKey, "Anthropic API key"));
+		// Stacked Anthropic API-key accounts (multi-key). Same pattern as
+		// OpenAI above — each entry is its own attempt with a stable id
+		// so cap rotation can target one key at a time.
+		try {
+			const apiAccounts = listAccounts("anthropic-api") as AccountCredentialRecord[];
+			for (const account of apiAccounts) {
+				const key = account.credentials?.access;
+				if (typeof key !== "string" || key.length === 0) continue;
+				attempts.push({
+					id: `anthropic:api:${account.id}`,
+					label: `Anthropic API key (${account.label})`,
+					providerId: "anthropic",
+					runtimeProvider: "anthropic",
+					prepare: () => {
+						process.env.ANTHROPIC_API_KEY = key;
+						console.log(`[runtime] using anthropic-api account "${account.label}" (id=${account.id})`);
+					},
+				});
+			}
+		} catch (err) {
+			console.warn("[runtime] anthropic-api probe failed:", err instanceof Error ? err.message : err);
+		}
+		if (apiKey) {
+			const dedup = attempts.some((a) => a.id.startsWith("anthropic:api:"));
+			if (!dedup) attempts.push(this.apiAttempt("anthropic", "anthropic", "ANTHROPIC_API_KEY", apiKey, "Anthropic API key (primary)"));
+		}
 		return attempts;
 	}
 }

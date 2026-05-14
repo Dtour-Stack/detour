@@ -22,6 +22,8 @@ import type { OwnerBindService } from "../owner-bind";
 import type { PensieveService } from "../pensieve";
 import type { PortlessService } from "../portless";
 import type { PreviewServerRegistry } from "../preview-server-registry";
+import type { DreamService } from "../dream-service";
+import type { GoalService } from "../goal-service";
 import type { RuntimeService } from "../runtime";
 import type { VaultService } from "../vault";
 
@@ -55,5 +57,7 @@ export type RpcDeps = {
 	ownerBind: OwnerBindService;
 	portless: PortlessService;
 	previewServers: PreviewServerRegistry;
+	goal: GoalService;
+	dream: DreamService;
 	broadcaster: RpcBroadcaster;
 };

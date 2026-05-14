@@ -45,8 +45,8 @@ function resolveBundledIndex(): string | null {
  *   resolveViewUrl("activity") → views://main/activity.html
  *   resolveViewUrl("pensieve") → views://main/pensieve.html
  *   resolveViewUrl("browser")  → views://main/browser.html
- *   resolveViewUrl("channels") → views://main/channels.html
  *   resolveViewUrl("portless") → views://main/portless.html
+ *   resolveViewUrl("gallery")  → views://main/gallery.html
  *
  * Each per-view HTML inlines `window.__detourView = "<view>"` before
  * loading the shared bundle (index.js / index.css), so React's entry

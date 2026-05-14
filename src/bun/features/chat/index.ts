@@ -87,7 +87,7 @@ export const chatFeature: Feature = {
 
 		deps.tray.onIconClicked(() => toggle());
 		deps.tray.addMenuItem(
-			{ label: "Open Chat", action: "chat:open", order: 10 },
+			{ label: "Open Detour", action: "chat:open", order: 10 },
 			() => toggle(),
 		);
 

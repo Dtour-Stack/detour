@@ -5,7 +5,7 @@
  * two stacked panels (Agent + User) with identity headers and live
  * activity lists pulled from the GitHub REST API.
  *
- * Read-only — credential editing lives in Settings → Channels → GitHub.
+ * Read-only; credential editing lives in Messaging connections.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -109,7 +109,7 @@ function GitHubBadge({
 				type="button"
 				className="badge muted"
 				onClick={() => rpc.request.workspaceOpen({}).catch(() => {})}
-				title="Configure in Settings → Channels → GitHub"
+				title="Configure in Messaging connections"
 			>
 				not signed in
 			</button>
@@ -144,7 +144,7 @@ function GitHubFeed({
 	if (!identity) {
 		return (
 			<div className="empty" style={{ padding: 16 }}>
-				No PAT configured for the {role} identity. Wire it in Settings → Channels → GitHub.
+				No PAT configured for the {role} identity. Wire it in Messaging connections.
 			</div>
 		);
 	}

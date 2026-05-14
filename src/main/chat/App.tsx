@@ -1,13 +1,41 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChannelStatus, ThemeChoice } from "../../shared/index";
 import { ChatView } from "./ChatView";
-import { ChannelRail, type HubView } from "./ChannelRail";
+import { ChannelRail, hubChannelId, isHubToolView, type HubToolView, type HubView } from "./ChannelRail";
 import { ChannelView } from "./ChannelView";
 import { SettingsView } from "../settings/SettingsView";
+import { ChannelsView } from "../channels/ChannelsView";
+import { InboxPane } from "./inbox/InboxPane";
+import { GatewayPane } from "./gateway/GatewayPane";
+import { PensieveView } from "../pensieve/PensieveView";
+import { ActivityView } from "../activity/ActivityView";
+import { BrowserView } from "../browser/BrowserView";
+import { WorkspaceView } from "../workspace/WorkspaceView";
+import { GalleryView } from "../gallery/GalleryView";
+import { PortlessView } from "../portless/PortlessView";
 import { CommandPalette } from "../command-palette/CommandPalette";
 import { rpc } from "../rpc";
-import { onUiOpenCommandPalette, onUiOpenSettings } from "../rpc-listeners/chat";
+import {
+	onUiOpenActivity,
+	onUiOpenBrowser,
+	onUiOpenChat,
+	onUiOpenCommandPalette,
+	onUiOpenGallery,
+	onUiOpenPensieve,
+	onUiOpenSettings,
+} from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
+
+function renderToolView(view: HubToolView): React.ReactNode {
+	switch (view) {
+		case "pensieve": return <PensieveView embedded />;
+		case "activity": return <ActivityView embedded />;
+		case "browser": return <BrowserView embedded />;
+		case "workspace": return <WorkspaceView embedded />;
+		case "gallery": return <GalleryView embedded />;
+		case "portless": return <PortlessView embedded />;
+	}
+}
 
 const ACCENT_SWATCHES = [
 	{ name: "Blue", value: "#0a84ff" },
@@ -37,8 +65,15 @@ const PROVIDER_LABELS: Record<string, string> = {
 	anthropic: "Claude",
 };
 
-export function App() {
-	const [drawerOpen, setDrawerOpen] = useState(false);
+type HubDrawer = "settings" | "channels";
+
+type AppProps = {
+	initialView?: HubView;
+	initialDrawer?: HubDrawer | null;
+};
+
+export function App({ initialView = "chat", initialDrawer = null }: AppProps = {}) {
+	const [drawer, setDrawer] = useState<HubDrawer | null>(initialDrawer);
 	const [theme, setTheme] = useState<ThemeChoice>("system");
 	const [accent, setAccent] = useState("#0a84ff");
 	const [appearancePopover, setAppearancePopover] = useState(false);
@@ -46,9 +81,10 @@ export function App() {
 	const [activeProvider, setActiveProvider] = useState<string | null>(null);
 	const [llamaReady, setLlamaReady] = useState<boolean | null>(null);
 	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
-	const [activeView, setActiveView] = useState<HubView>("chat");
+	const [activeView, setActiveView] = useState<HubView>(initialView);
 	const [channels, setChannels] = useState<ChannelStatus[]>([]);
 	const [paletteOpen, setPaletteOpen] = useState(false);
+	const drawerOpen = drawer !== null;
 
 	// Channel rail data — refreshed on a 6s cadence so the icon tone
 	// (online/error/etc) tracks the live channel state.
@@ -80,7 +116,20 @@ export function App() {
 			.catch(() => {
 				/* keep defaults */
 			});
-		const offSettings = onUiOpenSettings(() => setDrawerOpen(true));
+		const offSettings = onUiOpenSettings(() => setDrawer("settings"));
+		const offChat = onUiOpenChat(() => {
+			setActiveView("chat");
+			setDrawer(null);
+		});
+		// uiOpenPensieve / uiOpenActivity / uiOpenBrowser / uiOpenGallery
+		// historically caused separate windows to self-show. Now that all
+		// tool views live inside the hub, route them to setActiveView so
+		// the pet menu / command palette / cron actions deep-link cleanly
+		// into the right hub tab without spawning a second window.
+		const offPensieve = onUiOpenPensieve(() => { setActiveView("pensieve"); setDrawer(null); });
+		const offActivity = onUiOpenActivity(() => { setActiveView("activity"); setDrawer(null); });
+		const offBrowser = onUiOpenBrowser(() => { setActiveView("browser"); setDrawer(null); });
+		const offGallery = onUiOpenGallery(() => { setActiveView("gallery"); setDrawer(null); });
 		const offPalette = onUiOpenCommandPalette(() => setPaletteOpen((x) => !x));
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		// Active provider for the header chip.
@@ -108,6 +157,11 @@ export function App() {
 		const llamaTimer = setInterval(refreshLlama, 4_000);
 		return () => {
 			offSettings();
+			offChat();
+			offPensieve();
+			offActivity();
+			offBrowser();
+			offGallery();
 			offPalette();
 			offProvider();
 			clearInterval(llamaTimer);
@@ -137,7 +191,7 @@ export function App() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape" && drawerOpen) {
 				e.preventDefault();
-				setDrawerOpen(false);
+				setDrawer(null);
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -172,7 +226,8 @@ export function App() {
 		void rpc.request.windowHide({});
 	}
 
-	const activeChannel = channels.find((c) => c.id === activeView);
+	const activeChannelId = hubChannelId(activeView);
+	const activeChannel = activeChannelId ? channels.find((c) => c.id === activeChannelId) : undefined;
 
 	return (
 		<div className="popup-shell hub-shell">
@@ -284,9 +339,9 @@ export function App() {
 					</div>
 					<button
 						type="button"
-						className={drawerOpen ? "icon-btn active" : "icon-btn"}
+						className={drawer === "settings" ? "icon-btn active" : "icon-btn"}
 						title="Configuration"
-						onClick={() => setDrawerOpen((x) => !x)}
+						onClick={() => setDrawer((current) => current === "settings" ? null : "settings")}
 					>
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
 							<circle cx="12" cy="12" r="3" />
@@ -307,29 +362,35 @@ export function App() {
 				</div>
 			</header>
 			<main className="popup-body hub-body">
-				<div className="hub-main">
-					{activeView === "chat" || !activeChannel ? (
-						<ChatView onOpenSettings={() => setDrawerOpen(true)} />
-					) : (
-						<ChannelView channel={activeChannel} />
-					)}
-				</div>
 				<ChannelRail
 					channels={channels}
 					activeView={activeView}
 					onSelectView={setActiveView}
-					onOpenChannelSettings={() => setDrawerOpen(true)}
+					onOpenChannelSettings={() => setDrawer((current) => current === "channels" ? null : "channels")}
 				/>
-				{drawerOpen && (
+				<div className="hub-main">
+					{isHubToolView(activeView) ? (
+						renderToolView(activeView)
+					) : activeView === "inbox" ? (
+						<InboxPane />
+					) : activeView === "feed" ? (
+						<GatewayPane />
+					) : activeChannel ? (
+						<ChannelView channel={activeChannel} />
+					) : (
+						<ChatView onOpenSettings={() => setDrawer("settings")} />
+					)}
+				</div>
+				{drawer && (
 					<div className="drawer">
 						<div className="drawer-header electrobun-webkit-app-region-drag">
-							<span className="popup-title">Configuration</span>
+							<span className="popup-title">{drawer === "channels" ? "Messaging" : "Configuration"}</span>
 							<button
 								type="button"
 								className="icon-btn"
 								title="Close configuration"
 								style={{ WebkitAppRegion: "no-drag" } as any}
-								onClick={() => setDrawerOpen(false)}
+								onClick={() => setDrawer(null)}
 							>
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
 									<line x1="18" y1="6" x2="6" y2="18" />
@@ -338,14 +399,14 @@ export function App() {
 							</button>
 						</div>
 						<div className="drawer-body">
-							<SettingsView />
+							{drawer === "channels" ? <ChannelsView /> : <SettingsView />}
 						</div>
 					</div>
 				)}
 				<CommandPalette
 					open={paletteOpen}
 					onClose={() => setPaletteOpen(false)}
-					onOpenSettings={() => setDrawerOpen(true)}
+					onOpenSettings={() => setDrawer("settings")}
 					onChatCommand={(command) => {
 						// Round-trip through bun so the chat view picks
 						// up the command via its onChatCommandRun

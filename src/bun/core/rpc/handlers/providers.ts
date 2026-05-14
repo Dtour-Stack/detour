@@ -3,7 +3,10 @@ import type {
 	OpenRouterModelsResponse,
 	ProviderId,
 	ProviderInfo,
+	ProviderQuotaCap,
+	ProviderQuotaState,
 } from "../../../../shared/index";
+import { getProviderQuotaService, type QuotaCap } from "../../provider-quota-service";
 import type {
 	CloudAppsList,
 	CloudContainersList,
@@ -14,6 +17,7 @@ import type {
 } from "../../../../shared/rpc/providers";
 import { fetchOpenRouterModels } from "../../openrouter-models";
 import { fetchElizaCloudModels } from "../../elizacloud-models";
+import { saveGeneratedMediaUrl } from "../../generated-media";
 import type { RpcDeps } from "../types";
 
 // ProviderId → AccountCredentialProvider mapping. Anthropic and OpenAI
@@ -52,6 +56,42 @@ async function getElizaCloudApiKey(deps: RpcDeps): Promise<string | null> {
 	if (!(await manager.has("ELIZAOS_CLOUD_API_KEY"))) return null;
 	const key = await manager.get("ELIZAOS_CLOUD_API_KEY");
 	return key && key.length > 0 ? key : null;
+}
+
+function isProviderId(value: string): value is ProviderId {
+	return value === "anthropic" || value === "openai" || value === "openrouter" || value === "elizacloud";
+}
+
+function snapshotQuotaState(): ProviderQuotaState {
+	const service = getProviderQuotaService();
+	const active = service.getActiveCap();
+	const caps: ProviderQuotaCap[] = service.listCaps()
+		.filter((cap: QuotaCap) => isProviderId(cap.providerId))
+		.map((cap: QuotaCap) => ({
+			providerId: cap.providerId as ProviderId,
+			accountId: cap.accountId,
+			accountLabel: cap.accountLabel,
+			planType: cap.planType,
+			resetsAtMs: cap.resetsAtMs,
+			upstreamMessage: cap.upstreamMessage,
+			markedAtMs: cap.markedAtMs,
+			active: active !== null
+				&& active.providerId === cap.providerId
+				&& active.accountId === cap.accountId,
+		}));
+	return { caps };
+}
+
+/**
+ * Wires the ProviderQuotaService's onChange to the RPC broadcaster so
+ * every webview gets a `providerQuotaChanged` push the moment a cap is
+ * recorded or expires. Called once from `buildRpcDeps()` after deps are
+ * assembled — no per-window setup, no per-request polling.
+ */
+export function installProviderQuotaBroadcast(deps: RpcDeps): () => void {
+	return getProviderQuotaService().onChange(() => {
+		deps.broadcaster.broadcast("providerQuotaChanged", snapshotQuotaState());
+	});
 }
 
 /**
@@ -190,6 +230,38 @@ export function providersRequests(deps: RpcDeps) {
 			deps.broadcaster.broadcast("providerChanged", {
 				activeProvider: params.id,
 			});
+			return { ok: true };
+		},
+
+		providersGetQuotaState: async (
+			_params: Record<string, never>,
+		): Promise<ProviderQuotaState> => {
+			return snapshotQuotaState();
+		},
+
+		providersGetFallbackOrder: async (
+			_params: Record<string, never>,
+		): Promise<{ order: ProviderId[] }> => {
+			const order = await deps.vault.getProviderFallbackOrder();
+			return { order };
+		},
+
+		providersSetFallbackOrder: async (
+			params: { order: ProviderId[] },
+		): Promise<{ ok: true }> => {
+			await deps.vault.setProviderFallbackOrder(params.order);
+			// Rebuild so the new fallback chain is live for the next cap
+			// event without waiting for the user to send another message.
+			void deps.runtime
+				.rebuild()
+				.then(() => {
+					deps.broadcaster.broadcast("providerChanged", {
+						activeProvider: deps.runtime.getCurrentProvider(),
+					});
+				})
+				.catch((err) =>
+					console.error("[runtime] rebuild after setFallbackOrder failed:", err),
+				);
 			return { ok: true };
 		},
 
@@ -371,11 +443,23 @@ export function providersRequests(deps: RpcDeps) {
 				if (!data.video?.url) {
 					return { ok: false, error: "ElizaCloud returned no video URL" };
 				}
+				const media = await saveGeneratedMediaUrl({
+					kind: "video",
+					provider: "elizacloud",
+					capability: "video-generation",
+					url: data.video.url,
+					contentType: data.video.content_type,
+					title: "ElizaCloud generated video",
+					prompt: params.prompt,
+					model: params.model,
+				});
 				return {
 					ok: true,
 					id: typeof data.id === "string" ? data.id : "",
 					video: {
-						url: data.video.url,
+						url: media.url,
+						path: media.path,
+						galleryId: media.id,
 						...(typeof data.video.width === "number" ? { width: data.video.width } : {}),
 						...(typeof data.video.height === "number" ? { height: data.video.height } : {}),
 						...(typeof data.video.file_size === "number" ? { fileSize: data.video.file_size } : {}),

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { AddressType, ConnectButton, useDisconnect, usePhantom } from "@phantom/react-sdk";
 import { rpc } from "../rpc";
+import { useDetourPhantomStatus } from "../wallet/DetourPhantomRoot";
 
 type PortalCfg = {
 	appId: string | null;
@@ -19,10 +21,71 @@ async function copyText(label: string, text: string, onDone: (msg: string | null
 	}
 }
 
+function shortAddress(value: string): string {
+	return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-6)}` : value;
+}
+
+function PhantomWalletConnectionCard() {
+	const { addresses, isConnected, isConnecting } = usePhantom();
+	const { disconnect, isDisconnecting, error } = useDisconnect();
+	const [disconnectError, setDisconnectError] = useState<string | null>(null);
+	const solana = addresses.find((address) => address.addressType === AddressType.solana);
+	const ethereum = addresses.find((address) => address.addressType === AddressType.ethereum);
+
+	const onDisconnect = useCallback(async () => {
+		setDisconnectError(null);
+		try {
+			await disconnect();
+		} catch (err) {
+			setDisconnectError(err instanceof Error ? err.message : String(err));
+		}
+	}, [disconnect]);
+
+	return (
+		<section className="card" style={{ marginBottom: 12 }}>
+			<div className="provider-header">
+				<span className="name">Wallet connection</span>
+				{isConnected ? <span className="badge ok">connected</span> : <span className="badge">ready</span>}
+			</div>
+			<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+				<ConnectButton addressType={AddressType.solana} fullWidth />
+				<ConnectButton addressType={AddressType.ethereum} fullWidth />
+			</div>
+			{isConnecting && <p className="hint" style={{ marginBottom: 0 }}>Connecting to Phantom...</p>}
+			{isConnected && (
+				<div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+					<div style={{ display: "grid", gap: 4 }}>
+						<span className="hint">Solana</span>
+						<code style={{ wordBreak: "break-all" }}>{solana ? shortAddress(solana.address) : "not connected"}</code>
+					</div>
+					<div style={{ display: "grid", gap: 4 }}>
+						<span className="hint">EVM</span>
+						<code style={{ wordBreak: "break-all" }}>{ethereum ? shortAddress(ethereum.address) : "not connected"}</code>
+					</div>
+					<button
+						type="button"
+						className="btn small secondary"
+						onClick={() => void onDisconnect()}
+						disabled={isDisconnecting}
+					>
+						{isDisconnecting ? "Disconnecting..." : "Disconnect"}
+					</button>
+				</div>
+			)}
+			{(disconnectError || error) && (
+				<div className="banner error" style={{ marginTop: 12 }}>
+					{disconnectError ?? error?.message}
+				</div>
+			)}
+		</section>
+	);
+}
+
 export function PhantomWalletTab() {
 	const [cfg, setCfg] = useState<PortalCfg | null>(null);
 	const [err, setErr] = useState<string | null>(null);
 	const [toast, setToast] = useState<string | null>(null);
+	const phantomStatus = useDetourPhantomStatus();
 
 	const refresh = useCallback(async () => {
 		try {
@@ -62,6 +125,22 @@ export function PhantomWalletTab() {
 				<div className="banner error" style={{ marginBottom: 12 }}>
 					{err}
 				</div>
+			)}
+
+			{phantomStatus.ready ? (
+				<PhantomWalletConnectionCard />
+			) : (
+				<section className="card" style={{ marginBottom: 12 }}>
+					<div className="provider-header">
+						<span className="name">Wallet connection</span>
+						<span className={phantomStatus.state === "loading" ? "badge" : "badge err"}>
+							{phantomStatus.state === "loading" ? "loading" : "offline"}
+						</span>
+					</div>
+					<p className="hint" style={{ margin: 0 }}>
+						Load App ID and Redirect URL below, then restart Detour if the provider stays offline.
+					</p>
+				</section>
 			)}
 
 			<section className="card" style={{ marginBottom: 12 }}>

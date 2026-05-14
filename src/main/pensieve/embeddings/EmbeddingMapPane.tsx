@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PensieveEmbeddingMap, PensieveEmbeddingPoint } from "../../../shared/index";
 import { rpc } from "../../rpc";
+import { MemoryDetail } from "../memories/MemoryDetail";
 
 const PALETTE = [
 	"var(--accent)",
@@ -33,8 +34,11 @@ export function EmbeddingMapPane() {
 	const [data, setData] = useState<PensieveEmbeddingMap | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [hovered, setHovered] = useState<PensieveEmbeddingPoint | null>(null);
+	const [selected, setSelected] = useState<PensieveEmbeddingPoint | null>(null);
+	const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
 	const [size, setSize] = useState({ w: 800, h: 600 });
 	const containerRef = useRef<HTMLDivElement>(null);
+	const dragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
 
 	useEffect(() => {
 		rpc.request.pensieveEmbeddingMap({})
@@ -86,10 +90,56 @@ export function EmbeddingMapPane() {
 		color: colorByFolder.get(topFolder(p.path)) ?? "var(--fg-muted)",
 	}));
 
+	function zoom(event: React.WheelEvent<SVGSVGElement>) {
+		event.preventDefault();
+		const rect = event.currentTarget.getBoundingClientRect();
+		const mx = event.clientX - rect.left;
+		const my = event.clientY - rect.top;
+		setTransform((current) => {
+			const nextScale = Math.max(0.35, Math.min(5, current.scale * (event.deltaY > 0 ? 0.9 : 1.1)));
+			const worldX = (mx - current.x) / current.scale;
+			const worldY = (my - current.y) / current.scale;
+			return {
+				scale: nextScale,
+				x: mx - worldX * nextScale,
+				y: my - worldY * nextScale,
+			};
+		});
+	}
+
+	function startPan(event: React.PointerEvent<SVGRectElement>) {
+		event.currentTarget.setPointerCapture(event.pointerId);
+		dragRef.current = {
+			pointerId: event.pointerId,
+			x: event.clientX,
+			y: event.clientY,
+			originX: transform.x,
+			originY: transform.y,
+		};
+	}
+
+	function movePan(event: React.PointerEvent<SVGRectElement>) {
+		const drag = dragRef.current;
+		if (!drag || drag.pointerId !== event.pointerId) return;
+		setTransform((current) => ({
+			...current,
+			x: drag.originX + event.clientX - drag.x,
+			y: drag.originY + event.clientY - drag.y,
+		}));
+	}
+
+	function endPan(event: React.PointerEvent<SVGRectElement>) {
+		const drag = dragRef.current;
+		if (drag?.pointerId === event.pointerId) dragRef.current = null;
+	}
+
 	return (
 		<div className="embedding-map">
 			<div className="pensieve-toolbar">
 				<span className="hint">{data.count} embeddings · {data.points[0]?.dim}D · random projection</span>
+				<button type="button" className="link" onClick={() => setTransform({ x: 0, y: 0, scale: 1 })}>
+					Reset view
+				</button>
 				<span style={{ flex: 1 }} />
 				{hovered && (
 					<span className="hint" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11 }}>
@@ -105,30 +155,56 @@ export function EmbeddingMapPane() {
 					</span>
 				))}
 			</div>
-			<div className="embedding-map-canvas" ref={containerRef}>
-				<svg width={w} height={h}>
-					<rect x={0} y={0} width={w} height={h} fill="var(--bg)" />
-					{points.map((p) => (
-						<circle
-							key={p.memoryId}
-							cx={p.px}
-							cy={p.py}
-							r={hovered?.memoryId === p.memoryId ? 7 : 4}
-							fill={p.color}
-							opacity={hovered && hovered.memoryId !== p.memoryId ? 0.35 : 0.9}
-							onMouseEnter={() => setHovered(p)}
-							onMouseLeave={() => setHovered(null)}
-							style={{ cursor: "pointer", transition: "r 0.1s ease" }}
-						>
-							<title>{p.path}\n{p.preview}</title>
-						</circle>
-					))}
-				</svg>
-				{hovered && (
-					<div className="embedding-map-tooltip">
-						<div className="embedding-map-tooltip-path">{hovered.path}</div>
-						<div className="embedding-map-tooltip-preview">{hovered.preview}</div>
-					</div>
+			<div className={selected ? "embedding-map-body with-detail" : "embedding-map-body"}>
+				<div className="embedding-map-canvas" ref={containerRef}>
+					<svg width={w} height={h} onWheel={zoom}>
+						<rect
+							x={0}
+							y={0}
+							width={w}
+							height={h}
+							fill="var(--bg)"
+							onPointerDown={startPan}
+							onPointerMove={movePan}
+							onPointerUp={endPan}
+							onPointerCancel={endPan}
+						/>
+						<g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
+							{points.map((p) => (
+								<circle
+									key={p.memoryId}
+									cx={p.px}
+									cy={p.py}
+									r={hovered?.memoryId === p.memoryId ? 7 : 4}
+									fill={p.color}
+									opacity={hovered && hovered.memoryId !== p.memoryId ? 0.35 : 0.9}
+									stroke={selected?.memoryId === p.memoryId ? "var(--fg)" : "transparent"}
+									strokeWidth={selected?.memoryId === p.memoryId ? 2 : 0}
+									onMouseEnter={() => setHovered(p)}
+									onMouseLeave={() => setHovered(null)}
+									onClick={() => setSelected(p)}
+									style={{ cursor: "pointer", transition: "r 0.1s ease" }}
+								>
+									<title>{p.path}\n{p.preview}</title>
+								</circle>
+							))}
+						</g>
+					</svg>
+					{hovered && (
+						<div className="embedding-map-tooltip">
+							<div className="embedding-map-tooltip-path">{hovered.path}</div>
+							<div className="embedding-map-tooltip-preview">{hovered.preview}</div>
+						</div>
+					)}
+				</div>
+				{selected && (
+					<aside className="embedding-map-detail">
+						<div className="pensieve-toolbar">
+							<strong>Memory</strong>
+							<button type="button" className="link" onClick={() => setSelected(null)}>Close</button>
+						</div>
+						<MemoryDetail memoryId={selected.memoryId} onDelete={() => setSelected(null)} onUpdate={() => {}} />
+					</aside>
 				)}
 			</div>
 		</div>

@@ -27,7 +27,7 @@ import { osRequests } from "./handlers/os";
 import { ownerBindRequests } from "./handlers/owner-bind";
 import { pensieveRequests } from "./handlers/pensieve";
 import { portlessRequests } from "./handlers/portless";
-import { providersRequests } from "./handlers/providers";
+import { providersRequests, installProviderQuotaBroadcast } from "./handlers/providers";
 import { vaultRequests } from "./handlers/vault";
 import { viewMessages } from "./handlers/log";
 import { windowRequests } from "./handlers/window";
@@ -36,6 +36,10 @@ import { githubChannelRequests } from "./handlers/github-channel";
 import { tasksRequests } from "./handlers/tasks";
 import { petsRequests, petsMessages } from "./handlers/pets";
 import { phantomRequests } from "./handlers/phantom";
+import { mediaRequests } from "./handlers/media";
+import { goalsRequests } from "./handlers/goals";
+import { dreamsRequests } from "./handlers/dreams";
+import { promptSlotsRequests } from "./handlers/prompt-slots";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
 type SendFn = (name: string, payload: unknown) => void;
@@ -106,7 +110,11 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...githubChannelRequests(deps),
 			...tasksRequests(deps),
 			...petsRequests(deps),
+			...mediaRequests(deps),
 			...phantomRequests(deps),
+			...goalsRequests(deps),
+			...dreamsRequests(deps),
+			...promptSlotsRequests(deps),
 		},
 		// View→bun fire-and-forget messages (the webview side of the
 		// schema). logWebview routes console/error forwarding into
@@ -120,5 +128,10 @@ export function buildRpcHandlers(deps: RpcDeps) {
 }
 
 export function buildRpcDeps(input: Omit<RpcDeps, "broadcaster">): RpcDeps {
-	return { ...input, broadcaster };
+	const deps: RpcDeps = { ...input, broadcaster };
+	// Subscribe the broadcaster to ProviderQuotaService once per process.
+	// onChange returns an unsubscribe but the registry lives for the
+	// lifetime of the app — wiring is fire-and-forget.
+	installProviderQuotaBroadcast(deps);
+	return deps;
 }

@@ -16,6 +16,7 @@ import type { PortlessSnapshot } from "../../portless";
  *    `<PHANTOM_PORTLESS_HOST>.<portless-tld>` → Vite port; redirect is the portless
  *    base URL (`https://…/` when standalone portless is on :443, else `http://…:port/`).
  * 4. `DETOUR_DEV_URL` only → `${DETOUR_DEV_URL}` origin + `/`.
+ * 5. Bundled app shell → `views://main/index.html`.
  *
  * Portal **Allowed Origins** must include every origin the embedded SDK runs on
  * (see `phantomGetPortalConfig.portalAllowedOrigins`). **Redirect URLs** must include
@@ -23,9 +24,27 @@ import type { PortlessSnapshot } from "../../portless";
  */
 
 const DEFAULT_PHANTOM_PORTLESS_HOST = "detour-phantom";
+const BUNDLED_PHANTOM_REDIRECT_URL = "views://main/index.html";
 
-function parseDetourDevUrl(): URL | null {
-	const raw = process.env.DETOUR_DEV_URL?.trim();
+type PhantomPortalConfigInput = {
+	appIdRaw: string | null | undefined;
+	explicitRedirectUrlRaw: string | null | undefined;
+	detourDevUrlRaw: string | null | undefined;
+	phantomPortlessFqdnRaw: string | null | undefined;
+	phantomPortlessHostRaw: string | null | undefined;
+	portlessSnapshot: PortlessSnapshot;
+	addPortlessRoute: (hostname: string, port: number) => void;
+};
+
+type PhantomPortalConfig = {
+	appId: string | null;
+	redirectUrl: string | null;
+	portalAllowedOrigins: string[];
+	portalRedirectUrls: string[];
+};
+
+function parseDetourDevUrl(rawValue: string | null | undefined): URL | null {
+	const raw = rawValue?.trim();
 	if (!raw) return null;
 	try {
 		const normalized = /^(https?:)?\/\//i.test(raw) ? raw : `http://${raw}`;
@@ -54,8 +73,21 @@ function normalizePhantomRedirectUrl(raw: string): string | null {
 	if (!t) return null;
 	try {
 		const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`);
-		if (!u.pathname || u.pathname === "/") return `${u.origin}/`;
+		if ((u.protocol === "http:" || u.protocol === "https:") && (!u.pathname || u.pathname === "/")) {
+			return `${u.origin}/`;
+		}
 		return u.href;
+	} catch {
+		return null;
+	}
+}
+
+function portalOriginForUrl(raw: string): string | null {
+	try {
+		const u = new URL(raw);
+		if (u.protocol === "http:" || u.protocol === "https:") return u.origin;
+		if (u.host) return `${u.protocol}//${u.host}`;
+		return null;
 	} catch {
 		return null;
 	}
@@ -75,11 +107,8 @@ function buildPortalHints(redirectUrl: string | null, dev: URL | null): {
 } {
 	const origins = new Set<string>();
 	if (redirectUrl) {
-		try {
-			origins.add(new URL(redirectUrl).origin);
-		} catch {
-			/* ignore */
-		}
+		const origin = portalOriginForUrl(redirectUrl);
+		if (origin) origins.add(origin);
 	}
 	if (dev) origins.add(dev.origin);
 	const portalAllowedOrigins = [...origins].slice(0, 10);
@@ -87,50 +116,60 @@ function buildPortalHints(redirectUrl: string | null, dev: URL | null): {
 	return { portalAllowedOrigins, portalRedirectUrls };
 }
 
-function resolvePhantomRedirectUrl(deps: RpcDeps): string | null {
-	const explicitRaw = process.env.PHANTOM_CONNECT_REDIRECT_URL?.trim();
+function resolvePhantomRedirectUrl(input: PhantomPortalConfigInput): { redirectUrl: string; dev: URL | null } {
+	const explicitRaw = input.explicitRedirectUrlRaw?.trim();
 	if (explicitRaw) {
-		return normalizePhantomRedirectUrl(explicitRaw);
+		const explicit = normalizePhantomRedirectUrl(explicitRaw);
+		if (!explicit) throw new Error("Invalid PHANTOM_CONNECT_REDIRECT_URL");
+		return { redirectUrl: explicit, dev: parseDetourDevUrl(input.detourDevUrlRaw) };
 	}
 
-	const dev = parseDetourDevUrl();
-	const snap = deps.portless.snapshot();
-	const fqdn = process.env.PHANTOM_PORTLESS_FQDN?.trim().toLowerCase();
+	const dev = parseDetourDevUrl(input.detourDevUrlRaw);
+	const snap = input.portlessSnapshot;
+	const fqdn = input.phantomPortlessFqdnRaw?.trim().toLowerCase();
 	const sub =
-		(process.env.PHANTOM_PORTLESS_HOST ?? DEFAULT_PHANTOM_PORTLESS_HOST).trim().toLowerCase() ||
+		(input.phantomPortlessHostRaw ?? DEFAULT_PHANTOM_PORTLESS_HOST).trim().toLowerCase() ||
 		DEFAULT_PHANTOM_PORTLESS_HOST;
 
 	if (dev && !isLocalDevHost(dev.hostname)) {
-		return normalizePhantomRedirectUrl(`${dev.origin}/`);
+		return { redirectUrl: normalizePhantomRedirectUrl(`${dev.origin}/`) ?? `${dev.origin}/`, dev };
 	}
 
 	if (dev && snap.running) {
 		const fq = fqdn || `${sub}.${snap.tld}`;
 		const targetPort = devTargetPort(dev);
-		deps.portless.addRoute(fq, targetPort, { force: true });
-		return normalizePhantomRedirectUrl(portlessProxyBaseUrl(snap, fq));
+		input.addPortlessRoute(fq, targetPort);
+		return { redirectUrl: normalizePhantomRedirectUrl(portlessProxyBaseUrl(snap, fq)) ?? portlessProxyBaseUrl(snap, fq), dev };
 	}
 
 	if (dev) {
-		return normalizePhantomRedirectUrl(`${dev.origin}/`);
+		return { redirectUrl: normalizePhantomRedirectUrl(`${dev.origin}/`) ?? `${dev.origin}/`, dev };
 	}
 
-	return null;
+	return { redirectUrl: BUNDLED_PHANTOM_REDIRECT_URL, dev: null };
+}
+
+export function resolvePhantomPortalConfig(input: PhantomPortalConfigInput): PhantomPortalConfig {
+	const appId = input.appIdRaw?.trim() || null;
+	const { redirectUrl, dev } = resolvePhantomRedirectUrl(input);
+	const { portalAllowedOrigins, portalRedirectUrls } = buildPortalHints(redirectUrl, dev);
+	return { appId, redirectUrl, portalAllowedOrigins, portalRedirectUrls };
 }
 
 export function phantomRequests(deps: RpcDeps) {
 	return {
-		phantomGetPortalConfig: async (): Promise<{
-			appId: string | null;
-			redirectUrl: string | null;
-			portalAllowedOrigins: string[];
-			portalRedirectUrls: string[];
-		}> => {
-			const appId = process.env.PHANTOM_CONNECT_APP_ID?.trim() || null;
-			const dev = parseDetourDevUrl();
-			const redirectUrl = resolvePhantomRedirectUrl(deps);
-			const { portalAllowedOrigins, portalRedirectUrls } = buildPortalHints(redirectUrl, dev);
-			return { appId, redirectUrl, portalAllowedOrigins, portalRedirectUrls };
+		phantomGetPortalConfig: async (): Promise<PhantomPortalConfig> => {
+			return resolvePhantomPortalConfig({
+				appIdRaw: process.env.PHANTOM_CONNECT_APP_ID,
+				explicitRedirectUrlRaw: process.env.PHANTOM_CONNECT_REDIRECT_URL,
+				detourDevUrlRaw: process.env.DETOUR_DEV_URL,
+				phantomPortlessFqdnRaw: process.env.PHANTOM_PORTLESS_FQDN,
+				phantomPortlessHostRaw: process.env.PHANTOM_PORTLESS_HOST,
+				portlessSnapshot: deps.portless.snapshot(),
+				addPortlessRoute: (hostname, port) => {
+					deps.portless.addRoute(hostname, port, { force: true });
+				},
+			});
 		},
 	};
 }

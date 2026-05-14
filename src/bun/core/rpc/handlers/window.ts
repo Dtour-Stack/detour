@@ -15,7 +15,7 @@ import type { WindowOpenTarget } from "../../../../shared/index";
  *
  * windowOpen broadcasts a uiOpen* message keyed by target. Each
  * window's view-side listener handles the message relevant to it
- * (chat window toggles its drawer for settings/channels; pensieve
+ * (chat window toggles its drawer for settings; pensieve
  * window shows itself on uiOpenPensieve; etc.). Targets without a
  * dedicated window in the current build (e.g. agents, pet) still
  * broadcast — those features will pick the message up once they
@@ -28,10 +28,10 @@ const WINDOW_OPEN_MESSAGE: Record<WindowOpenTarget, keyof import("../../../../sh
 	settings: "uiOpenSettings",
 	pensieve: "uiOpenPensieve",
 	activity: "uiOpenActivity",
-	channels: "uiOpenChannels",
 	browser: "uiOpenBrowser",
 	agents: "uiOpenAgents",
 	pet: "uiOpenPet",
+	gallery: "uiOpenGallery",
 };
 
 export function windowRequests(deps: RpcDeps) {

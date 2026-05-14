@@ -16,6 +16,12 @@ import type {
 	ActivityTrajectoryStepSummary,
 } from "../../shared/index";
 import { rpc } from "../rpc";
+import {
+	extractPrompts,
+	extractSimpleView,
+	type TrajectoryPromptEntry,
+	type TrajectorySimpleView,
+} from "./trajectory-extractors";
 
 type StageId = "input" | "should_respond" | "plan" | "actions" | "evaluators";
 type Trajectory = NonNullable<ActivityTrajectoryDetail["trajectory"]>;
@@ -91,6 +97,7 @@ export function TrajectoryDetail({
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [activeStage, setActiveStage] = useState<StageId | null>(null);
+	const [viewMode, setViewMode] = useState<"simple" | "prompts" | "full">("simple");
 
 	useEffect(() => {
 		let cancelled = false;
@@ -144,23 +151,196 @@ export function TrajectoryDetail({
 	}
 
 	const t = detail.trajectory;
+	const simple = viewMode === "simple" ? extractSimpleView(detail) : null;
+	const prompts = viewMode === "prompts" ? extractPrompts(detail) : [];
 
 	return (
 		<div className="trajectory-detail">
 			<TrajectoryHeader trajectory={t} onClose={onClose} onExport={exportThis} />
 			<TrajectorySummary detail={detail} trajectory={t} />
-			{detail.identity && <IdentityBlock identity={detail.identity} />}
-			<TrajectoryPipeline
-				status={t.status}
-				stageCounts={stageCounts}
-				activeStage={activeStage}
-				onStageChange={setActiveStage}
-			/>
-			<TrajectoryMetricSections detail={detail} />
-			<RagTraceSection providerAccesses={detail.providerAccesses} />
-			<ProviderAccessSection providerAccesses={detail.providerAccesses} />
-			<ActionSection actions={detail.actions} />
-			<LlmCallsSection calls={filteredCalls} total={detail.llmCalls.length} />
+			<TrajectoryViewModeTabs mode={viewMode} onChange={setViewMode} />
+			{viewMode === "simple" && simple && <TrajectorySimpleBlock view={simple} />}
+			{viewMode === "prompts" && <TrajectoryPromptsBlock prompts={prompts} />}
+			{viewMode === "full" && (
+				<>
+					{detail.identity && <IdentityBlock identity={detail.identity} />}
+					<TrajectoryPipeline
+						status={t.status}
+						stageCounts={stageCounts}
+						activeStage={activeStage}
+						onStageChange={setActiveStage}
+					/>
+					<TrajectoryMetricSections detail={detail} />
+					<RagTraceSection providerAccesses={detail.providerAccesses} />
+					<ProviderAccessSection providerAccesses={detail.providerAccesses} />
+					<ActionSection actions={detail.actions} />
+					<LlmCallsSection calls={filteredCalls} total={detail.llmCalls.length} />
+				</>
+			)}
+		</div>
+	);
+}
+
+function TrajectoryViewModeTabs({
+	mode,
+	onChange,
+}: {
+	mode: "simple" | "prompts" | "full";
+	onChange: (next: "simple" | "prompts" | "full") => void;
+}) {
+	const tabs: Array<{ id: "simple" | "prompts" | "full"; label: string; hint: string }> = [
+		{ id: "simple", label: "Simple", hint: "Request → reply → thinking. No prompts, no plumbing." },
+		{ id: "prompts", label: "Prompts", hint: "Just the system + user prompts that went into each LLM call." },
+		{ id: "full", label: "Full trace", hint: "Everything: stages, providers, actions, LLM calls, metrics." },
+	];
+	return (
+		<div className="trajectory-view-tabs" role="tablist">
+			{tabs.map((t) => (
+				<button
+					key={t.id}
+					type="button"
+					role="tab"
+					aria-selected={mode === t.id}
+					className={mode === t.id ? "trajectory-view-tab active" : "trajectory-view-tab"}
+					onClick={() => onChange(t.id)}
+					title={t.hint}
+				>
+					{t.label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function TrajectorySimpleBlock({ view }: { view: TrajectorySimpleView }) {
+	const [showThinking, setShowThinking] = useState(true);
+	const [showActions, setShowActions] = useState(true);
+	return (
+		<div className="trajectory-simple">
+			<div className="trajectory-simple-card">
+				<div className="trajectory-simple-label">User asked</div>
+				<div className="trajectory-simple-body">
+					{view.request ?? <span className="hint">(no request text captured)</span>}
+				</div>
+			</div>
+			<div className="trajectory-simple-card">
+				<div className="trajectory-simple-label">Agent replied</div>
+				<div className="trajectory-simple-body">
+					{view.reply ?? <span className="hint">(no reply captured — see Full trace for raw steps)</span>}
+				</div>
+			</div>
+			{view.actionsTaken.length > 0 && (
+				<div className="trajectory-simple-card">
+					<div className="trajectory-simple-label-row">
+						<div className="trajectory-simple-label">Actions taken ({view.actionsTaken.length})</div>
+						<button
+							type="button"
+							className="link"
+							onClick={() => setShowActions((s) => !s)}
+						>
+							{showActions ? "hide" : "show"}
+						</button>
+					</div>
+					{showActions && (
+						<ul className="trajectory-simple-actions">
+							{view.actionsTaken.map((a, i) => (
+								<li key={`${a.stepNumber}-${i}`}>
+									<span className="trajectory-simple-action-name">{a.name}</span>
+									{typeof a.success === "boolean" && (
+										<span className={`badge ${a.success ? "ok" : "err"}`}>
+											{a.success ? "ok" : "failed"}
+										</span>
+									)}
+									{a.resultPreview && (
+										<span className="trajectory-simple-action-preview">{a.resultPreview}</span>
+									)}
+								</li>
+							))}
+						</ul>
+					)}
+				</div>
+			)}
+			{view.thinking.length > 0 && (
+				<div className="trajectory-simple-card">
+					<div className="trajectory-simple-label-row">
+						<div className="trajectory-simple-label">Thinking ({view.thinking.length} step{view.thinking.length === 1 ? "" : "s"})</div>
+						<button
+							type="button"
+							className="link"
+							onClick={() => setShowThinking((s) => !s)}
+						>
+							{showThinking ? "hide" : "show"}
+						</button>
+					</div>
+					{showThinking && (
+						<ol className="trajectory-simple-thinking">
+							{view.thinking.map((t, i) => (
+								<li key={`${t.stepNumber}-${i}`}>
+									<div className="trajectory-simple-thinking-meta">
+										step {t.stepNumber}
+										{t.stepType ? ` · ${t.stepType}` : ""}
+									</div>
+									<div className="trajectory-simple-thinking-text">{t.text}</div>
+								</li>
+							))}
+						</ol>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function TrajectoryPromptsBlock({ prompts }: { prompts: TrajectoryPromptEntry[] }) {
+	if (prompts.length === 0) {
+		return <div className="empty">No prompts recorded on this trajectory.</div>;
+	}
+	return (
+		<div className="trajectory-prompts">
+			<div className="trajectory-prompts-hint">
+				Each card is one LLM call. Copy a prompt to use as a template starting point in
+				Pensieve → Templates.
+			</div>
+			{prompts.map((p) => (
+				<details key={p.callId} className="trajectory-prompt-card" open={p.stepNumber <= 2}>
+					<summary>
+						<span className="trajectory-prompt-step">step {p.stepNumber}</span>
+						{p.stepType && <span className="badge muted">{p.stepType}</span>}
+						{p.purpose && <span className="badge muted">{p.purpose}</span>}
+						<span className="trajectory-prompt-model">{p.model}</span>
+					</summary>
+					{p.systemPrompt && (
+						<PromptBlock label="System prompt" body={p.systemPrompt} />
+					)}
+					{p.userPrompt && (
+						<PromptBlock label="User prompt" body={p.userPrompt} />
+					)}
+					{p.response && (
+						<PromptBlock label="Model response" body={p.response} />
+					)}
+				</details>
+			))}
+		</div>
+	);
+}
+
+function PromptBlock({ label, body }: { label: string; body: string }) {
+	const copy = () => {
+		try {
+			void navigator.clipboard.writeText(body);
+		} catch {
+			/* clipboard unavailable — ignore */
+		}
+	};
+	return (
+		<div className="trajectory-prompt-block">
+			<div className="trajectory-prompt-block-head">
+				<span className="trajectory-prompt-block-label">{label}</span>
+				<button type="button" className="link" onClick={copy}>
+					copy
+				</button>
+			</div>
+			<pre className="trajectory-prompt-block-body">{body}</pre>
 		</div>
 	);
 }

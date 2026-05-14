@@ -121,6 +121,30 @@ export function authRequests(deps: RpcDeps) {
 			return { ok: true };
 		},
 
+		authAddApiKey: async (params: {
+			provider: "openai-api" | "anthropic-api" | "deepseek-api" | "zai-api" | "moonshot-api";
+			label: string;
+			key: string;
+		}): Promise<{ ok: true; accountId: string }> => {
+			const { id } = deps.auth.addApiKeyAccount({
+				provider: params.provider,
+				label: params.label,
+				key: params.key,
+			});
+			// Rebuild so the new key is live for the next call without
+			// requiring a manual provider switch. Broadcast to refresh
+			// any open Settings tabs.
+			void deps.runtime
+				.rebuild()
+				.then(() => {
+					deps.broadcaster.broadcast("providerChanged", {
+						activeProvider: deps.runtime.getCurrentProvider(),
+					});
+				})
+				.catch((err) => console.error("[runtime] rebuild after addApiKey failed:", err));
+			return { ok: true, accountId: id };
+		},
+
 		authStartFlow: async (params: {
 			provider: "anthropic-subscription" | "openai-codex";
 			label: string;

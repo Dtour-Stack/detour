@@ -27,10 +27,12 @@ export function createKernel(opts: {
 	// what triggers the browser window to open when an agent calls
 	// `enqueueAndWait`. `browserCommand` is view-only and ignored here.
 	registerWindow((name) => {
+		if (name === "uiOpenChat") events.emit("ui:open-chat", {});
 		if (name === "uiOpenBrowser") events.emit("ui:open-browser", {});
 		if (name === "uiOpenWorkspace") events.emit("ui:open-workspace", {});
 		if (name === "uiOpenPortless") events.emit("ui:open-portless", {});
 		if (name === "uiOpenPet") events.emit("ui:open-pet", {});
+		if (name === "uiOpenGallery") events.emit("ui:open-gallery", {});
 	});
 
 	// Tray status poller — surfaces "● Agent ready (Codex + local embeds)"

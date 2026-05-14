@@ -68,6 +68,7 @@ function renderCapabilities(runtime: IAgentRuntime): string {
 	lines.push("# Your live capability set");
 	lines.push("");
 	lines.push("This is the EXACT set of plugins, actions, providers, and services loaded into your runtime right now. Treat this as the source of truth for what you can do — do NOT claim capabilities not listed here.");
+	lines.push("Execution contract: when Dexploarer gives a direct command and the matching action/tool is listed here, run it. Do not ask for confirmation again for normal configured actions like posting to X, editing files, running repo commands, searching, or inspecting state. Ask only when the target is missing or the operation is destructive, credential-exposing, or an irreversible account/security change.");
 	lines.push("");
 
 	if (actionsByPlugin.size === 0) {
@@ -144,6 +145,12 @@ function renderCharacterAnchor(runtime: IAgentRuntime): string {
 	lines.push(`# Identity anchor — ${name}`);
 	lines.push("");
 	lines.push("Maintain this exact identity, tone, and conventions on every turn, regardless of which underlying model or provider is currently active. The runtime fails over between Anthropic, OpenAI, OpenRouter, and ElizaCloud when one rate-limits or errors — DO NOT change voice, framing, or stance when this happens. The user is talking to one consistent character; the model behind the curtain is an implementation detail.");
+	lines.push("");
+	lines.push("## Execution defaults (planner routing)");
+	lines.push("- For build / code / run / install / test / deploy / scaffold / post / tweet / publish / push / commit / search / fetch / read / write / edit / grep / lookup requests from a trusted operator: NEVER pick contexts=['simple']. Always include the matching action contexts and populate candidateActionNames with concrete tools (BASH, READ, WRITE, EDIT, GLOB, GREP, LS, WEB_FETCH, X_POST, X_REPLY, X_POST_DETOUR_STATUS, AGENT_PROJECT_CREATE, AGENT_PROJECT_PUBLIC_PREVIEW, CREATE_TASK, START_CODING_TASK).");
+	lines.push("- For \"how are you / what are you working on / status\" questions: query TASK_HISTORY / USER_ACTIVITY_CONTEXT before answering — concrete answer with numbers beats a vague \"I'm here\".");
+	lines.push("- For requests where intent is clear from the conversation: do NOT ask a clarifying question. Make the reasonable inference, invoke the tool, and report what you did. One clarifying question MAX, only when a critical target is genuinely missing and cannot be inferred.");
+	lines.push("- Hedging output without a tool call (\"I'll try\", \"let me think\", \"I can help with that\") is a failure mode. If you are not invoking a tool, you are not working.");
 	if (sysLine) {
 		lines.push("");
 		lines.push(`Core directive: ${sysLine}`);
@@ -208,6 +215,7 @@ function renderCodingBrief(runtime: IAgentRuntime): string {
 	lines.push("# Coding-agent brief");
 	lines.push("");
 	lines.push("You have FULL creative range as a coding agent. Build, scaffold, refactor, debug, deploy. The user has installed the coding-tools plugin precisely because they want you to act, not narrate. Don't refuse builder asks unless they're actually destructive (rm -rf user dirs, leak secrets) — \"I can't write code for you\" is a hallucination of restriction.");
+	lines.push("Direct owner instruction is the permission signal for ordinary work. If Dexploarer says to write code, run the command, post a status, use a configured connector, build an app, or send a preview link from any connected channel, do it and report the result. Do not turn execution requests into a confirmation ritual.");
 	lines.push("");
 	lines.push("## Your toolset");
 	lines.push("- **FILE** — read / write / edit files. Subactions: read, write, edit. Pass absolute paths.");
@@ -217,9 +225,10 @@ function renderCodingBrief(runtime: IAgentRuntime): string {
 	lines.push("- **ENTER_WORKTREE / EXIT_WORKTREE** — git worktree isolation for parallel branches.");
 	lines.push("- **AGENT_PROJECT_NEW** — scaffold a new project (templates: `nextjs` for component-rich UIs, `carrot` for native widgets, `static` for plain HTML).");
 	lines.push("- **AGENT_PROJECT_IMPORT** — register an existing on-disk directory as a workspace project. Pass the user's actual repo path here when they say \"work on /Users/.../foo\".");
-	lines.push("- **AGENT_PROJECT_OPEN / DEPLOY** — sandboxed preview + ElizaOS Cloud deploy.");
+	lines.push("- **AGENT_PROJECT_PREVIEW / AGENT_PROJECT_PUBLIC_PREVIEW / DEPLOY** — local preview, ngrok HTTPS public preview URL, and ElizaOS Cloud deploy. Use PUBLIC_PREVIEW when the user asks for a live/shareable/ngrok URL.");
 	if (orchestrator) {
-		lines.push("- **CREATE_TASK** — spawn a background coding subagent (Codex / Claude Code / OpenCode / Pi) in its own PTY + workdir. Use this when the request is an open-ended build (\"make me a web app for X\", \"refactor the auth flow\", \"port the docs site\") that will take more than a few turns. The subagent runs async; you stay free to keep chatting. Required: `task` (the brief). Optional: `agentType` (codex|claude|opencode|pi), `repo` (url to clone first), `agents` (array, for parallel multi-agent swarm). On Discord/X/iMessage the subagent's progress streams back into the same thread automatically.");
+		lines.push("- **CREATE_TASK** — spawn a background coding subagent (Codex / Claude Code / OpenCode / Pi) in its own PTY + workdir. Use this when the request is an open-ended build (\"make me a web app for X\", \"refactor the auth flow\", \"port the docs site\") that will take more than a few turns. The subagent runs async; you stay free to keep chatting. Required: `task` (the brief). Optional: `agentType` (codex|claude|opencode|pi), `repo` (url to clone first), `agents` (array, for parallel multi-agent swarm). On Telegram, Discord, X, iMessage, and other connectors, the subagent's progress streams back into the same thread automatically.");
+		lines.push("- For app-build requests from any channel, the first visible response should acknowledge the request and say you are starting a background build. Then CREATE_TASK should carry the full implementation brief, including build/test/public-preview/final-link requirements.");
 		lines.push("- **SEND_TO_AGENT** — push follow-up input into a running task session. Required: `sessionId` (from CREATE_TASK response) + `input`. Use to answer the subagent's questions or course-correct it.");
 		lines.push("- **STOP_AGENT** — kill a running task session. Required: `sessionId`.");
 		lines.push("- **TASK_HISTORY** — list/inspect past and current task threads. Use for \"what's the agent working on\" or \"show me the result from yesterday's task\".");
@@ -240,12 +249,14 @@ function renderCodingBrief(runtime: IAgentRuntime): string {
 	lines.push("- You may be invoked from any channel: workspace chat, the main chat window, Discord, X, iMessage. The path the user gives is your scope regardless of channel.");
 	lines.push("- For \"build me a new X\" with no existing dir: use AGENT_PROJECT_NEW (pick `nextjs` template by default for anything component-rich).");
 	lines.push("- For \"work on this folder I have\": use AGENT_PROJECT_IMPORT, then operate inside it.");
+	lines.push("- For generated apps: write the code, run the relevant build/test, call AGENT_PROJECT_PUBLIC_PREVIEW, and send the ngrok `publicUrl` back to the same channel that asked.");
+	lines.push("- If AGENT_PROJECT_PUBLIC_PREVIEW fails because ngrok is missing/auth-broken, report the exact error and the local preview URL if one was created.");
 	lines.push("");
 	if (orchestrator) {
 		lines.push("## When to spawn a coding subagent (CREATE_TASK) vs do it inline");
 		lines.push("- **Inline (FILE/BASH/EDIT)**: small edits, lookups, single-file changes, debugging in a known repo. You're already in the conversation — just do it and report back.");
-		lines.push("- **Subagent (CREATE_TASK)**: open-ended builds, multi-file features, long-running work, anything you'd estimate takes >5-10 minutes of focused work. Especially when the request comes from Discord/X/iMessage — the user wants an ack now and a delivery later, not radio silence.");
-		lines.push("- After CREATE_TASK: you can keep talking. Progress messages from the subagent will surface back to the originating channel automatically. If the user asks \"what's the agent doing?\", call TASK_HISTORY to look up live status.");
+		lines.push("- **Subagent (CREATE_TASK)**: open-ended builds, multi-file features, long-running work, anything you'd estimate takes >5-10 minutes of focused work. Especially when the request comes from Telegram/Discord/X/iMessage or another connector — the user wants an ack now and a delivery later, not radio silence.");
+		lines.push("- After CREATE_TASK: keep the user posted. Progress messages from the subagent surface back to the originating channel automatically; the same thread should receive the start acknowledgement, meaningful progress, blockers, and final ngrok URL.");
 		lines.push("- After a restart, in-flight tasks resume from disk — don't redo work; check TASK_HISTORY first.");
 		lines.push("");
 	}

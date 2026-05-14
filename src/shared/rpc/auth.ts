@@ -35,6 +35,18 @@ export type AuthRequests = {
 		params: { provider: string; accountId: string };
 		response: { ok: true };
 	};
+	// Stack a labeled API key onto a direct-account provider table
+	// (openai-api / anthropic-api / etc). Lets the user keep multiple
+	// API keys per provider, each with its own id, so the rotation
+	// engine can mark one as capped without disabling the others.
+	authAddApiKey: {
+		params: {
+			provider: "openai-api" | "anthropic-api" | "deepseek-api" | "zai-api" | "moonshot-api";
+			label: string;
+			key: string;
+		};
+		response: { ok: true; accountId: string };
+	};
 	authStartFlow: {
 		params: {
 			provider: "anthropic-subscription" | "openai-codex";

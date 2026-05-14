@@ -18,6 +18,8 @@ const DEFAULT_AGENT: AgentConfig = {
 	mode: "read",
 	allowedPrefixes: [],
 	deniedPrefixes: [],
+	browserUse: true,
+	computerUse: false,
 	elevatedCoding: false,
 };
 
@@ -29,6 +31,7 @@ const DEFAULT_MODELS: ModelConfig = {
 	openRouterTextSmall: "openrouter/free",
 	openRouterEmbedding: "openai/text-embedding-3-small",
 	openRouterImage: "google/gemini-2.5-flash-image",
+	openRouterVideo: "google/veo-3.1",
 	openRouterVision: "openrouter/free",
 	// ElizaOS Cloud model defaults — empty strings let the plugin fall
 	// back to its own defaults if the user hasn't overridden them.
@@ -38,6 +41,8 @@ const DEFAULT_MODELS: ModelConfig = {
 	elizaCloudNano: "",
 	elizaCloudMega: "",
 	elizaCloudResponseHandler: "",
+	elizaCloudImage: "google/gemini-2.5-flash-image",
+	elizaCloudVideo: "fal-ai/veo3",
 };
 
 const DEFAULT_WINDOW: WindowConfig = {
@@ -95,6 +100,8 @@ export class ConfigService {
 			mode: this.parseMode(raw.mode),
 			allowedPrefixes: Array.isArray(raw.allowedPrefixes) ? raw.allowedPrefixes.filter((p: unknown): p is string => typeof p === "string") : [],
 			deniedPrefixes: Array.isArray(raw.deniedPrefixes) ? raw.deniedPrefixes.filter((p: unknown): p is string => typeof p === "string") : [],
+			browserUse: typeof raw.browserUse === "boolean" ? raw.browserUse : DEFAULT_AGENT.browserUse,
+			computerUse: typeof raw.computerUse === "boolean" ? raw.computerUse : DEFAULT_AGENT.computerUse,
 			elevatedCoding: typeof raw.elevatedCoding === "boolean" ? raw.elevatedCoding : false,
 		};
 		return next;
@@ -106,6 +113,8 @@ export class ConfigService {
 			mode: this.parseMode(next.mode),
 			allowedPrefixes: (next.allowedPrefixes ?? []).map(String),
 			deniedPrefixes: (next.deniedPrefixes ?? []).map(String),
+			browserUse: next.browserUse !== false,
+			computerUse: !!next.computerUse,
 			elevatedCoding: !!next.elevatedCoding,
 		};
 		await this.writeJson(KEY_AGENT, sanitized);
@@ -125,6 +134,9 @@ export class ConfigService {
 		// codingBriefProvider reads this on every turn.
 		if (cfg.elevatedCoding) process.env.DETOUR_ELEVATED_CODING = "true";
 		else delete process.env.DETOUR_ELEVATED_CODING;
+		process.env.DETOUR_BROWSER_USE_ENABLED = cfg.browserUse === false ? "false" : "true";
+		if (cfg.computerUse) process.env.DETOUR_COMPUTER_USE_ENABLED = "true";
+		else delete process.env.DETOUR_COMPUTER_USE_ENABLED;
 	}
 
 	// ── Agent character ────────────────────────────────────────────────
@@ -154,6 +166,7 @@ export class ConfigService {
 			openRouterTextSmall: modelString(raw, "openRouterTextSmall"),
 			openRouterEmbedding: modelString(raw, "openRouterEmbedding"),
 			openRouterImage: modelString(raw, "openRouterImage"),
+			openRouterVideo: modelString(raw, "openRouterVideo"),
 			openRouterVision: modelString(raw, "openRouterVision"),
 			elizaCloudLarge: modelString(raw, "elizaCloudLarge"),
 			elizaCloudMedium: modelString(raw, "elizaCloudMedium"),
@@ -161,6 +174,8 @@ export class ConfigService {
 			elizaCloudNano: modelString(raw, "elizaCloudNano"),
 			elizaCloudMega: modelString(raw, "elizaCloudMega"),
 			elizaCloudResponseHandler: modelString(raw, "elizaCloudResponseHandler"),
+			elizaCloudImage: modelString(raw, "elizaCloudImage"),
+			elizaCloudVideo: modelString(raw, "elizaCloudVideo"),
 		};
 	}
 
@@ -177,6 +192,7 @@ export class ConfigService {
 		process.env.OPENROUTER_MODEL_TEXT_SMALL = cfg.openRouterTextSmall;
 		process.env.OPENROUTER_MODEL_EMBEDDING = cfg.openRouterEmbedding;
 		process.env.OPENROUTER_MODEL_IMAGE = cfg.openRouterImage;
+		process.env.OPENROUTER_MODEL_VIDEO = cfg.openRouterVideo;
 		process.env.OPENROUTER_MODEL_VISION = cfg.openRouterVision;
 		// ElizaOS Cloud — env-var names match the plugin's reader
 		// (eliza/plugins/plugin-elizacloud/utils/config.ts).
@@ -186,6 +202,8 @@ export class ConfigService {
 		this.applyElizaCloudEnv("ELIZAOS_CLOUD_NANO_MODEL", cfg.elizaCloudNano);
 		this.applyElizaCloudEnv("ELIZAOS_CLOUD_MEGA_MODEL", cfg.elizaCloudMega);
 		this.applyElizaCloudEnv("ELIZAOS_CLOUD_RESPONSE_HANDLER_MODEL", cfg.elizaCloudResponseHandler);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_IMAGE_GENERATION_MODEL", cfg.elizaCloudImage);
+		this.applyElizaCloudEnv("ELIZAOS_CLOUD_VIDEO_GENERATION_MODEL", cfg.elizaCloudVideo);
 	}
 
 	private applyElizaCloudEnv(name: string, value: string): void {

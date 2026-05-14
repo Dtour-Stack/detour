@@ -1,8 +1,26 @@
 import { useEffect, useState } from "react";
-import type { ProviderId, ProviderInfo } from "../../shared/index";
+import type { ProviderId, ProviderInfo, ProviderQuotaCap } from "../../shared/index";
 import { rpc } from "../rpc";
 import { onAuthFlowUpdate } from "../rpc-listeners/auth";
-import { onProviderChanged } from "../rpc-listeners/providers";
+import { onProviderChanged, onProviderQuotaChanged } from "../rpc-listeners/providers";
+
+const ALL_PROVIDER_IDS: ProviderId[] = ["openai", "anthropic", "openrouter", "elizacloud"];
+
+const PROVIDER_API_KEY_TABLE: Partial<Record<ProviderId, "openai-api" | "anthropic-api">> = {
+	openai: "openai-api",
+	anthropic: "anthropic-api",
+};
+
+function fmtCountdown(targetMs: number): string {
+	const ms = Math.max(0, targetMs - Date.now());
+	if (ms <= 0) return "reset";
+	const mins = Math.floor(ms / 60_000);
+	const days = Math.floor(mins / (60 * 24));
+	const hours = Math.floor((mins % (60 * 24)) / 60);
+	if (days > 0) return `${days}d ${hours}h`;
+	if (hours > 0) return `${hours}h ${mins % 60}m`;
+	return `${mins}m`;
+}
 
 type AccountSummary = {
 	id: string;
@@ -96,14 +114,22 @@ export function ProvidersTab() {
 	const [activeFlow, setActiveFlow] = useState<ActiveFlow | null>(null);
 	const [code, setCode] = useState("");
 	const [error, setError] = useState<string | null>(null);
+	const [fallbackOrder, setFallbackOrder] = useState<ProviderId[]>([]);
+	const [caps, setCaps] = useState<ProviderQuotaCap[]>([]);
+	const [, setNow] = useState(Date.now());
+	const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, { label: string; key: string }>>({});
 
 	async function refresh() {
-		const [ps, as] = await Promise.all([
+		const [ps, as, fo, qs] = await Promise.all([
 			rpc.request.providersList({}),
 			rpc.request.authListAccounts({}) as Promise<Record<string, AccountSummary[]>>,
+			rpc.request.providersGetFallbackOrder({}),
+			rpc.request.providersGetQuotaState({}),
 		]);
 		setProviders(ps);
 		setAccounts(as);
+		setFallbackOrder(fo.order);
+		setCaps(qs.caps);
 	}
 
 	useEffect(() => {
@@ -131,12 +157,77 @@ export function ProvidersTab() {
 		const offProvider = onProviderChanged(() => {
 			void refresh();
 		});
+		const offQuota = onProviderQuotaChanged((payload) => {
+			setCaps(payload.caps);
+		});
+		const tick = setInterval(() => setNow(Date.now()), 30_000);
 		return () => {
 			offFlow();
 			offProvider();
+			offQuota();
+			clearInterval(tick);
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+
+	function capForAccount(providerId: ProviderId, accountId: string): ProviderQuotaCap | null {
+		return caps.find((c) => c.providerId === providerId && c.accountId === accountId) ?? null;
+	}
+
+	async function moveFallback(idx: number, direction: -1 | 1): Promise<void> {
+		const next = [...fallbackOrder];
+		const swap = idx + direction;
+		if (swap < 0 || swap >= next.length) return;
+		[next[idx], next[swap]] = [next[swap]!, next[idx]!];
+		setFallbackOrder(next);
+		try {
+			await rpc.request.providersSetFallbackOrder({ order: next });
+		} catch (err) {
+			setError(`Save fallback order failed: ${err instanceof Error ? err.message : String(err)}`);
+			await refresh();
+		}
+	}
+
+	async function addToFallback(id: ProviderId): Promise<void> {
+		const next = [...fallbackOrder.filter((x) => x !== id), id];
+		setFallbackOrder(next);
+		try {
+			await rpc.request.providersSetFallbackOrder({ order: next });
+		} catch (err) {
+			setError(`Save fallback order failed: ${err instanceof Error ? err.message : String(err)}`);
+			await refresh();
+		}
+	}
+
+	async function removeFromFallback(id: ProviderId): Promise<void> {
+		const next = fallbackOrder.filter((x) => x !== id);
+		setFallbackOrder(next);
+		try {
+			await rpc.request.providersSetFallbackOrder({ order: next });
+		} catch (err) {
+			setError(`Save fallback order failed: ${err instanceof Error ? err.message : String(err)}`);
+			await refresh();
+		}
+	}
+
+	async function addApiKey(vendorId: ProviderId): Promise<void> {
+		const table = PROVIDER_API_KEY_TABLE[vendorId];
+		if (!table) return;
+		const draft = apiKeyDrafts[vendorId];
+		if (!draft || !draft.key.trim()) return;
+		try {
+			setError(null);
+			await rpc.request.authAddApiKey({
+				provider: table,
+				label: draft.label.trim() || "API key",
+				key: draft.key.trim(),
+			});
+			setApiKeyDrafts((d) => ({ ...d, [vendorId]: { label: "", key: "" } }));
+			await refresh();
+		} catch (err) {
+			setError(`Add API key failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
 
 	async function saveKey(id: ProviderId) {
 		const k = (drafts[id] ?? "").trim();
@@ -273,9 +364,78 @@ export function ProvidersTab() {
 		<div>
 			<h3 style={{ margin: "0 0 4px" }}>Providers</h3>
 			<p className="hint">
-				Connect once via OAuth or paste an API key. The active provider is what chat uses — there's no implicit fallback to another provider.
+				Connect once via OAuth or paste an API key. The active provider is what chat uses. Caps trigger rotation through the fallback order below.
 			</p>
 			{error && <div className="banner error">{error}</div>}
+
+			<div className="card" style={{ marginBottom: 16 }}>
+				<div className="provider-header">
+					<span className="name">Fallback order</span>
+					<span className="hint" style={{ fontSize: 11 }}>
+						walked when the active provider hits a quota cap
+					</span>
+				</div>
+				{fallbackOrder.length === 0 ? (
+					<div className="hint" style={{ marginBottom: 8 }}>
+						No fallback configured. When the active provider hits its weekly cap, the agent will fail with an actionable error instead of rotating.
+					</div>
+				) : (
+					<div style={{ marginBottom: 8 }}>
+						{fallbackOrder.map((id, idx) => {
+							const vendor = providers.find((p) => p.id === id);
+							const label = vendor?.label ?? id;
+							const isActive = vendor?.active ?? false;
+							return (
+								<div className="row" key={id} style={{ marginBottom: 4, gap: 8, alignItems: "center" }}>
+									<span style={{ width: 18, color: "var(--fg-muted)" }}>{idx + 1}.</span>
+									<span style={{ flex: 1, fontSize: 13 }}>
+										{label}
+										{isActive && <span className="badge ok" style={{ marginLeft: 8 }}>active</span>}
+									</span>
+									<button
+										type="button"
+										className="btn ghost small"
+										onClick={() => moveFallback(idx, -1)}
+										disabled={idx === 0}
+										title="Move up"
+									>↑</button>
+									<button
+										type="button"
+										className="btn ghost small"
+										onClick={() => moveFallback(idx, 1)}
+										disabled={idx === fallbackOrder.length - 1}
+										title="Move down"
+									>↓</button>
+									<button
+										type="button"
+										className="btn ghost small"
+										onClick={() => removeFromFallback(id)}
+										title="Remove from fallback"
+									>×</button>
+								</div>
+							);
+						})}
+					</div>
+				)}
+				<div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+					{ALL_PROVIDER_IDS.filter((id) => !fallbackOrder.includes(id)).map((id) => {
+						const vendor = providers.find((p) => p.id === id);
+						const hasAuth = vendor?.hasKey || (vendor?.oauthAccountCount ?? 0) > 0;
+						return (
+							<button
+								key={id}
+								type="button"
+								className="btn ghost small"
+								onClick={() => addToFallback(id)}
+								disabled={!hasAuth}
+								title={hasAuth ? "Add to fallback order" : "Connect this provider first"}
+							>
+								+ {vendor?.label ?? id}
+							</button>
+						);
+					})}
+				</div>
+			</div>
 
 			{activeFlow && (
 				<div className="card" style={{ borderColor: "var(--accent)", marginBottom: 16 }}>
@@ -378,24 +538,32 @@ export function ProvidersTab() {
 									</button>
 								) : (
 									<>
-										{oauthAccounts.map((acc) => (
-											<div className="row" key={acc.id} style={{ marginBottom: 4, gap: 8 }}>
-												<div style={{ flex: 1, fontSize: 12 }}>
-													<span style={{ fontWeight: 500 }}>{acc.label}</span>{" "}
-													<span style={{ color: "var(--fg-muted)" }}>
-														{acc.tokenPreview ?? "—"} · {fmtExpires(acc.expires)}
-													</span>
+										{oauthAccounts.map((acc) => {
+											const cap = capForAccount(vendor.id, acc.id);
+											return (
+												<div className="row" key={acc.id} style={{ marginBottom: 4, gap: 8 }}>
+													<div style={{ flex: 1, fontSize: 12 }}>
+														<span style={{ fontWeight: 500 }}>{acc.label}</span>{" "}
+														<span style={{ color: "var(--fg-muted)" }}>
+															{acc.tokenPreview ?? "—"} · {fmtExpires(acc.expires)}
+														</span>
+													</div>
+													{cap && (
+														<span className="badge warn" title={`resets ${new Date(cap.resetsAtMs).toLocaleString()}`}>
+															capped {fmtCountdown(cap.resetsAtMs)}
+														</span>
+													)}
+													{acc.expired && <span className="badge warn">Expired</span>}
+													<button
+														type="button"
+														className="btn ghost small"
+														onClick={() => removeAccount(vendor.oauthProvider!, acc.id)}
+													>
+														Remove
+													</button>
 												</div>
-												{acc.expired && <span className="badge warn">Expired</span>}
-												<button
-													type="button"
-													className="btn ghost small"
-													onClick={() => removeAccount(vendor.oauthProvider!, acc.id)}
-												>
-													Remove
-												</button>
-											</div>
-										))}
+											);
+										})}
 										<button
 											type="button"
 											className="btn secondary small"
@@ -409,10 +577,76 @@ export function ProvidersTab() {
 							</div>
 						)}
 
+						{/* Stacked API-key accounts (multi-key) */}
+						{PROVIDER_API_KEY_TABLE[vendor.id] && (
+							<div style={{ marginBottom: 12 }}>
+								<div style={{ fontSize: 11, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+									API keys (stack any number)
+								</div>
+								{(accounts[PROVIDER_API_KEY_TABLE[vendor.id]!] ?? []).map((acc) => {
+									const cap = capForAccount(vendor.id, acc.id);
+									return (
+										<div className="row" key={acc.id} style={{ marginBottom: 4, gap: 8 }}>
+											<div style={{ flex: 1, fontSize: 12 }}>
+												<span style={{ fontWeight: 500 }}>{acc.label}</span>{" "}
+												<span style={{ color: "var(--fg-muted)" }}>{acc.tokenPreview ?? "—"}</span>
+											</div>
+											{cap && (
+												<span className="badge warn" title={`resets ${new Date(cap.resetsAtMs).toLocaleString()}`}>
+													capped {fmtCountdown(cap.resetsAtMs)}
+												</span>
+											)}
+											<button
+												type="button"
+												className="btn ghost small"
+												onClick={() => removeAccount(PROVIDER_API_KEY_TABLE[vendor.id]!, acc.id)}
+											>
+												Remove
+											</button>
+										</div>
+									);
+								})}
+								<div className="row" style={{ marginTop: 4, gap: 6 }}>
+									<input
+										type="text"
+										placeholder="Label (e.g. Personal, Project X)"
+										style={{ flex: "0 0 200px" }}
+										value={apiKeyDrafts[vendor.id]?.label ?? ""}
+										onChange={(e) =>
+											setApiKeyDrafts((d) => ({
+												...d,
+												[vendor.id]: { label: e.target.value, key: d[vendor.id]?.key ?? "" },
+											}))
+										}
+									/>
+									<input
+										type="password"
+										placeholder="Paste API key"
+										style={{ flex: 1 }}
+										value={apiKeyDrafts[vendor.id]?.key ?? ""}
+										onChange={(e) =>
+											setApiKeyDrafts((d) => ({
+												...d,
+												[vendor.id]: { label: d[vendor.id]?.label ?? "", key: e.target.value },
+											}))
+										}
+									/>
+									<button
+										type="button"
+										className="btn small"
+										onClick={() => addApiKey(vendor.id)}
+										disabled={!apiKeyDrafts[vendor.id]?.key.trim()}
+									>
+										Add
+									</button>
+								</div>
+							</div>
+						)}
+
 						{/* Direct API key section */}
 						<div>
 							<div style={{ fontSize: 11, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-								{vendor.id === "anthropic" ? "API key or OAuth code" : "API key"}
+								{vendor.id === "anthropic" ? "Primary API key or OAuth code" : "Primary API key"}
 							</div>
 							<div className="row">
 								<input

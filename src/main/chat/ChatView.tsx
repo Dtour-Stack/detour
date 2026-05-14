@@ -3,6 +3,8 @@ import type { ProviderId } from "../../shared/index";
 import { rpc } from "../rpc";
 import { onChatCommandRun, onChatComplete, onChatDelta, onChatError } from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
+import { QuotaBanner } from "./QuotaBanner";
+import { GoalBanner } from "./GoalBanner";
 
 type Bubble = {
 	id: string;
@@ -30,6 +32,8 @@ type SlashCommand = {
 const SLASH_COMMANDS: SlashCommand[] = [
 	{ name: "/browser", usage: "/browser <url or search>", description: "Open the agent browser.", insert: "/browser ", aliases: ["/open", "/web", "/internet"] },
 	{ name: "/inspect", usage: "/inspect", description: "Read the active browser tab.", insert: "/inspect", aliases: ["/read-page"] },
+	{ name: "/browser-screenshot", usage: "/browser-screenshot", description: "Take a screenshot of the agent browser.", insert: "/browser-screenshot", aliases: ["/screenshot-browser"] },
+	{ name: "/screenshot", usage: "/screenshot", description: "Take a screenshot of the computer screen.", insert: "/screenshot", aliases: ["/screen", "/computer-screenshot"] },
 	{ name: "/script", usage: "/script <javascript>", description: "Run JavaScript in the browser tab.", insert: "/script ", aliases: ["/js"] },
 	{ name: "/logins", usage: "/logins [domain]", description: "List saved logins from vault backends.", insert: "/logins ", aliases: ["/passwords"] },
 	{ name: "/login", usage: "/login <source> <identifier> [url]", description: "Fill a saved login in the browser.", insert: "/login 1password " },
@@ -37,6 +41,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 	{ name: "/pet", usage: "/pet [name]", description: "List or inspect Codex pets.", insert: "/pet " },
 	{ name: "/hatch", usage: "/hatch <concept>", description: "Prepare a Codex pet hatch run.", insert: "/hatch " },
 	{ name: "/video", usage: "/video <prompt>", description: "Generate a video via ElizaOS Cloud (fal-ai/veo3).", insert: "/video " },
+	{ name: "/gallery", usage: "/gallery", description: "Open generated media gallery.", insert: "/gallery" },
 	{ name: "/help", usage: "/help", description: "Show native chat commands.", insert: "/help" },
 ];
 
@@ -161,6 +166,11 @@ export function ChatView({
 		const trimmed = text.trim();
 		if (!trimmed) return;
 
+		if (trimmed === "/gallery") {
+			void rpc.request.windowOpen({ target: "gallery" });
+			return;
+		}
+
 		// `/video <prompt>` — short-circuit the agent path and call
 		// ElizaOS Cloud's video generator directly. The prompt-or-empty
 		// check matters because /video alone is meaningless.
@@ -266,6 +276,8 @@ export function ChatView({
 
 	return (
 		<div className="chat-shell">
+			<QuotaBanner onOpenSettings={onOpenSettings} />
+			<GoalBanner />
 			<div className="bubbles">
 				{bubbles.length === 0 && !activeProvider && (
 					<div className="bubble error">

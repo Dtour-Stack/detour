@@ -80,7 +80,7 @@ function GatewayFeedView({ channel }: { channel: ChannelStatus }) {
 						{channel.liveStatus === "online"
 							? "Connected · live feed below"
 							: channel.liveStatus === "off" && !channel.configured
-								? "Not configured — wire credentials in Channel settings."
+								? "Not configured. Wire credentials in Messaging connections."
 								: `Status: ${channel.liveStatus}`}
 					</div>
 				</div>

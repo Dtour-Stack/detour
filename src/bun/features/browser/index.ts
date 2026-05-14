@@ -1,43 +1,30 @@
 import type { Feature } from "../../kernel/registry";
-import type { WindowHandle } from "../../kernel/windows";
-import { resolveViewUrl } from "../../kernel/view-url";
-
-const DEFAULT_WIDTH = 1280;
-const DEFAULT_HEIGHT = 860;
+import { broadcaster } from "../../core/rpc/registry";
 
 export const browserFeature: Feature = {
 	id: "browser",
 	init(deps) {
-		let browserWindow: WindowHandle | null = null;
+		let forwarded = false;
 
 		function open() {
-			if (browserWindow) {
-				try {
-					(browserWindow.window as unknown as { activate?: () => void }).activate?.();
-				} catch {
-					// best effort
-				}
-				browserWindow.show();
-				return;
-			}
-			const handle = deps.windows.createWindow({
-				viewKey: "browser",
-				title: "Detour Browser",
-				width: DEFAULT_WIDTH,
-				height: DEFAULT_HEIGHT,
-				centered: true,
-				url: resolveViewUrl("browser"),
-			});
-			handle.onClose(() => {
-				browserWindow = null;
-			});
-			browserWindow = handle;
+			deps.events.emit("ui:open-chat", {});
+			const route = () => {
+				forwarded = true;
+				broadcaster.broadcast("uiOpenBrowser", {});
+				setTimeout(() => { forwarded = false; }, 0);
+			};
+			setTimeout(route, 150);
+			setTimeout(route, 400);
+			setTimeout(route, 900);
 		}
 
 		deps.tray.addMenuItem(
 			{ label: "Open Browser", action: "browser:open", order: 28 },
 			() => open(),
 		);
-		deps.events.on("ui:open-browser", () => open());
+		deps.events.on("ui:open-browser", () => {
+			if (forwarded) return;
+			open();
+		});
 	},
 };

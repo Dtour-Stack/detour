@@ -44,7 +44,7 @@ type BrowserWebviewEvent = Event & {
 const DEFAULT_URL = "https://www.google.com";
 const PARTITION = "detour-agent-browser";
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
-const NAVIGATION_RULES = ["^*", "https://*", "http://*", "about:blank"];
+const NAVIGATION_RULES = ["^*", "https://*", "http://*", "file://*", "about:*"];
 
 const DETOUR_BROWSER_PRELOAD_SCRIPT = `
 (() => {
@@ -79,10 +79,7 @@ const DETOUR_BROWSER_PRELOAD_SCRIPT = `
       }
     }
   };
-  Object.defineProperty(window, "__detourBrowserExec", {
-    configurable: false,
-    writable: false,
-    value: (requestId, requestToken, script) => {
+  window.__detourBrowserExec = (requestId, requestToken, script) => {
       let value;
       try {
         value = (0, eval)(script);
@@ -93,8 +90,7 @@ const DETOUR_BROWSER_PRELOAD_SCRIPT = `
       Promise.resolve(value)
         .then((result) => send({ type: "__detourBrowserExecResult", requestId, requestToken, ok: true, result: cloneable(result) }))
         .catch((error) => send({ type: "__detourBrowserExecResult", requestId, requestToken, ok: false, error: error && error.message ? String(error.message) : String(error) }));
-    }
-  });
+    };
 })();
 `;
 
@@ -131,8 +127,7 @@ function makeExecToken(): string {
 function normalizeUrl(input: string): string {
 	const trimmed = input.trim();
 	if (!trimmed) return DEFAULT_URL;
-	if (/^https?:/i.test(trimmed)) return trimmed;
-	if (/^about:blank$/i.test(trimmed)) return "about:blank";
+	if (/^(https?:|file:|about:)/i.test(trimmed)) return trimmed;
 	if (/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/.*)?$/i.test(trimmed)) {
 		return `https://${trimmed}`;
 	}
@@ -229,7 +224,6 @@ function BrowserWebview(props: {
 		className: props.active ? "agent-browser-webview active" : "agent-browser-webview inactive",
 		src: props.tab.url,
 		partition: PARTITION,
-		sandbox: true,
 		preload: DETOUR_BROWSER_PRELOAD_SCRIPT,
 	});
 }
@@ -263,7 +257,7 @@ function useElectrobunWebviewScript(): "loading" | "ready" | "unavailable" {
 	return status;
 }
 
-export function BrowserView() {
+export function BrowserView({ embedded = false }: { embedded?: boolean } = {}) {
 	const scriptStatus = useElectrobunWebviewScript();
 	const [stageReady, setStageReady] = useState(false);
 	const [tabs, setTabs] = useState<BrowserTab[]>(() => {
@@ -459,8 +453,10 @@ export function BrowserView() {
 		if (processedCommands.current.has(command.id)) return;
 		processedCommands.current.add(command.id);
 		if (command.kind === "open") {
-			const id = command.newTab === false ? activeTabIdRef.current : addTab(command.url, true);
-			if (command.newTab === false) navigateTab(id, command.url);
+			const defaultTab = tabs.length === 1 ? tabs[0] : null;
+			const reuseDefaultTab = command.newTab !== false && defaultTab?.url === DEFAULT_URL && defaultTab?.address === DEFAULT_URL;
+			const id = command.newTab === false || reuseDefaultTab ? activeTabIdRef.current : addTab(command.url, true);
+			if (command.newTab === false || reuseDefaultTab) navigateTab(id, command.url);
 			setStatusText(`Opened ${hostnameFor(command.url)}.`);
 			reportCommandResult(command, { ok: true, result: { tabId: id, url: normalizeUrl(command.url) } });
 			return;
@@ -483,8 +479,35 @@ export function BrowserView() {
 				setStatusText(result.ok ? `Browser ${command.kind} complete.` : result.error ?? `Browser ${command.kind} failed.`);
 				reportCommandResult(command, result);
 			});
+			return;
 		}
-	}, [addTab, executeInTab, fillLogin, navigateTab, reportCommandResult]);
+		if (command.kind === "screenshot") {
+			const tabId = command.tabId ?? activeTabIdRef.current;
+			const tab = tabs.find((entry) => entry.id === tabId);
+			const rect = stageRef.current?.getBoundingClientRect();
+			if (!rect || rect.width <= 0 || rect.height <= 0) {
+				reportCommandResult(command, { ok: false, error: "Browser view is not visible." });
+				return;
+			}
+			const screenRect = {
+				x: Math.round(window.screenX + rect.left),
+				y: Math.round(window.screenY + rect.top),
+				width: Math.round(rect.width),
+				height: Math.round(rect.height),
+			};
+			setStatusText("Browser screenshot region captured.");
+			reportCommandResult(command, {
+				ok: true,
+				result: {
+					tabId,
+					url: tab?.url ?? null,
+					title: tab?.title ?? null,
+					rect: screenRect,
+					devicePixelRatio: window.devicePixelRatio,
+				},
+			});
+		}
+	}, [addTab, executeInTab, fillLogin, navigateTab, reportCommandResult, tabs]);
 
 	useEffect(() => {
 		// Replay any browser commands queued in the last 30s — covers the
@@ -513,6 +536,22 @@ export function BrowserView() {
 			void view.syncDimensions?.(true);
 		}
 	}, [activeTabId, tabs.length]);
+
+	useEffect(() => {
+		const sync = () => {
+			for (const view of webviews.current.values()) {
+				void view.syncDimensions?.(true);
+			}
+		};
+		sync();
+		requestAnimationFrame(() => requestAnimationFrame(sync));
+		const quick = setTimeout(sync, 100);
+		const settled = setTimeout(sync, 350);
+		return () => {
+			clearTimeout(quick);
+			clearTimeout(settled);
+		};
+	}, [loginsOpen]);
 
 	useEffect(() => {
 		const sync = () => {
@@ -642,11 +681,23 @@ export function BrowserView() {
 		navigateTab(activeTab.id, addressDraft);
 	}
 
+	const scrollActiveTab = useCallback((event: React.WheelEvent<HTMLElement>) => {
+		if (!activeTab) return;
+		const deltaX = Math.round(event.deltaX);
+		const deltaY = Math.round(event.deltaY);
+		if (deltaX === 0 && deltaY === 0) return;
+		const view = webviews.current.get(activeTab.id);
+		void view?.executeJavascript?.(`(() => {
+const el = document.scrollingElement || document.documentElement || document.body;
+if (el && typeof el.scrollBy === "function") el.scrollBy({ left: ${deltaX}, top: ${deltaY}, behavior: "auto" });
+})()`);
+	}, [activeTab?.id]);
+
 	const currentHost = activeTab ? hostnameFor(activeTab.url) : "";
 	const matchingLogins = loginData?.logins.filter((login) => matchesHost(login, currentHost)) ?? [];
 
 	return (
-		<div className="agent-browser-shell">
+		<div className={embedded ? "agent-browser-shell embedded" : "agent-browser-shell"}>
 			<header className="agent-browser-header">
 				<div className="agent-browser-tabs" role="tablist" aria-label="Browser tabs">
 					{tabs.map((tab) => (
@@ -710,7 +761,7 @@ export function BrowserView() {
 				</div>
 			</header>
 			<main className="agent-browser-main">
-				<section ref={stageRef} className="agent-browser-stage" aria-label="Browser content">
+				<section ref={stageRef} className="agent-browser-stage" aria-label="Browser content" onWheel={scrollActiveTab}>
 					{scriptStatus === "unavailable" ? (
 						<div className="agent-browser-unavailable">
 							<strong>Electrobun webviews are unavailable in this renderer.</strong>

@@ -29,15 +29,15 @@ import {
 	type Plugin,
 } from "@elizaos/core";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { saveGeneratedMediaUrl } from "../../core/generated-media";
 import {
 	CodexResponsesClient,
 	type CreateResponseRequest,
 	type ResponsesInputItem,
 	type ResponsesContentItem,
 } from "./responses-client";
+import { QuotaExceededError } from "./quota-error";
+import { getProviderQuotaService } from "../../core/provider-quota-service";
 
 type CodexImageGenerationParams = ImageGenerationParams & {
 	quality?: "low" | "medium" | "high" | "auto";
@@ -65,6 +65,39 @@ function buildClient(runtime: IAgentRuntime): CodexResponsesClient {
 	}
 	const acct = getSetting(runtime, "CODEX_CHATGPT_ACCOUNT_ID");
 	return new CodexResponsesClient({ accessToken: token, ...(acct ? { chatgptAccountId: acct } : {}) });
+}
+
+/**
+ * Centralised quota-cap recording. Every Codex Responses API call funnels
+ * through here so the runtime sees the same cap state regardless of which
+ * model handler triggered the upstream error (text/object/image/vision).
+ *
+ * Uses the active credential identity from env (set by RuntimeService when
+ * preparing the provider attempt). Falls back to "primary" when env is
+ * empty — keeps the cap scoped to *something* so we don't lose the state.
+ */
+function recordQuotaCap(err: unknown, runtime: IAgentRuntime): void {
+	if (!(err instanceof QuotaExceededError)) return;
+	const accountId = getSetting(runtime, "CODEX_CHATGPT_ACCOUNT_ID") ?? "primary";
+	const accountLabel = getSetting(runtime, "CODEX_ACCOUNT_LABEL") ?? "Codex Pro";
+	getProviderQuotaService().mark({
+		providerId: "openai",
+		accountId,
+		accountLabel,
+		kind: "plan_quota",
+		planType: err.planType,
+		resetsAtMs: err.resetsAtMs,
+		upstreamMessage: err.upstreamMessage,
+	});
+	logger.warn(
+		{
+			src: "codex-chatgpt",
+			accountId,
+			planType: err.planType,
+			resetsAt: new Date(err.resetsAtMs).toISOString(),
+		},
+		"Codex Pro usage limit reached — recorded on ProviderQuotaService",
+	);
 }
 
 function pickModel(runtime: IAgentRuntime, key: string, fallback: string): string {
@@ -101,24 +134,6 @@ function normalizeImageSize(size: string | undefined): string {
 	const width = Number(match[1]);
 	const height = Number(match[2]);
 	return width * height < 1024 * 1024 ? "1024x1024" : trimmed;
-}
-
-function imageExtension(mimeSubtype: string): string {
-	const normalized = mimeSubtype.toLowerCase();
-	if (normalized === "jpeg") return "jpg";
-	const safe = normalized.replace(/[^a-z0-9]/g, "");
-	return safe.length > 0 ? safe : "png";
-}
-
-function materializeGeneratedImage(url: string): string {
-	const match = url.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
-	if (!match) return url;
-	const payload = match[2];
-	if (!payload) throw new Error("Image generation returned an empty image payload.");
-	const dir = mkdtempSync(join(tmpdir(), "detour-generated-image-"));
-	const filePath = join(dir, `${randomUUID()}.${imageExtension(match[1] ?? "png")}`);
-	writeFileSync(filePath, Buffer.from(payload, "base64"), { mode: 0o600 });
-	return filePath;
 }
 
 async function emit(callback: HandlerCallback | undefined, text: string): Promise<void> {
@@ -178,17 +193,25 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 	};
 
 	let collected = "";
-	for await (const ev of client.stream(req)) {
-		if (ev.type === "response.output_text.delta") {
-			const delta = (ev as { delta?: string }).delta ?? "";
-			collected += delta;
-		} else if (ev.type === "response.failed" || ev.type === "response.error") {
-			const errMessage =
-				(ev as { response?: { error?: { message?: string } }; error?: { message?: string } }).response?.error?.message ??
-				(ev as { error?: { message?: string } }).error?.message ??
-				"Codex Responses API error";
-			throw new Error(errMessage);
+	try {
+		for await (const ev of client.stream(req)) {
+			if (ev.type === "response.output_text.delta") {
+				const delta = (ev as { delta?: string }).delta ?? "";
+				collected += delta;
+			} else if (ev.type === "response.output_text.done") {
+				const text = (ev as { text?: string }).text ?? "";
+				if (collected.length === 0 && text.length > 0) collected = text;
+			} else if (ev.type === "response.failed" || ev.type === "response.error") {
+				const errMessage =
+					(ev as { response?: { error?: { message?: string } }; error?: { message?: string } }).response?.error?.message ??
+					(ev as { error?: { message?: string } }).error?.message ??
+					"Codex Responses API error";
+				throw new Error(errMessage);
+			}
 		}
+	} catch (err) {
+		recordQuotaCap(err, runtime);
+		throw err;
 	}
 	return collected;
 }
@@ -217,7 +240,16 @@ const generateImageHandler: Handler = async (runtime, message, _state, options, 
 			await emit(callback, text);
 			return fail(text);
 		}
-		const attachmentUrl = materializeGeneratedImage(image.url);
+		const media = await saveGeneratedMediaUrl({
+			kind: "image",
+			provider: "codex-chatgpt",
+			capability: "image-generation",
+			url: image.url,
+			title: "Codex generated image",
+			prompt,
+			model: pickModel(runtime, "CODEX_MODEL_IMAGE", "gpt-5.2"),
+		});
+		const attachmentUrl = media.url;
 		const text = "Generated image.";
 		if (callback) {
 			await callback(
@@ -242,10 +274,11 @@ const generateImageHandler: Handler = async (runtime, message, _state, options, 
 		return {
 			success: true,
 			text,
-			values: { generatedImage: true, imageUrl: attachmentUrl },
+			values: { generatedImage: true, imageUrl: attachmentUrl, galleryId: media.id },
 			data: {
 				actionName: "GENERATE_IMAGE",
 				imageUrl: attachmentUrl,
+				galleryId: media.id,
 				...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
 			},
 		};
@@ -349,28 +382,33 @@ export const codexChatGptPlugin: Plugin = {
 				store: false,
 			};
 			const images: Array<{ url: string; revisedPrompt?: string }> = [];
-			for await (const ev of client.stream(req)) {
-				// Image generation outputs come through as `response.completed`
-				// or `response.output_item.done` carrying the full output array.
-				const anyEv = ev as unknown as { type?: string; response?: { output?: Array<Record<string, unknown>> }; item?: Record<string, unknown> };
-				const items: Array<Record<string, unknown>> = [];
-				if (anyEv.response?.output) items.push(...anyEv.response.output);
-				if (anyEv.item) items.push(anyEv.item);
-				for (const item of items) {
-					if (item.type === "image_generation_call" && typeof item.result === "string") {
-						const url = `data:image/png;base64,${item.result as string}`;
-						const entry: { url: string; revisedPrompt?: string } = { url };
-						if (typeof item.revised_prompt === "string") entry.revisedPrompt = item.revised_prompt as string;
-						images.push(entry);
+			try {
+				for await (const ev of client.stream(req)) {
+					// Image generation outputs come through as `response.completed`
+					// or `response.output_item.done` carrying the full output array.
+					const anyEv = ev as unknown as { type?: string; response?: { output?: Array<Record<string, unknown>> }; item?: Record<string, unknown> };
+					const items: Array<Record<string, unknown>> = [];
+					if (anyEv.response?.output) items.push(...anyEv.response.output);
+					if (anyEv.item) items.push(anyEv.item);
+					for (const item of items) {
+						if (item.type === "image_generation_call" && typeof item.result === "string") {
+							const url = `data:image/png;base64,${item.result as string}`;
+							const entry: { url: string; revisedPrompt?: string } = { url };
+							if (typeof item.revised_prompt === "string") entry.revisedPrompt = item.revised_prompt as string;
+							images.push(entry);
+						}
+					}
+					if (anyEv.type === "response.failed" || anyEv.type === "response.error") {
+						const errMessage =
+							((anyEv.response as { error?: { message?: string } } | undefined)?.error?.message) ??
+							((ev as { error?: { message?: string } }).error?.message) ??
+							"Codex Responses API stream failed";
+						throw new Error(errMessage);
 					}
 				}
-				if (anyEv.type === "response.failed" || anyEv.type === "response.error") {
-					const errMessage =
-						((anyEv.response as { error?: { message?: string } } | undefined)?.error?.message) ??
-						((ev as { error?: { message?: string } }).error?.message) ??
-						"Codex Responses API stream failed";
-					throw new Error(errMessage);
-				}
+			} catch (err) {
+				recordQuotaCap(err, runtime);
+				throw err;
 			}
 			if (images.length === 0) {
 				throw new Error("plugin-codex-chatgpt: no image_generation_call output returned");
@@ -410,16 +448,21 @@ export const codexChatGptPlugin: Plugin = {
 				store: false,
 			};
 			let collected = "";
-			for await (const ev of client.stream(req)) {
-				if (ev.type === "response.output_text.delta") {
-					collected += (ev as { delta?: string }).delta ?? "";
-				} else if (ev.type === "response.failed" || ev.type === "response.error") {
-					const errMessage =
-						(ev as { response?: { error?: { message?: string } }; error?: { message?: string } }).response?.error?.message ??
-						(ev as { error?: { message?: string } }).error?.message ??
-						"Codex Responses API stream failed";
-					throw new Error(errMessage);
+			try {
+				for await (const ev of client.stream(req)) {
+					if (ev.type === "response.output_text.delta") {
+						collected += (ev as { delta?: string }).delta ?? "";
+					} else if (ev.type === "response.failed" || ev.type === "response.error") {
+						const errMessage =
+							(ev as { response?: { error?: { message?: string } }; error?: { message?: string } }).response?.error?.message ??
+							(ev as { error?: { message?: string } }).error?.message ??
+							"Codex Responses API stream failed";
+						throw new Error(errMessage);
+					}
 				}
+			} catch (err) {
+				recordQuotaCap(err, runtime);
+				throw err;
 			}
 			try {
 				const fenced = collected.match(/```(?:json)?\s*([\s\S]+?)```/);

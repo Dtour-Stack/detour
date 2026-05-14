@@ -1,9 +1,11 @@
 // Wraps the @elizaos/agent/auth subsystem (per-account OAuth + storage).
 // Surfaces a thin API for the rest of core to drive flows and read state.
 
+import { randomUUID } from "node:crypto";
 import {
 	listAccounts,
 	deleteAccount,
+	saveAccount,
 	startAnthropicOAuthFlow,
 	startCodexOAuthFlow,
 	getFlowState,
@@ -104,6 +106,41 @@ export class AuthService {
 
 	deleteAccount(provider: AccountCredentialProvider, accountId: string): void {
 		deleteAccount(provider, accountId);
+	}
+
+	/**
+	 * Stack an additional API-key account on a provider's storage table.
+	 *
+	 * Direct-provider tables (`openai-api`, `anthropic-api`, etc.) already
+	 * carry an `id + label + source: "api-key"` shape — we just write the
+	 * key as the `access` field and leave `refresh` empty since API keys
+	 * don't refresh. The runtime's providerAttempts walker reads these
+	 * tables alongside OAuth accounts so the user can have multiple
+	 * labeled API keys per provider AND the runtime will rotate through
+	 * them when one hits a quota cap.
+	 *
+	 * Returns the generated accountId so the UI can address future
+	 * delete / rename ops at this specific key.
+	 */
+	addApiKeyAccount(opts: {
+		provider: "openai-api" | "anthropic-api" | "deepseek-api" | "zai-api" | "moonshot-api";
+		label: string;
+		key: string;
+	}): { id: string } {
+		if (!opts.key.trim()) throw new Error("addApiKeyAccount: key is empty");
+		const id = randomUUID();
+		const now = Date.now();
+		const record: AccountCredentialRecord = {
+			id,
+			providerId: opts.provider,
+			label: opts.label || "API key",
+			source: "api-key",
+			credentials: { access: opts.key, refresh: "", expires: 0 },
+			createdAt: now,
+			updatedAt: now,
+		};
+		saveAccount(record);
+		return { id };
 	}
 
 	async startFlow(

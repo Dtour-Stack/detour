@@ -34,7 +34,7 @@ const CRED_PATTERNS: RegExp[] = [
 	/ghu_[A-Za-z0-9]{30,}/g,
 	/ghs_[A-Za-z0-9]{30,}/g,
 	/AKIA[A-Z0-9]{16}/g,
-	/(ANTHROPIC_API_KEY|OPENAI_API_KEY|OPENROUTER_API_KEY|ELIZAOS_CLOUD_API_KEY|GITHUB_TOKEN|GITHUB_AGENT_PAT|GITHUB_USER_PAT)\s*[=:]\s*[^\s,"'}]+/gi,
+	/(ANTHROPIC_API_KEY|OPENAI_API_KEY|OPENROUTER_API_KEY|ELIZAOS_CLOUD_API_KEY|ELEVENLABS_API_KEY|GITHUB_TOKEN|GITHUB_AGENT_PAT|GITHUB_USER_PAT)\s*[=:]\s*[^\s,"'}]+/gi,
 	/-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g,
 ];
 
@@ -420,7 +420,7 @@ const publishHandler: Handler = async (runtime, _m, _s, options, callback) => {
 	const limit = Math.min(2000, pickNumber(opts, "limit", 200));
 
 	const pat = await getAgentPat(runtime);
-	if (!pat) return fail("No GITHUB_AGENT_PAT (or GITHUB_TOKEN) configured. Wire it in Settings → Channels → GitHub.");
+	if (!pat) return fail("No GITHUB_AGENT_PAT (or GITHUB_TOKEN) configured. Wire it in Messaging connections.");
 
 	// 1. Resolve agent's GitHub login (for repo URL).
 	const meRes = await fetch("https://api.github.com/user", {

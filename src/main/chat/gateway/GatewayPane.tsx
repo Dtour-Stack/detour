@@ -1,9 +1,9 @@
 /**
- * Pensieve > Gateway pane.
+ * Detour hub > message feed.
  *
- * Live unified feed: every inbound + outbound message captured by the
- * ChannelGateway across Discord, Telegram, iMessage, and the in-app chat.
- * Also surfaces cross-channel identity merge candidates (when the same
+ * Live unified feed: every inbound + outbound message captured across
+ * Discord, Telegram, iMessage, and the in-app chat.
+ * Also surfaces cross-source identity merge candidates (when the same
  * external handle has been linked to multiple Detour entities).
  */
 
@@ -73,10 +73,10 @@ export function GatewayPane() {
 	return (
 		<div className="settings-pane">
 			<header style={{ marginBottom: 12 }}>
-				<h2 style={{ margin: 0 }}>Channel feed</h2>
+				<h2 style={{ margin: 0 }}>All messages</h2>
 				<div style={{ fontSize: 12, opacity: 0.7 }}>
-					Live unified inbound + outbound across all channels. Recorded by the
-					ChannelGateway service from elizaOS MESSAGE_RECEIVED / MESSAGE_SENT events.
+					Live unified inbound + outbound across messaging connectors. Recorded from
+					elizaOS MESSAGE_RECEIVED / MESSAGE_SENT events.
 				</div>
 			</header>
 
@@ -85,7 +85,7 @@ export function GatewayPane() {
 					value={filter.channel ?? ""}
 					onChange={(e) => setFilter((f) => ({ ...f, channel: e.target.value || undefined }))}
 				>
-					<option value="">All channels</option>
+					<option value="">All sources</option>
 					<option value="discord">Discord</option>
 					<option value="telegram">Telegram</option>
 					<option value="imessage">iMessage</option>

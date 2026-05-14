@@ -23,7 +23,19 @@ function makeFakeVaultService(initial: Record<string, string> = {}): VaultServic
 	return { vault: async () => vault } as unknown as VaultService;
 }
 
-const ENV_KEYS = ["CODEX_MODEL_LARGE", "CODEX_MODEL_SMALL", "CODEX_MODEL_IMAGE", "ELIZA_VAULT_AGENT_DENY", "ELIZA_VAULT_AGENT_MODE"];
+const ENV_KEYS = [
+	"CODEX_MODEL_LARGE",
+	"CODEX_MODEL_SMALL",
+	"CODEX_MODEL_IMAGE",
+	"OPENROUTER_MODEL_VIDEO",
+	"ELIZAOS_CLOUD_IMAGE_GENERATION_MODEL",
+	"ELIZAOS_CLOUD_VIDEO_GENERATION_MODEL",
+	"DETOUR_BROWSER_USE_ENABLED",
+	"DETOUR_COMPUTER_USE_ENABLED",
+	"DETOUR_ELEVATED_CODING",
+	"ELIZA_VAULT_AGENT_DENY",
+	"ELIZA_VAULT_AGENT_MODE",
+];
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -47,6 +59,8 @@ describe("ConfigService", () => {
 		expect(agent.mode).toBe("read");
 		expect(agent.allowedPrefixes).toEqual([]);
 		expect(agent.deniedPrefixes).toEqual([]);
+		expect(agent.browserUse).toBe(true);
+		expect(agent.computerUse).toBe(false);
 	});
 
 	test("setAgent → getAgent JSON round-trip", async () => {
@@ -56,19 +70,43 @@ describe("ConfigService", () => {
 			mode: "read-write",
 			allowedPrefixes: ["GITHUB_", "agent."],
 			deniedPrefixes: ["EVM_"],
+			browserUse: false,
+			computerUse: true,
+			elevatedCoding: true,
 		});
 		const got = await svc.getAgent();
 		expect(got.mode).toBe("read-write");
 		expect(got.allowedPrefixes).toEqual(["GITHUB_", "agent."]);
 		expect(got.deniedPrefixes).toEqual(["EVM_"]);
+		expect(got.browserUse).toBe(false);
+		expect(got.computerUse).toBe(true);
+		expect(got.elevatedCoding).toBe(true);
 	});
 
 	test("setAgent applies snapshot to permission gate (regression: UI toggle must take effect immediately)", async () => {
 		const svc = new ConfigService(makeFakeVaultService());
 		await svc.setAgent({ deny: false, mode: "read-write", allowedPrefixes: [], deniedPrefixes: [] });
 		expect(getPermissionConfig().mode).toBe("read-write");
+		expect(process.env.DETOUR_BROWSER_USE_ENABLED).toBe("true");
+		expect(process.env.DETOUR_COMPUTER_USE_ENABLED).toBeUndefined();
 		// Restore for downstream tests
 		setPermissionConfig({ mode: "read", deny: false, allowedPrefixes: [], deniedPrefixes: [] });
+	});
+
+	test("setAgent applies browser/computer-use toggles to runtime env", async () => {
+		const svc = new ConfigService(makeFakeVaultService());
+		await svc.setAgent({
+			deny: false,
+			mode: "read",
+			allowedPrefixes: [],
+			deniedPrefixes: [],
+			browserUse: false,
+			computerUse: true,
+			elevatedCoding: true,
+		});
+		expect(process.env.DETOUR_BROWSER_USE_ENABLED).toBe("false");
+		expect(process.env.DETOUR_COMPUTER_USE_ENABLED).toBe("true");
+		expect(process.env.DETOUR_ELEVATED_CODING).toBe("true");
 	});
 
 	test("getAgent sanitizes invalid mode to 'read' (regression: bad config can't escalate)", async () => {
@@ -98,6 +136,7 @@ describe("ConfigService", () => {
 			openRouterTextSmall: "openrouter/free",
 			openRouterEmbedding: "openai/text-embedding-3-small",
 			openRouterImage: "google/gemini-2.5-flash-image",
+			openRouterVideo: "google/veo-3.1",
 			openRouterVision: "openrouter/free",
 			elizaCloudLarge: "",
 			elizaCloudMedium: "",
@@ -105,11 +144,16 @@ describe("ConfigService", () => {
 			elizaCloudNano: "",
 			elizaCloudMega: "",
 			elizaCloudResponseHandler: "",
+			elizaCloudImage: "google/gemini-2.5-flash-image",
+			elizaCloudVideo: "fal-ai/veo3",
 		});
 		expect(process.env.CODEX_MODEL_LARGE).toBe("gpt-5.5");
 		expect(process.env.CODEX_MODEL_SMALL).toBe("gpt-5.4-mini");
 		expect(process.env.CODEX_MODEL_IMAGE).toBe("gpt-5.5");
 		expect(process.env.OPENROUTER_MODEL_TEXT_LARGE).toBe("openrouter/free");
+		expect(process.env.OPENROUTER_MODEL_VIDEO).toBe("google/veo-3.1");
+		expect(process.env.ELIZAOS_CLOUD_IMAGE_GENERATION_MODEL).toBe("google/gemini-2.5-flash-image");
+		expect(process.env.ELIZAOS_CLOUD_VIDEO_GENERATION_MODEL).toBe("fal-ai/veo3");
 	});
 
 	test("getWindow defaults match the popup's launch size", async () => {

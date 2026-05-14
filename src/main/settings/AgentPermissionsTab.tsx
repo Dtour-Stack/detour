@@ -47,6 +47,14 @@ export function AgentPermissionsTab() {
 		if (!cfg) return;
 		void save({ ...cfg, elevatedCoding });
 	}
+	function setBrowserUse(browserUse: boolean) {
+		if (!cfg) return;
+		void save({ ...cfg, browserUse });
+	}
+	function setComputerUse(computerUse: boolean) {
+		if (!cfg) return;
+		void save({ ...cfg, computerUse });
+	}
 	function commitPrefixes() {
 		if (!cfg) return;
 		const allowedPrefixes = allowedDraft.split(",").map((s) => s.trim()).filter(Boolean);
@@ -163,6 +171,52 @@ export function AgentPermissionsTab() {
 						/>
 						<span style={{ fontSize: 12, color: cfg.elevatedCoding ? "var(--accent)" : "var(--fg-muted)" }}>
 							{cfg.elevatedCoding ? "ELEVATED" : "off"}
+						</span>
+					</label>
+				</div>
+			</div>
+
+			<h3 style={{ margin: "20px 0 4px" }}>Desktop tools</h3>
+			<p className="hint">
+				Controls whether the agent can drive the Detour browser and user-level macOS UI automation.
+				macOS still requires Accessibility, Screen Recording, and Automation grants in OS Permissions.
+			</p>
+			<div className="card">
+				<div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+					<div>
+						<span className="name" style={{ fontSize: 13 }}>Browser use</span>
+						<div className="hint" style={{ marginTop: 2 }}>
+							Enables BROWSER_OPEN, BROWSER_INSPECT, BROWSER_SCRIPT, and BROWSER_FILL_LOGIN through the isolated Detour browser.
+						</div>
+					</div>
+					<label style={{ margin: 0, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+						<input
+							type="checkbox"
+							checked={cfg.browserUse !== false}
+							onChange={(e) => setBrowserUse(e.target.checked)}
+							disabled={saving}
+						/>
+						<span style={{ fontSize: 12, color: cfg.browserUse !== false ? "var(--accent)" : "var(--fg-muted)" }}>
+							{cfg.browserUse !== false ? "ON" : "off"}
+						</span>
+					</label>
+				</div>
+				<div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+					<div>
+						<span className="name" style={{ fontSize: 13 }}>Computer use</span>
+						<div className="hint" style={{ marginTop: 2 }}>
+							Enables COMPUTER_OBSERVE, COMPUTER_SCREENSHOT, COMPUTER_CLICK, COMPUTER_TYPE, COMPUTER_KEY, and COMPUTER_OPEN_APP using your macOS user session.
+						</div>
+					</div>
+					<label style={{ margin: 0, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+						<input
+							type="checkbox"
+							checked={cfg.computerUse ?? false}
+							onChange={(e) => setComputerUse(e.target.checked)}
+							disabled={saving}
+						/>
+						<span style={{ fontSize: 12, color: cfg.computerUse ? "var(--accent)" : "var(--fg-muted)" }}>
+							{cfg.computerUse ? "ON" : "off"}
 						</span>
 					</label>
 				</div>

@@ -3,7 +3,10 @@ import type {
 	OpenRouterModelsResponse,
 	ProviderId,
 	ProviderInfo,
+	ProviderQuotaState,
 } from "../index";
+
+export type { ProviderQuotaState, ProviderQuotaCap } from "../index";
 
 export type CloudCreditsBalance = {
 	balance: number;
@@ -82,6 +85,8 @@ export type CloudVideoResult =
 			id: string;
 			video: {
 				url: string;
+				path?: string;
+				galleryId?: string;
 				width?: number;
 				height?: number;
 				fileSize?: number;
@@ -110,6 +115,26 @@ export type ProvidersRequests = {
 	};
 	providersSetActive: {
 		params: { id: ProviderId };
+		response: { ok: true };
+	};
+	// Snapshot of all currently-active paid-plan quota caps. The chat UI
+	// fetches this on mount so a banner can be drawn even before the next
+	// `providerQuotaChanged` event fires, and the Settings tab uses it for
+	// the "capped until X" badge on each provider.
+	providersGetQuotaState: {
+		params: Record<string, never>;
+		response: ProviderQuotaState;
+	};
+	// User-configured fallback chain — providers the runtime walks AFTER
+	// the active one when the active credentials are quota-capped. Order
+	// matters; first item is tried first when a cap hits. Empty list =
+	// no automatic rotation (fb54849b's default).
+	providersGetFallbackOrder: {
+		params: Record<string, never>;
+		response: { order: ProviderId[] };
+	};
+	providersSetFallbackOrder: {
+		params: { order: ProviderId[] };
 		response: { ok: true };
 	};
 	providersOpenRouterModels: {
@@ -167,4 +192,9 @@ export type ProvidersMessages = {
 	// double-publish is harmless and matches the canonical pattern in
 	// docs/rpc-migration.md.
 	providerChanged: { activeProvider: ProviderId | null };
+	// Broadcast whenever ProviderQuotaService.mark/clear/expire fires. The
+	// chat banner subscribes to this so a Codex Pro cap (or any future
+	// usage_limit_reached) becomes visible the moment the upstream throws,
+	// without waiting for the next user turn.
+	providerQuotaChanged: ProviderQuotaState;
 };

@@ -11,6 +11,11 @@ import {
 import type { ActivityLogEntry, ActivityLogService } from "./activity/log-service";
 import type { PensieveMemoryService, PensieveMemorySummary } from "./pensieve/memory-service";
 import type { RuntimeService } from "./runtime";
+import {
+	DETOUR_CONTINUOUS_IMPROVEMENT_DEFAULT,
+	DETOUR_CONTINUOUS_IMPROVEMENT_TEMPLATE,
+	renderPromptTemplate,
+} from "./prompt-templates";
 
 export const CONTINUOUS_IMPROVEMENT_TASK_NAME = "CONTINUOUS_IMPROVEMENT";
 const TASK_TAGS = ["queue", "repeat", "autonomy", "continuous-improvement"];
@@ -206,33 +211,15 @@ async function decideImprovement(
 	logs: ActivityLogEntry[],
 	memories: PensieveMemorySummary[],
 ): Promise<ContinuousImprovementDecision> {
-	const prompt = [
-		"You are Detour's continuous-improvement loop.",
-		"Use the Hermes Agent pattern: bounded curated memory, skill creation after non-trivial workflows, session search for recall, tool orchestration, evaluation traces, and human-reviewed self-evolution.",
-		"Your job is to extract one durable improvement from recent activity. Do not rewrite code, alter prompts, or claim a change has been made. Save only useful, non-secret, non-ephemeral learning.",
-		"",
-		"Save when there is:",
-		"- a user preference, correction, repeated frustration, or workflow habit",
-		"- a project convention, tool quirk, integration failure pattern, or working recovery path",
-		"- a candidate skill/procedure the agent should reuse later",
-		"- a measurable guardrail/eval idea for future self-evolution",
-		"",
-		"Skip trivial observations, raw logs, secrets, tokens, private message contents, one-off stack traces, or anything already obvious from AGENTS.md.",
-		"",
-		"Recent logs:",
-		renderLogs(logs) || "(none)",
-		"",
-		"Recent memories:",
-		renderMemories(memories) || "(none)",
-		"",
-		"Output TOON only:",
-		"should_write: true | false",
-		"category: user-preference | workflow | tool-quirk | skill-candidate | eval-guardrail | skip",
-		"memory: <one compact durable memory, required when should_write is true>",
-		"user_profile: <optional compact user preference>",
-		"skill_candidate: <optional reusable workflow idea>",
-		"reason: <brief>",
-	].join("\n");
+	const prompt = renderPromptTemplate(
+		runtime,
+		DETOUR_CONTINUOUS_IMPROVEMENT_TEMPLATE,
+		{
+			logs: renderLogs(logs) || "(none)",
+			memories: renderMemories(memories) || "(none)",
+		},
+		DETOUR_CONTINUOUS_IMPROVEMENT_DEFAULT,
+	);
 	const modelChain = [ModelType.TEXT_SMALL, ModelType.TEXT_MEDIUM, ModelType.TEXT_LARGE] as const;
 	let lastErr: string | undefined;
 	for (const modelType of modelChain) {

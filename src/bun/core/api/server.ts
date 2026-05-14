@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { RuntimeService } from "../runtime";
 import type { ActivityService } from "../activity";
 import { broadcaster } from "../rpc/registry";
+import { evalRoutes } from "./eval-routes";
 import type {
 	BrowserCommand,
 	BrowserCommandInput,
@@ -360,6 +361,17 @@ export class ApiServer {
 				return this.debugEmbedding(ctx);
 			}
 			return null;
+		},
+		// Eval API for external coding-agent drivers. The entire /api/eval/*
+		// surface is gated by DETOUR_EVAL_TOKEN — when unset, returns 404.
+		async (ctx) => {
+			const { req, url, path, json, error } = ctx;
+			if (!path.startsWith("/api/eval/")) return null;
+			const route = evalRoutes(
+				{ runtime: this.runtime, activity: this.activity },
+				{ json, error },
+			);
+			return route(req, url, path);
 		},
 	];
 
