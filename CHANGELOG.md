@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0](https://github.com/Dexploarer/detour/compare/v0.3.0...v0.4.0) (2026-05-14)
+
+
+### Features
+
+* add media, audio, desktop-control, goal, dream, and provider-quota services
+* add channel-neutral coding task handoff, preview URL return, and workspace agent surfaces
+* expand Pensieve/activity context across channels and always-on provider state
+
+
+### Bug Fixes
+
+* fix frozen Bun installs in CI by syncing `bun.lock`
+* fix canary/release workflow version stamping before frozen install
+* fix macOS app packaging by copying the committed `.icns` artifact instead of regenerating it during wrap
+* fix Telegram plugin declaration build by removing a dead mention-context argument
+* fix macOS keychain unit-test skips for authorization-denied runners
+* pin active LLM plugin priority so selected providers win runtime model resolution
+* remove hidden provider failover and harden embedding retry behavior
+
 ## [0.3.0](https://github.com/Dexploarer/detour/compare/v0.2.0...v0.3.0) (2026-05-05)
 
 

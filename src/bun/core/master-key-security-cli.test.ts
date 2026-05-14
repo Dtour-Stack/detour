@@ -81,7 +81,7 @@ describe("securityCliMasterKey", () => {
 			// Common CI-runner case: keychain interaction-not-allowed (user
 			// session unavailable in CI). Treat as soft-skip — the unit covers
 			// the macOS path; we just can't exercise it here.
-			if (/interaction|locked|denied|errSec/i.test(msg)) return;
+			if (/interaction|locked|denied|authorization|errSec/i.test(msg)) return;
 			throw err;
 		}
 		expect(key!.length).toBe(32);

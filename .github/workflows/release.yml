@@ -80,6 +80,9 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      - name: Install
+        run: bun install --frozen-lockfile
+
       - name: Verify package.json version matches tag
         run: |
           PKG=$(node -p "require('./package.json').version")
@@ -94,9 +97,6 @@ jobs:
               fs.writeFileSync(path, JSON.stringify(pkg, null, '\t') + '\n');
             "
           fi
-
-      - name: Install
-        run: bun install --frozen-lockfile
 
       - name: Build eliza submodule packages
         # Electrobun's bundler can't resolve `@elizaos/*` until the vendored

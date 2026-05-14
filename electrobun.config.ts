@@ -31,6 +31,7 @@ export default {
 		// `http://<slug>.localhost:4848/` URLs from portless. Default
 		// macOS WKWebView ATS rejects plain HTTP.
 		postBuild: "scripts/post-build-ats.ts",
+		postWrap: "scripts/post-wrap-icon.ts",
 	},
 	build: {
 		bun: {
@@ -99,7 +100,6 @@ export default {
 		},
 		mac: {
 			bundleCEF: false,
-			icons: "build-assets/app-icon/icon.iconset",
 		},
 		linux: {
 			bundleCEF: false,

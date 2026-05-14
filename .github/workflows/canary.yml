@@ -46,6 +46,9 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Computed version: ${VERSION}"
 
+      - name: Install
+        run: bun install --frozen-lockfile
+
       - name: Stamp canary version into package.json
         run: |
           node -e "
@@ -55,9 +58,6 @@ jobs:
             pkg.version = '${{ steps.version.outputs.version }}';
             fs.writeFileSync(path, JSON.stringify(pkg, null, '\t') + '\n');
           "
-
-      - name: Install
-        run: bun install --frozen-lockfile
 
       - name: Build eliza submodule packages
         # Electrobun's bundler can't resolve `@elizaos/*` until the vendored

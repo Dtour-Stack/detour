@@ -166,7 +166,6 @@ export class MessageManager {
   }
 
   private async buildTelegramMentionContext(
-    ctx: Context,
     telegramMessage: Message,
     channelType: ChannelType,
   ): Promise<MentionContext | undefined> {
@@ -866,7 +865,6 @@ export class MessageManager {
       const channelType = getChannelType(chat);
 
       const mentionContext = await this.buildTelegramMentionContext(
-        ctx,
         message,
         channelType,
       );
