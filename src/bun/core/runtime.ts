@@ -337,6 +337,38 @@ const PROVIDER_PLUGINS: Record<ProviderId | "codex-chatgpt", () => Promise<Plugi
 	"codex-chatgpt": async () => (await import("../plugins/codex-chatgpt/index")).default,
 };
 
+export const LLM_ACTIVE_PLUGIN_PRIORITY = 100;
+export const LLM_RECOVERY_PLUGIN_PRIORITY = -100;
+
+/**
+ * Pins the active provider's LLM plugin to win every default
+ * `useModel(TEXT_LARGE)` / `OBJECT_LARGE` / etc resolution, while keeping
+ * recovery plugins reachable via the explicit `options.model` lookup that
+ * `dpe-fallback-plugin` uses.
+ *
+ * Critical: when more than one LLM plugin is loaded (e.g. Anthropic OAuth
+ * is paired AND an OPENROUTER_API_KEY is in the vault for recovery), every
+ * plugin registers its own TEXT_LARGE / OBJECT_LARGE / etc handlers at the
+ * same default priority (0). elizaOS's `resolveModelRegistration` picks
+ * the highest-priority entry and falls back to registration order on
+ * ties — which is non-deterministic across dynamic imports and would let
+ * a non-active provider win default `useModel` calls.
+ *
+ * We saw exactly this in production: with Anthropic marked active,
+ * autonomy / inbox / X-autonomy `useModel(TEXT_LARGE)` calls routed to
+ * OpenRouter's `openrouter/free` handler (→ google/gemma-4-31b-it:free)
+ * instead, because of registration-order ties.
+ *
+ * Inputs `plugins[0]` is the active attempt's plugin; the rest are
+ * recovery plugins, in the order they were resolved.
+ */
+export function tagLlmPluginPriorities(plugins: Plugin[]): Plugin[] {
+	return plugins.map((plugin, idx) => ({
+		...plugin,
+		priority: idx === 0 ? LLM_ACTIVE_PLUGIN_PRIORITY : LLM_RECOVERY_PLUGIN_PRIORITY,
+	}));
+}
+
 type ProviderAttempt = {
 	id: string;
 	label: string;
@@ -931,6 +963,15 @@ export class RuntimeService {
 	): Promise<RuntimeState> {
 		await attempt.prepare();
 		const llmPlugins = await this.llmPluginsForAttempt(attempt);
+		// Emit the active-vs-recovery LLM plugin layout once per build so
+		// "the agent is using OpenRouter when I picked Claude" bugs are
+		// answerable from logs alone. Pairs with the priority assignment
+		// in `llmPluginsForAttempt`.
+		console.log(
+			`[runtime] LLM plugin layout for build (active=${attempt.providerId}/${attempt.runtimeProvider}): ${llmPlugins
+				.map((p) => `${p.name}@${p.priority ?? 0}`)
+				.join(", ")}`,
+		);
 		const character = await this.buildCharacter();
 		const channelResolved = options.channels
 			? await this.resolveChannelPlugins()
@@ -1306,7 +1347,8 @@ export class RuntimeService {
 		push("elizacloud", directKeys.elizacloud);
 		push("anthropic", directKeys.anthropic);
 		push("openai", directKeys.openai);
-		return await Promise.all(providers.map((provider) => PROVIDER_PLUGINS[provider]()));
+		const loaded = await Promise.all(providers.map((provider) => PROVIDER_PLUGINS[provider]()));
+		return tagLlmPluginPriorities(loaded);
 	}
 
 	private basePlugins(llmPlugins: Plugin[]): Plugin[] {
