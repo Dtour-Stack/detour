@@ -59,3 +59,6 @@ eliza/*-export.jsonl
 build-assets/applescript-bridge/DetourBridge.app/
 build-assets/tray-bridge/DetourTray.app/
 build-assets/settings-bridge/DetourSettings.app/
+build-assets/swiftun-shell/.build/
+build-assets/activity-bridge/DetourActivity.app/
+build-assets/pensieve-bridge/DetourPensieve.app/

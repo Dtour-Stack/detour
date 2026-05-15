@@ -77,30 +77,50 @@ function findBundledBridge(): string | null {
 }
 
 /**
- * Locate the embedded DetourSettings.app inside our own bundle. The
- * postBuild hook drops it at Resources/DetourSettings.app. Returns
- * null in dev source mode (no bundle yet) so the React Settings
- * drawer stays as the fallback.
+ * Locate an embedded SwiftUI companion bundle inside our own .app.
+ * Used to route `detour://window?target=…` and `detour://settings`
+ * into native windows when the corresponding companion is bundled.
+ * Returns null in dev-source mode (no bundle yet) so the React
+ * surface stays as fallback.
+ *
+ * Companions today:
+ *   - DetourSettings.app  (Settings — native SwiftUI shell)
+ *   - DetourActivity.app  (trajectories / logs / runtime)
+ *   - DetourPensieve.app  (memory / search / relationships)
+ *
+ * Add to BUNDLED_COMPANIONS when shipping new companions.
  */
-function findBundledSettings(): string | null {
-	if (!process.execPath) return null;
+const BUNDLED_COMPANIONS: Record<string, string> = {
+	settings: "DetourSettings.app",
+	activity: "DetourActivity.app",
+	pensieve: "DetourPensieve.app",
+};
+
+function findBundledCompanion(target: string): string | null {
+	const name = BUNDLED_COMPANIONS[target];
+	if (!name || !process.execPath) return null;
 	const candidates = [
-		join(
-			dirname(process.execPath),
-			"..",
-			"Resources",
-			"app",
-			"DetourSettings.app",
-		),
-		join(
-			dirname(process.execPath),
-			"..",
-			"Resources",
-			"DetourSettings.app",
-		),
+		join(dirname(process.execPath), "..", "Resources", "app", name),
+		join(dirname(process.execPath), "..", "Resources", name),
 	];
 	for (const c of candidates) if (existsSync(c)) return c;
 	return null;
+}
+
+function findBundledSettings(): string | null {
+	return findBundledCompanion("settings");
+}
+
+function spawnCompanion(appPath: string, binaryName: string): boolean {
+	const binary = join(appPath, "Contents", "MacOS", binaryName);
+	if (!existsSync(binary)) return false;
+	try {
+		spawn(binary, [], { stdio: "ignore", detached: true }).unref();
+		return true;
+	} catch (err) {
+		console.warn(`[url-scheme] spawn ${binaryName} failed:`, err);
+		return false;
+	}
 }
 
 function registerBridgeWithLaunchServices(): void {
@@ -254,29 +274,15 @@ function handleRoute(
 
 		case "window": {
 			const target = asString(params.get("target"));
-			// `target=settings` short-circuits to the SwiftUI window when
-			// bundled — keeps menu / Shortcut / AppleScript callers
-			// consistent with the dedicated `detour://settings` route.
-			if (target === "settings") {
-				const bridgePath = findBundledSettings();
-				if (bridgePath) {
-					const binary = join(
-						bridgePath,
-						"Contents",
-						"MacOS",
-						"DetourSettings",
-					);
-					if (existsSync(binary)) {
-						try {
-							spawn(binary, [], { stdio: "ignore", detached: true }).unref();
-							return;
-						} catch (err) {
-							console.warn(
-								"[url-scheme] DetourSettings spawn failed, falling through:",
-								err,
-							);
-						}
-					}
+			// For targets that have a native SwiftUI companion bundled
+			// (settings / activity / pensieve), spawn that. Falls back
+			// to broadcasting `uiOpen<Target>` to the React shell when
+			// no companion is bundled.
+			if (target && target in BUNDLED_COMPANIONS) {
+				const appPath = findBundledCompanion(target);
+				if (appPath) {
+					const binName = BUNDLED_COMPANIONS[target]!.replace(/\.app$/, "");
+					if (spawnCompanion(appPath, binName)) return;
 				}
 			}
 			if (target && VALID_TARGETS.has(target as WindowOpenTarget)) {

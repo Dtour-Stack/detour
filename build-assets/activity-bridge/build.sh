@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
-# Builds DetourSettings.app — SwiftUI Settings companion.
-# Compiles build-assets/shared/*.swift alongside so every companion
-# shares one copy of the wire types + HTTP client + common views.
+# Builds DetourActivity.app — SwiftUI activity browser.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARED="$HERE/../shared"
-APP="$HERE/DetourSettings.app"
-BIN="$APP/Contents/MacOS/DetourSettings"
+APP="$HERE/DetourActivity.app"
+BIN="$APP/Contents/MacOS/DetourActivity"
 RES="$APP/Contents/Resources"
 
 if ! command -v swiftc >/dev/null 2>&1; then
-	echo "swiftc not found. Install Xcode CLT: xcode-select --install" >&2
+	echo "swiftc not found." >&2
 	exit 1
 fi
 
-echo "[settings] building DetourSettings.app at $APP"
+echo "[activity] building DetourActivity.app at $APP"
 rm -rf "$APP"
 mkdir -p "$(dirname "$BIN")" "$RES"
 
@@ -35,6 +33,6 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 if command -v codesign >/dev/null 2>&1; then
 	codesign --force --sign - --deep "$APP" 2>/dev/null || \
-		echo "[settings] codesign failed (non-fatal)"
+		echo "[activity] codesign failed (non-fatal)"
 fi
-echo "[settings] built $APP"
+echo "[activity] built $APP"

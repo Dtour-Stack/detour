@@ -87,3 +87,9 @@ await import("./post-build-tray-bridge");
 // The React Settings stays as fallback for tabs the SwiftUI surface
 // doesn't cover yet.
 await import("./post-build-settings-bridge");
+
+// Compile + embed DetourActivity.app + DetourPensieve.app — per-surface
+// SwiftUI windows. Each is read-mostly today and deep-links into the
+// React shell for editing flows we haven't ported yet.
+await import("./post-build-activity-bridge");
+await import("./post-build-pensieve-bridge");
