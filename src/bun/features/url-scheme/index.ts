@@ -254,6 +254,31 @@ function handleRoute(
 
 		case "window": {
 			const target = asString(params.get("target"));
+			// `target=settings` short-circuits to the SwiftUI window when
+			// bundled — keeps menu / Shortcut / AppleScript callers
+			// consistent with the dedicated `detour://settings` route.
+			if (target === "settings") {
+				const bridgePath = findBundledSettings();
+				if (bridgePath) {
+					const binary = join(
+						bridgePath,
+						"Contents",
+						"MacOS",
+						"DetourSettings",
+					);
+					if (existsSync(binary)) {
+						try {
+							spawn(binary, [], { stdio: "ignore", detached: true }).unref();
+							return;
+						} catch (err) {
+							console.warn(
+								"[url-scheme] DetourSettings spawn failed, falling through:",
+								err,
+							);
+						}
+					}
+				}
+			}
 			if (target && VALID_TARGETS.has(target as WindowOpenTarget)) {
 				broadcaster.broadcast(`uiOpen${capitalize(target)}` as never, {});
 			}

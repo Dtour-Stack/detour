@@ -440,13 +440,17 @@ final class TrayController: NSObject {
 
         // Window quick-actions (always present, regardless of slot prefs —
         // slots are for the popover; the native menu shows everything).
+        // Settings is special — it uses the dedicated `detour://settings`
+        // route which spawns DetourSettings.app (native SwiftUI window)
+        // when bundled, falling back to the React drawer. Every other
+        // target uses `detour://window?target=…` which broadcasts to
+        // the appropriate React window.
         for (target, label, shortcut) in [
             ("chat", "Open Chat", "c"),
             ("pensieve", "Open Pensieve", "p"),
             ("activity", "Open Activity", "a"),
             ("browser", "Open Browser", "b"),
             ("gallery", "Open Gallery", "g"),
-            ("settings", "Settings…", ","),
         ] {
             let item = NSMenuItem(
                 title: label,
@@ -458,6 +462,14 @@ final class TrayController: NSObject {
             item.keyEquivalentModifierMask = [.command, .shift]
             menu.addItem(item)
         }
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettingsWindow),
+            keyEquivalent: ",",
+        )
+        settingsItem.target = self
+        settingsItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(settingsItem)
 
         // Recent activity submenu
         let recent = snapshot?.recentTrajectories ?? []
@@ -541,6 +553,10 @@ final class TrayController: NSObject {
     @objc func openWindow(_ sender: NSMenuItem) {
         guard let target = sender.representedObject as? String else { return }
         openDetourURL("detour://window?target=\(percentEncode(target))")
+    }
+
+    @objc func openSettingsWindow() {
+        openDetourURL("detour://settings")
     }
 
     @objc func openSettingPath(_ sender: NSMenuItem) {
