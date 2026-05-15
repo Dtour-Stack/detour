@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>DetourBridge</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.detour.bridge</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Detour Bridge</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<!--
+		LSUIElement = YES → faceless. No Dock icon, no menu bar, no
+		windows. macOS auto-launches on first AppleScript event;
+		stays around briefly to handle bursts; exits on idle.
+	-->
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSBackgroundOnly</key>
+	<false/>
+	<!--
+		AppleScript scriptability. NSAppleScriptEnabled tells macOS
+		this app handles AppleEvents; OSAScriptingDefinition points at
+		the sdef file inside Resources/.
+	-->
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>OSAScriptingDefinition</key>
+	<string>Detour.sdef</string>
+	<!--
+		Register the `detour://` scheme ALSO on the bridge so when
+		LaunchServices searches for handlers it can find us first if
+		Detour.app isn't yet installed. (Not strictly required —
+		Detour.app's Info.plist already registers it — but harmless.)
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Detour URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>detour</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

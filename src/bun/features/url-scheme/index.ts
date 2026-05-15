@@ -37,9 +37,70 @@
  */
 
 import Electrobun from "electrobun/bun";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { broadcaster } from "../../core/rpc/registry";
 import type { Feature } from "../../kernel/registry";
 import type { WindowOpenTarget } from "../../../shared/index";
+
+/**
+ * Locate the embedded DetourBridge.app inside our own bundle. macOS
+ * needs to register it with LaunchServices once so AppleScript can
+ * dispatch to it by bundle ID. We do this fire-and-forget on first
+ * run — repeat calls are idempotent.
+ *
+ * Returns null in dev (when running source directly) — `lsregister`
+ * would point at a bundle we haven't built yet.
+ */
+function findBundledBridge(): string | null {
+	if (!process.execPath) return null;
+	const candidate = join(
+		dirname(process.execPath),
+		"..",
+		"Resources",
+		"app",
+		"DetourBridge.app",
+	);
+	// Electrobun packages our copy map under Resources/app; postBuild
+	// embeds the bridge alongside the bun output. We also accept the
+	// legacy Resources/DetourBridge.app location for safety.
+	const legacy = join(
+		dirname(process.execPath),
+		"..",
+		"Resources",
+		"DetourBridge.app",
+	);
+	if (existsSync(candidate)) return candidate;
+	if (existsSync(legacy)) return legacy;
+	return null;
+}
+
+function registerBridgeWithLaunchServices(): void {
+	const bridgePath = findBundledBridge();
+	if (!bridgePath) {
+		console.log("[url-scheme] DetourBridge.app not bundled — skipping LS registration");
+		return;
+	}
+	// `lsregister` lives at a deep system path; -f forces re-registration
+	// (idempotent if already registered to the same bundle path).
+	const lsregister =
+		"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+	if (!existsSync(lsregister)) {
+		console.warn("[url-scheme] lsregister not found; skipping bridge registration");
+		return;
+	}
+	const child = spawn(lsregister, ["-f", bridgePath], {
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	child.once("close", (code) => {
+		if (code === 0) {
+			console.log(`[url-scheme] registered DetourBridge.app at ${bridgePath}`);
+		} else {
+			console.warn(`[url-scheme] lsregister exited ${code}`);
+		}
+	});
+}
 
 const VALID_TARGETS = new Set<WindowOpenTarget>([
 	"chat",
@@ -80,6 +141,15 @@ function asBool(value: string | null | undefined): boolean {
 export const urlSchemeFeature: Feature = {
 	id: "url-scheme",
 	init(deps) {
+		// Register the embedded AppleScript bridge with LaunchServices
+		// so `tell application id "ai.detour.bridge" to ...` works
+		// without manual setup. Idempotent — re-runs on every Detour
+		// launch but only does I/O on first install / bundle move.
+		try {
+			registerBridgeWithLaunchServices();
+		} catch (err) {
+			console.warn("[url-scheme] bridge registration failed:", err);
+		}
 		Electrobun.events.on("open-url", (e: { data: { url: string } }) => {
 			const raw = e?.data?.url ?? "";
 			if (!raw.startsWith("detour:")) return;

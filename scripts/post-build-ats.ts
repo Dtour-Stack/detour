@@ -71,3 +71,9 @@ console.log(`[post-build-ats] injected ATS localhost exception into ${plistPath}
 // pino dep tree make it into the .app. Runs in-process so the single
 // `postBuild` hook covers both concerns. See post-build-pty-adapters.ts.
 await import("./post-build-pty-adapters");
+
+// Compile + embed DetourBridge.app — the Swift companion that gives
+// Detour a real AppleScript surface. Best-effort; skips silently if
+// swiftc is missing. See post-build-applescript-bridge.ts and
+// docs/applescript.md.
+await import("./post-build-applescript-bridge");
