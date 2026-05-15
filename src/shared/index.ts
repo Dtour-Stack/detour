@@ -529,6 +529,59 @@ export const DEFAULT_TRAY_SLOTS: TraySlot[] = [
 	"settings",
 ];
 
+/**
+ * Snapshot polled by the Swift tray companion (DetourTray.app) via
+ * GET /api/tray-state every ~4s. The companion uses this to rebuild
+ * its native NSMenu without needing direct access to Detour's
+ * internals. Wire-only — no Bun-specific types leak through.
+ */
+export type TraySnapshotWire = {
+	/** Active LLM provider id, or null when none configured. */
+	readonly activeProviderId: ProviderId | null;
+	/** All configured providers, with whether each is ready. */
+	readonly providers: ReadonlyArray<{
+		readonly id: ProviderId;
+		readonly label: string;
+		readonly active: boolean;
+		readonly configured: boolean;
+	}>;
+	/** Bundled embedding server. */
+	readonly embed: {
+		readonly running: boolean;
+		readonly downloadPercent?: number;
+		readonly lastError: string | null;
+	};
+	/** Optional local chat tier. */
+	readonly localChat: {
+		readonly enabled: boolean;
+		readonly running: boolean;
+		readonly preset: string | null;
+	};
+	/** Optional companion sidecar. */
+	readonly companion: {
+		readonly enabled: boolean;
+		readonly running: boolean;
+		readonly preset: string | null;
+		readonly sharedWithLocalChat: boolean;
+	};
+	/** Shared RAM budget across the three llama tiers. */
+	readonly memory: {
+		readonly totalGB: number;
+		readonly headroomGB: number;
+		readonly budgetGB: number;
+		readonly usedGB: number;
+	} | null;
+	/** Last N trajectories — Swift renders them as a submenu. */
+	readonly recentTrajectories: ReadonlyArray<{
+		readonly id: string;
+		readonly source?: string;
+		readonly startTime?: number;
+		readonly status?: string;
+	}>;
+	/** User-customized slot order for the popover, kept for parity. */
+	readonly traySlots: ReadonlyArray<TraySlot>;
+};
+
 export const DEFAULT_TRAY_PREFS: TrayPrefs = {
 	slots: DEFAULT_TRAY_SLOTS,
 	pillsVisible: { embed: true, chat: true, companion: true },

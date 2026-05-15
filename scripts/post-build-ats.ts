@@ -77,3 +77,8 @@ await import("./post-build-pty-adapters");
 // swiftc is missing. See post-build-applescript-bridge.ts and
 // docs/applescript.md.
 await import("./post-build-applescript-bridge");
+
+// Compile + embed DetourTray.app — the Swift companion that owns the
+// menu-bar NSStatusItem with a rich native NSMenu (MeetingBar-style).
+// Replaces Electrobun's basic tray. Best-effort; same skip behavior.
+await import("./post-build-tray-bridge");

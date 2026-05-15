@@ -109,6 +109,7 @@ const { galleryFeature } = await import("./features/gallery");
 const { trayPopoverFeature } = await import("./features/tray-popover");
 const { urlSchemeFeature } = await import("./features/url-scheme");
 const { statusWidgetFeature } = await import("./features/status-widget");
+const { trayBridgeFeature } = await import("./features/tray-bridge");
 
 console.log("[main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
@@ -133,6 +134,10 @@ await loadFeatures(kernel, [
 	petFeature,
 	galleryFeature,
 	statusWidgetFeature,
+	// trayBridgeFeature MUST load AFTER all features that addMenuItem,
+	// so when it calls deps.tray.hideIcon() the registered items are
+	// already collected (in case the Swift tray ever wants to fetch them).
+	trayBridgeFeature,
 ]);
 
 console.log("[main] tray-app ready");

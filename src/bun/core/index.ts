@@ -288,6 +288,17 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			process.env.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY ?? "local-llama";
 			process.env.OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? "local";
 			process.env.OPENAI_EMBEDDING_DIMENSIONS = process.env.OPENAI_EMBEDDING_DIMENSIONS ?? "384";
+			// Eliza's knowledge service validates EMBEDDING_PROVIDER ∈
+			// {"local","openai","google"}. We ARE local — the llama-server
+			// is bundled with Detour and runs in-process. Eliza's "local"
+			// path calls runtime.useModel(ModelType.TEXT_EMBEDDING, …)
+			// which routes through our embedding-openai plugin → the
+			// llama-server. (The plugin happens to speak OpenAI's wire
+			// shape, but that's an implementation detail; semantically
+			// this is local-only inference with no network egress.)
+			process.env.EMBEDDING_PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
+			process.env.LOCAL_EMBEDDING_MODEL = process.env.LOCAL_EMBEDDING_MODEL ?? "local";
+			process.env.LOCAL_EMBEDDING_DIMENSIONS = process.env.LOCAL_EMBEDDING_DIMENSIONS ?? "384";
 			console.log(`[core] local llama-server embeddings ready at ${res.url}`);
 		} else {
 			console.warn("[core] local llama-server unavailable; embeddings will fall back to OpenAI key or zeros");
@@ -453,13 +464,73 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
 		}
 	});
-	const api = new ApiServer(runtime, activity, {
-		dream,
-		improvement,
-		agentHfSync,
-		localChat,
-		companion,
-	});
+	// Tray-state builder for the Swift DetourTray.app companion. Gathers
+	// from every service it needs in one read — kept compact since the
+	// tray polls every ~4s.
+	const buildTraySnapshot = async () => {
+		const llamaSnap = llama.status();
+		const localChatSnap = localChat.status();
+		const companionSnap = companion.status();
+		const memorySnap = arbiter.inspect();
+		const providers = await vault.listProviders().catch(() => [] as Awaited<ReturnType<typeof vault.listProviders>>);
+		const activeProviderId = providers.find((p) => p.active)?.id ?? null;
+		const trajectoriesResult = await activity.trajectories
+			.list({ limit: 5, offset: 0 })
+			.catch(() => ({ trajectories: [] as Array<{
+				id: string;
+				source?: string;
+				startTime?: number;
+				status?: string;
+			}> }));
+		const prefs = await config.getTrayPrefs().catch(() => null);
+		return {
+			activeProviderId,
+			providers: providers.map((p) => ({
+				id: p.id,
+				label: p.label,
+				active: !!p.active,
+				configured: !!p.hasKey || (p.oauthAccountCount ?? 0) > 0,
+			})),
+			embed: {
+				running: llamaSnap.running,
+				...(llamaSnap.downloadProgress
+					? { downloadPercent: llamaSnap.downloadProgress.percent }
+					: {}),
+				lastError: llamaSnap.lastError,
+			},
+			localChat: {
+				enabled: localChatSnap.enabled,
+				running: localChatSnap.running,
+				preset: localChatSnap.preset,
+			},
+			companion: {
+				enabled: companionSnap.enabled,
+				running: companionSnap.running,
+				preset: companionSnap.preset,
+				sharedWithLocalChat: companionSnap.sharedWithLocalChat,
+			},
+			memory: {
+				totalGB: memorySnap.totalGB,
+				headroomGB: memorySnap.headroomGB,
+				budgetGB: memorySnap.budgetGB,
+				usedGB: memorySnap.usedGB,
+			},
+			recentTrajectories: trajectoriesResult.trajectories.slice(0, 5).map((t) => ({
+				id: t.id,
+				...(t.source !== undefined ? { source: t.source } : {}),
+				...(t.startTime !== undefined ? { startTime: t.startTime } : {}),
+				...(t.status !== undefined ? { status: t.status } : {}),
+			})),
+			traySlots: prefs?.slots ?? [],
+		};
+	};
+
+	const api = new ApiServer(
+		runtime,
+		activity,
+		{ dream, improvement, agentHfSync, localChat, companion },
+		buildTraySnapshot,
+	);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);

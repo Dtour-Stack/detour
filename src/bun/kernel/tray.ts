@@ -11,6 +11,14 @@ export class TrayController {
 	private handlers = new Map<string, ClickHandler>();
 	private iconClickHandlers: Array<() => void> = [];
 	private statusLabel: string | null = null;
+	/**
+	 * When false, this controller hides its own tray icon entirely so
+	 * the Swift DetourTray companion can own the only menu-bar icon.
+	 * Toggled by src/bun/features/tray-bridge/. Default true preserves
+	 * legacy behaviour when the bridge isn't shipped (e.g. swiftc was
+	 * unavailable at build time).
+	 */
+	private visible = true;
 
 	constructor(opts: { title: string }) {
 		// Template PNGs are copied to Resources/app/views/icons/ by the
@@ -66,6 +74,21 @@ export class TrayController {
 
 	remove(): void {
 		this.tray.remove();
+	}
+
+	/**
+	 * Hide Electrobun's tray icon entirely. Used by the tray-bridge
+	 * feature when the Swift DetourTray companion is taking over the
+	 * menu bar so we don't show two icons.
+	 */
+	hideIcon(): void {
+		if (!this.visible) return;
+		this.visible = false;
+		try {
+			this.tray.setVisible(false);
+		} catch {
+			// best-effort — some Electrobun versions may not expose setVisible.
+		}
 	}
 
 	private rebuildMenu(): void {

@@ -10,6 +10,7 @@ import type {
 	BrowserCommand,
 	BrowserCommandInput,
 	BrowserCommandResult,
+	TraySnapshotWire,
 } from "../../../shared/index";
 
 const VERSION = "0.0.1";
@@ -211,6 +212,15 @@ export class ApiServer {
 			localChat?: import("../llama/chat-service").LocalChatService;
 			companion?: import("../llama/companion-service").CompanionService;
 		},
+		/**
+		 * Build the tray snapshot consumed by the Swift tray companion.
+		 * core/index.ts wires this in with access to all the services
+		 * the snapshot needs (runtime, llama, localChat, companion,
+		 * memoryArbiter, activity, config). Optional — if missing,
+		 * GET /api/tray-state returns 503 and the Swift tray falls back
+		 * to a minimal "just running" menu.
+		 */
+		private readonly trayStateBuilder?: () => Promise<TraySnapshotWire>,
 	) {}
 
 	private installBrowserControlGlobal(): void {
@@ -381,6 +391,28 @@ export class ApiServer {
 				return json({ ok: true, version: VERSION });
 			}
 			return null;
+		},
+		// Tray-state snapshot polled by the Swift tray companion
+		// (build-assets/tray-bridge/) every 4s. Contains everything the
+		// rich NSMenu needs to render: provider, memory budget, the
+		// three local-AI tiers, the user's quick-action slots, and
+		// recent trajectories. Keep this small + fast — it's polled
+		// often. Read-only; tray clicks go back through detour:// URLs.
+		async (ctx) => {
+			const { req, path, json, error } = ctx;
+			if (req.method !== "GET" || path !== "/api/tray-state") return null;
+			if (!this.trayStateBuilder) {
+				return error("tray-state unavailable", 503);
+			}
+			try {
+				const snap = await this.trayStateBuilder();
+				return json(snap);
+			} catch (err) {
+				return error(
+					err instanceof Error ? err.message : "tray-state failed",
+					500,
+				);
+			}
 		},
 		// Debug: invoke an eliza action by name directly through the built
 		// runtime, bypassing the LLM action selector. Used to validate the
