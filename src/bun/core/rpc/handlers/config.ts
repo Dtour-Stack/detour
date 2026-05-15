@@ -4,9 +4,25 @@ import type {
 	AgentHfSyncPolicy,
 	ModelConfig,
 	ThemeChoice,
+	TrayPrefs,
 	UiPreferences,
 	WindowConfig,
 } from "../../../../shared/index";
+
+type TrayPrefsListener = (prefs: TrayPrefs) => void;
+const trayPrefsBunSubscribers = new Set<TrayPrefsListener>();
+
+/**
+ * Subscribe (bun-side) to tray pref changes. Used by features that
+ * need to react in-process — e.g. the status-widget feature toggles
+ * its overlay window on/off when the user flips
+ * `tray.statusWidgetEnabled` in Settings. The RPC broadcaster is for
+ * view-side listeners only; this hook fires before that broadcast.
+ */
+export function onTrayPrefsChangedBunSide(fn: TrayPrefsListener): () => void {
+	trayPrefsBunSubscribers.add(fn);
+	return () => trayPrefsBunSubscribers.delete(fn);
+}
 import type { AgentHfDumpJob, AgentHfDumpStatus } from "../../../../shared/rpc/config";
 import type { RpcDeps } from "../types";
 
@@ -59,6 +75,17 @@ export function configRequests(deps: RpcDeps) {
 		configSetWindow: async (params: WindowConfig): Promise<{ ok: true }> => {
 			await deps.config.setWindow(params);
 			return { ok: true };
+		},
+		configGetTrayPrefs: async (_params: Record<string, never>): Promise<TrayPrefs> => {
+			return await deps.config.getTrayPrefs();
+		},
+		configSetTrayPrefs: async (params: TrayPrefs): Promise<TrayPrefs> => {
+			const sanitized = await deps.config.setTrayPrefs(params);
+			deps.broadcaster.broadcast("trayPrefsChanged", { prefs: sanitized });
+			for (const fn of trayPrefsBunSubscribers) {
+				try { fn(sanitized); } catch { /* swallow */ }
+			}
+			return sanitized;
 		},
 		uiGetPreferences: async (_params: Record<string, never>): Promise<UiPreferences> => {
 			const v = await deps.vault.vault();

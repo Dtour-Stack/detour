@@ -21,6 +21,17 @@ export default {
 		name: "Detour",
 		identifier: "ai.detour.app",
 		version: pkg.version,
+		// `detour://` URL scheme — used by macOS Shortcuts and any
+		// AppleScript / Raycast / Alfred caller to drive Detour from
+		// outside. Routes are handled in src/bun/features/url-scheme/.
+		// Examples:
+		//   detour://chat?text=...&submit=1
+		//   detour://settings?tab=local-ai
+		//   detour://window?target=pensieve
+		//   detour://action?name=PENSIEVE_SEARCH&query=...
+		// macOS only — Electrobun's urlSchemes config is darwin-only and
+		// requires the .app to be in /Applications to register globally.
+		urlSchemes: ["detour"],
 	},
 	runtime: {
 		exitOnLastWindowClosed: false,
@@ -101,6 +112,13 @@ export default {
 			"src/main/workspace.html": "views/main/workspace.html",
 			"src/main/gallery.html": "views/main/gallery.html",
 			"src/main/tray-popover.html": "views/main/tray-popover.html",
+			"src/main/status-widget.html": "views/main/status-widget.html",
+			// AppleScript surface — shipped at Resources/{Detour.sdef,DetourHelpers.applescript}
+			// for power users. The sdef is a stub until we wire a Swift
+			// scripting bridge; the .applescript file holds working
+			// helpers that route through the detour:// URL scheme.
+			"build-assets/applescript/Detour.sdef": "Detour.sdef",
+			"build-assets/applescript/DetourHelpers.applescript": "DetourHelpers.applescript",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk
 			// (Bun.Worker reads .ts source directly). Worker import of the SDK
 			// resolves via the path-preserving copy of carrot-sdk/index.ts, so

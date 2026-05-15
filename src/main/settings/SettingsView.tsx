@@ -17,10 +17,11 @@ import { CloudContainersTab } from "./CloudContainersTab";
 import { PhantomWalletTab } from "./PhantomWalletTab";
 import { AudioTab } from "./AudioTab";
 import { SkillsTab } from "./SkillsTab";
+import { TrayTab } from "./TrayTab";
 
 type Section = "configuration" | "vault" | "cloud";
 
-type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | "character" | "agent" | "skills" | "os" | "window" | "phantom";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | "character" | "agent" | "skills" | "os" | "window" | "phantom" | "tray";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 type CloudTab = "elizacloud" | "apps" | "containers";
 
@@ -37,6 +38,7 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "skills", label: "Skills" },
 	{ id: "phantom", label: "Phantom wallet" },
 	{ id: "appearance", label: "Appearance" },
+	{ id: "tray", label: "Tray" },
 	{ id: "window", label: "Window" },
 	{ id: "os", label: "OS Permissions" },
 ];
@@ -77,6 +79,8 @@ function ConfigContent({ tab }: { tab: ConfigTab }) {
 			return <OsPermissionsTab />;
 		case "window":
 			return <WindowTab />;
+		case "tray":
+			return <TrayTab />;
 		default:
 			return <div className="empty">Unknown configuration tab.</div>;
 	}

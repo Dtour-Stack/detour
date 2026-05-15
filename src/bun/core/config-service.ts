@@ -17,7 +17,11 @@ import {
 	type AgentHfSyncReason,
 	type AgentHfSyncState,
 	type ChroniclerConfig,
+	DEFAULT_TRAY_PREFS,
+	DEFAULT_TRAY_SLOTS,
 	type ModelConfig,
+	type TrayPrefs,
+	type TraySlot,
 	type WindowConfig,
 } from "../../shared/index";
 import {
@@ -105,6 +109,7 @@ const KEY_WINDOW = "config.window";
 const KEY_CHRONICLER = "config.chronicler";
 const KEY_HF_SYNC_POLICY = "config.agentHfSyncPolicy";
 const KEY_HF_SYNC_STATE = "config.agentHfSyncState";
+const KEY_TRAY = "config.tray";
 
 function configuredString(raw: Record<string, unknown>, key: keyof ModelConfig): string | null {
 	const value = raw[key];
@@ -293,6 +298,67 @@ export class ConfigService {
 		});
 		await this.writeJson(KEY_CHRONICLER, sanitized);
 		return sanitized;
+	}
+
+	// ── Tray preferences ─────────────────────────────────────────────
+
+	async getTrayPrefs(): Promise<TrayPrefs> {
+		const raw = await this.readJson(KEY_TRAY);
+		if (!raw) return { ...DEFAULT_TRAY_PREFS, slots: [...DEFAULT_TRAY_SLOTS] };
+		return this.sanitizeTrayPrefs(raw);
+	}
+
+	async setTrayPrefs(next: TrayPrefs): Promise<TrayPrefs> {
+		const sanitized = this.sanitizeTrayPrefs(next as unknown as Record<string, unknown>);
+		await this.writeJson(KEY_TRAY, sanitized);
+		return sanitized;
+	}
+
+	private sanitizeTrayPrefs(raw: Record<string, unknown> | TrayPrefs): TrayPrefs {
+		const validSlots = new Set<TraySlot>([
+			"chat",
+			"pensieve",
+			"activity",
+			"browser",
+			"gallery",
+			"settings",
+			"command-palette",
+			"portless",
+			"workspace",
+		]);
+		const rawSlots = (raw as { slots?: unknown }).slots;
+		const seen = new Set<TraySlot>();
+		const slots: TraySlot[] = [];
+		if (Array.isArray(rawSlots)) {
+			for (const slot of rawSlots) {
+				if (typeof slot !== "string") continue;
+				if (!validSlots.has(slot as TraySlot)) continue;
+				if (seen.has(slot as TraySlot)) continue;
+				seen.add(slot as TraySlot);
+				slots.push(slot as TraySlot);
+				if (slots.length >= 6) break;
+			}
+		}
+		// Pad with defaults to ensure the popover always renders 6 slots.
+		if (slots.length < 6) {
+			for (const fill of DEFAULT_TRAY_SLOTS) {
+				if (seen.has(fill)) continue;
+				slots.push(fill);
+				seen.add(fill);
+				if (slots.length >= 6) break;
+			}
+		}
+		const rawPills = (raw as { pillsVisible?: { embed?: unknown; chat?: unknown; companion?: unknown } }).pillsVisible;
+		const pillsVisible = {
+			embed: typeof rawPills?.embed === "boolean" ? rawPills.embed : true,
+			chat: typeof rawPills?.chat === "boolean" ? rawPills.chat : true,
+			companion: typeof rawPills?.companion === "boolean" ? rawPills.companion : true,
+		};
+		const rawMode = (raw as { statusLabelMode?: unknown }).statusLabelMode;
+		const statusLabelMode = rawMode === "terse" ? "terse" : "verbose";
+		const rawWidget = (raw as { statusWidgetEnabled?: unknown }).statusWidgetEnabled;
+		const statusWidgetEnabled = typeof rawWidget === "boolean" ? rawWidget : false;
+		return { slots, pillsVisible, statusLabelMode, statusWidgetEnabled };
 	}
 
 	async getAgentHfSyncPolicy(): Promise<AgentHfSyncPolicy> {

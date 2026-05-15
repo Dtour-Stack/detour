@@ -107,6 +107,8 @@ const { workspaceFeature } = await import("./features/workspace");
 const { petFeature } = await import("./features/pet");
 const { galleryFeature } = await import("./features/gallery");
 const { trayPopoverFeature } = await import("./features/tray-popover");
+const { urlSchemeFeature } = await import("./features/url-scheme");
+const { statusWidgetFeature } = await import("./features/status-widget");
 
 console.log("[main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
@@ -117,6 +119,7 @@ await loadFeatures(kernel, [
 	// owns the tray-icon-click target. (Both register handlers on the
 	// same event; the first to bind wins as the canonical menu.)
 	trayPopoverFeature,
+	urlSchemeFeature,
 	chatFeature,
 	settingsFeature,
 	pensieveFeature,
@@ -129,6 +132,7 @@ await loadFeatures(kernel, [
 	workspaceFeature,
 	petFeature,
 	galleryFeature,
+	statusWidgetFeature,
 ]);
 
 console.log("[main] tray-app ready");

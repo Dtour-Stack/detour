@@ -53,7 +53,9 @@ export type WindowOpenTarget =
 	| "browser"
 	| "agents"
 	| "pet"
-	| "gallery";
+	| "gallery"
+	| "portless"
+	| "workspace";
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
@@ -475,6 +477,63 @@ export type WindowConfig = {
 	height: number;
 	hideOnBlur: boolean;
 	alwaysOnTop: boolean;
+};
+
+/**
+ * What the user can pin to the tray popover's quick-action grid.
+ * Must match a real WindowOpenTarget or one of the special action
+ * names handled in tray-popover/TrayPopoverView.tsx.
+ */
+export type TraySlot =
+	| "chat"
+	| "pensieve"
+	| "activity"
+	| "browser"
+	| "gallery"
+	| "settings"
+	| "command-palette"
+	| "portless"
+	| "workspace";
+
+export type TrayStatusLabelMode = "terse" | "verbose";
+
+export type TrayPrefs = {
+	/**
+	 * 6 slots in the quick-action grid (2×3). Duplicates are filtered
+	 * out by the sanitizer; entries fewer than 6 are padded with the
+	 * defaults; entries more than 6 are truncated.
+	 */
+	slots: TraySlot[];
+	/** Which status pills are visible in the popover header. */
+	pillsVisible: {
+		embed: boolean;
+		chat: boolean;
+		companion: boolean;
+	};
+	/**
+	 * How the menu-bar status label renders.
+	 *   - terse:   `● Claude`
+	 *   - verbose: `● Detour: Claude + local embeds` (legacy default)
+	 */
+	statusLabelMode: TrayStatusLabelMode;
+	/** Auto-hide the floating status widget when chat has focus. */
+	statusWidgetEnabled: boolean;
+};
+
+export const DEFAULT_TRAY_SLOTS: TraySlot[] = [
+	"chat",
+	"pensieve",
+	"activity",
+	"browser",
+	"gallery",
+	"settings",
+];
+
+export const DEFAULT_TRAY_PREFS: TrayPrefs = {
+	slots: DEFAULT_TRAY_SLOTS,
+	pillsVisible: { embed: true, chat: true, companion: true },
+	statusLabelMode: "verbose",
+	statusWidgetEnabled: false,
 };
 
 export type ChroniclerConfig = {

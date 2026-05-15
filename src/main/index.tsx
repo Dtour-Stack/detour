@@ -9,6 +9,7 @@ import { WorkspaceView } from "./workspace/WorkspaceView";
 import { PetWindow } from "./pet/PetWindow";
 import { GalleryView } from "./gallery/GalleryView";
 import { TrayPopoverView } from "./tray-popover/TrayPopoverView";
+import { StatusWidget } from "./status-widget/StatusWidget";
 import { DetourPhantomRoot } from "./wallet/DetourPhantomRoot";
 import "./index.css";
 
@@ -35,12 +36,14 @@ const root =
 	view === "pet" ? <PetWindow /> :
 	view === "gallery" ? <GalleryView /> :
 	view === "tray-popover" ? <TrayPopoverView /> :
+	view === "status-widget" ? <StatusWidget /> :
 	<App />;
 
-// The tray popover is a transient menu — it doesn't need the Phantom
-// wallet provider tree (which is heavy and unused at this surface). Skip
-// the wrapper for that view so the popover is small + cheap.
-const wrapped = view === "tray-popover" ? root : <DetourPhantomRoot>{root}</DetourPhantomRoot>;
+// The tray popover + status widget are transient surfaces — they don't
+// need the Phantom wallet provider tree (heavy + unused there). Skip
+// the wrapper so each window is small + cheap.
+const skipPhantomWrap = view === "tray-popover" || view === "status-widget";
+const wrapped = skipPhantomWrap ? root : <DetourPhantomRoot>{root}</DetourPhantomRoot>;
 
 createRoot(document.getElementById("root")!).render(
 	<StrictMode>{wrapped}</StrictMode>,

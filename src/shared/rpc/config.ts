@@ -6,6 +6,7 @@ import type {
 	AgentHfSyncReason,
 	AgentHfSyncState,
 	ModelConfig,
+	TrayPrefs,
 	UiPreferences,
 	WindowConfig,
 } from "../index";
@@ -73,6 +74,15 @@ export type ConfigRequests = {
 		params: WindowConfig;
 		response: { ok: true };
 	};
+	/** Tray popover + status-label preferences. */
+	configGetTrayPrefs: {
+		params: Record<string, never>;
+		response: TrayPrefs;
+	};
+	configSetTrayPrefs: {
+		params: TrayPrefs;
+		response: TrayPrefs;
+	};
 	uiGetPreferences: {
 		params: Record<string, never>;
 		response: UiPreferences;
@@ -104,4 +114,10 @@ export type ConfigMessages = {
 	// saves new theme/accent so other open windows (Pensieve, Activity,
 	// Channels, chat popup) re-apply live without a reload.
 	uiPreferencesChanged: { preferences: UiPreferences };
+	/**
+	 * Broadcast whenever the tray popover prefs change so the open
+	 * popover (and the kernel's status-label builder) update without
+	 * forcing a tray-icon click cycle.
+	 */
+	trayPrefsChanged: { prefs: TrayPrefs };
 };

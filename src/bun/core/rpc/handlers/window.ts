@@ -32,6 +32,8 @@ const WINDOW_OPEN_MESSAGE: Record<WindowOpenTarget, keyof import("../../../../sh
 	agents: "uiOpenAgents",
 	pet: "uiOpenPet",
 	gallery: "uiOpenGallery",
+	portless: "uiOpenPortless",
+	workspace: "uiOpenWorkspace",
 };
 
 export function windowRequests(deps: RpcDeps) {

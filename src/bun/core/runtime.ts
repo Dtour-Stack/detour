@@ -60,6 +60,7 @@ import { gmgnToolsPlugin } from "../plugins/gmgn-tools/index";
 import { audioGenerationPlugin, audioSettingKeys } from "../plugins/audio-generation/index";
 import { mediaGenerationPlugin, mediaGenerationSettingKeys } from "../plugins/media-generation/index";
 import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
+import { macAutomatePlugin } from "../plugins/mac-automate/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
 // build can fail on first install; if the dist isn't there the plugin
 // stays null. Service start() failures are absorbed by the wrapper below
@@ -1426,6 +1427,7 @@ export class RuntimeService {
 			audioGenerationPlugin,
 			mediaGenerationPlugin,
 			desktopControlPlugin,
+			macAutomatePlugin,
 			...(agentOrchestratorPlugin ? [agentOrchestratorPlugin] : []),
 			// cronToolsPlugin: replaced by `cron-tools` carrot loaded via the
 			// carrot bridge — see core/index.ts and src/bun/core/carrots/. The

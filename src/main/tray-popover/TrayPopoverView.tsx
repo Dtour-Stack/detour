@@ -19,8 +19,16 @@ import type {
 	LlamaServerStatusWire,
 	LocalChatStatusWire,
 } from "../../shared/rpc/llama";
-import type { ProviderId, ProviderInfo } from "../../shared/index";
+import {
+	DEFAULT_TRAY_PREFS,
+	DEFAULT_TRAY_SLOTS,
+	type ProviderId,
+	type ProviderInfo,
+	type TrayPrefs,
+	type TraySlot,
+} from "../../shared/index";
 import { rpc } from "../rpc";
+import { onTrayPrefsChanged } from "../rpc-listeners/config";
 
 const POLL_MS = 4_000;
 
@@ -42,6 +50,7 @@ interface Snapshot {
 	localChat: LocalChatStatusWire | null;
 	companion: CompanionStatusWire | null;
 	memory: LlamaMemoryBudgetWire | null;
+	prefs: TrayPrefs;
 	recentTrajectories: Array<{
 		id: string;
 		actionName?: string;
@@ -57,7 +66,20 @@ const EMPTY_SNAPSHOT: Snapshot = {
 	localChat: null,
 	companion: null,
 	memory: null,
+	prefs: { ...DEFAULT_TRAY_PREFS, slots: [...DEFAULT_TRAY_SLOTS] },
 	recentTrajectories: [],
+};
+
+const SLOT_META: Record<TraySlot, { icon: string; label: string }> = {
+	chat: { icon: "💬", label: "Chat" },
+	pensieve: { icon: "🧠", label: "Pensieve" },
+	activity: { icon: "📊", label: "Activity" },
+	browser: { icon: "🌐", label: "Browser" },
+	gallery: { icon: "🖼", label: "Gallery" },
+	settings: { icon: "⚙", label: "Settings" },
+	"command-palette": { icon: "⌘", label: "Palette" },
+	portless: { icon: "↔", label: "Portless" },
+	workspace: { icon: "🧰", label: "Workspace" },
 };
 
 function fmtRelative(ts?: number): string {
@@ -83,18 +105,30 @@ function providerLabel(id: ProviderId): string {
 }
 
 async function loadSnapshot(): Promise<Snapshot> {
-	const [providersResult, llamaResult, chatResult, companionResult, memoryResult, trajectoriesResult] =
-		await Promise.allSettled([
-			rpc.request.providersList({}),
-			rpc.request.llamaStatus({}),
-			rpc.request.localChatStatus({}),
-			rpc.request.companionStatus({}),
-			rpc.request.llamaMemoryBudget({}),
-			rpc.request.activityTrajectoriesList({ limit: 5, offset: 0 }),
-		]);
+	const [
+		providersResult,
+		llamaResult,
+		chatResult,
+		companionResult,
+		memoryResult,
+		trajectoriesResult,
+		prefsResult,
+	] = await Promise.allSettled([
+		rpc.request.providersList({}),
+		rpc.request.llamaStatus({}),
+		rpc.request.localChatStatus({}),
+		rpc.request.companionStatus({}),
+		rpc.request.llamaMemoryBudget({}),
+		rpc.request.activityTrajectoriesList({ limit: 5, offset: 0 }),
+		rpc.request.configGetTrayPrefs({}),
+	]);
 	const providers =
 		providersResult.status === "fulfilled" ? providersResult.value : [];
 	const activeProvider = providers.find((p) => p.active)?.id ?? null;
+	const prefs =
+		prefsResult.status === "fulfilled"
+			? prefsResult.value
+			: { ...DEFAULT_TRAY_PREFS, slots: [...DEFAULT_TRAY_SLOTS] };
 	return {
 		providers,
 		activeProvider,
@@ -103,6 +137,7 @@ async function loadSnapshot(): Promise<Snapshot> {
 		companion:
 			companionResult.status === "fulfilled" ? companionResult.value : null,
 		memory: memoryResult.status === "fulfilled" ? memoryResult.value : null,
+		prefs,
 		recentTrajectories:
 			trajectoriesResult.status === "fulfilled"
 				? trajectoriesResult.value.trajectories.slice(0, 5).map((t) => ({
@@ -132,8 +167,12 @@ export function TrayPopoverView() {
 	useEffect(() => {
 		void refresh();
 		pollRef.current = setInterval(() => void refresh(), POLL_MS);
+		const offPrefs = onTrayPrefsChanged((m) => {
+			setSnap((prev) => ({ ...prev, prefs: m.prefs }));
+		});
 		return () => {
 			if (pollRef.current) clearInterval(pollRef.current);
+			offPrefs();
 		};
 	}, [refresh]);
 
@@ -153,16 +192,13 @@ export function TrayPopoverView() {
 		[refresh],
 	);
 
-	const openWindow = useCallback(
-		async (target: "chat" | "pensieve" | "activity" | "browser" | "settings" | "gallery") => {
-			try {
-				await rpc.request.windowOpen({ target });
-			} catch {
-				/* swallow */
-			}
-		},
-		[],
-	);
+	const openWindow = useCallback(async (slot: TraySlot) => {
+		try {
+			await rpc.request.windowOpen({ target: slot });
+		} catch {
+			/* swallow */
+		}
+	}, []);
 
 	const quit = useCallback(async () => {
 		try {
@@ -239,39 +275,49 @@ export function TrayPopoverView() {
 				</div>
 			)}
 
-			{/* Status row — three pills: embed, local chat, companion */}
-			<div className="tp-status-row">
-				<StatusPill
-					label="Embed"
-					on={llamaRunning}
-					hint={
-						llamaRunning
-							? "Local llama.cpp embeddings online"
-							: snap.llama?.lastError ?? "Starting…"
-					}
-				/>
-				<StatusPill
-					label="Chat"
-					on={chatRunning}
-					hint={
-						chatRunning
-							? `Local chat: ${snap.localChat?.preset ?? "—"}`
-							: "Local chat off"
-					}
-				/>
-				<StatusPill
-					label="Companion"
-					on={companionRunning}
-					hint={
-						companionShared
-							? "Companion sharing chat server (no extra RAM)"
-							: companionRunning
-								? `Companion: ${snap.companion?.preset ?? "—"}`
-								: "Companion off"
-					}
-					badge={companionShared ? "shared" : undefined}
-				/>
-			</div>
+			{/* Status row — pills shown per user prefs (configGetTrayPrefs) */}
+			{(snap.prefs.pillsVisible.embed ||
+				snap.prefs.pillsVisible.chat ||
+				snap.prefs.pillsVisible.companion) && (
+				<div className="tp-status-row">
+					{snap.prefs.pillsVisible.embed && (
+						<StatusPill
+							label="Embed"
+							on={llamaRunning}
+							hint={
+								llamaRunning
+									? "Local llama.cpp embeddings online"
+									: snap.llama?.lastError ?? "Starting…"
+							}
+						/>
+					)}
+					{snap.prefs.pillsVisible.chat && (
+						<StatusPill
+							label="Chat"
+							on={chatRunning}
+							hint={
+								chatRunning
+									? `Local chat: ${snap.localChat?.preset ?? "—"}`
+									: "Local chat off"
+							}
+						/>
+					)}
+					{snap.prefs.pillsVisible.companion && (
+						<StatusPill
+							label="Companion"
+							on={companionRunning}
+							hint={
+								companionShared
+									? "Companion sharing chat server (no extra RAM)"
+									: companionRunning
+										? `Companion: ${snap.companion?.preset ?? "—"}`
+										: "Companion off"
+							}
+							badge={companionShared ? "shared" : undefined}
+						/>
+					)}
+				</div>
+			)}
 
 			{/* Memory budget strip */}
 			{memoryBar && (
@@ -289,14 +335,19 @@ export function TrayPopoverView() {
 				</div>
 			)}
 
-			{/* Quick actions grid */}
+			{/* Quick actions grid — user-configurable, see Settings → Tray */}
 			<div className="tp-grid">
-				<GridButton icon={ICONS.chat} label="Chat" onClick={() => openWindow("chat")} />
-				<GridButton icon={ICONS.pensieve} label="Pensieve" onClick={() => openWindow("pensieve")} />
-				<GridButton icon={ICONS.activity} label="Activity" onClick={() => openWindow("activity")} />
-				<GridButton icon={ICONS.browser} label="Browser" onClick={() => openWindow("browser")} />
-				<GridButton icon={ICONS.gallery} label="Gallery" onClick={() => openWindow("gallery")} />
-				<GridButton icon={ICONS.settings} label="Settings" onClick={() => openWindow("settings")} />
+				{snap.prefs.slots.slice(0, 6).map((slot, idx) => {
+					const meta = SLOT_META[slot];
+					return (
+						<GridButton
+							key={`${slot}-${idx}`}
+							icon={meta.icon}
+							label={meta.label}
+							onClick={() => openWindow(slot)}
+						/>
+					);
+				})}
 			</div>
 
 			{/* Recent activity */}

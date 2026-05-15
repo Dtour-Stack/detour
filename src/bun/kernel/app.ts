@@ -35,12 +35,14 @@ export function createKernel(opts: {
 		if (name === "uiOpenGallery") events.emit("ui:open-gallery", {});
 	});
 
-	// Tray status poller — surfaces "● Agent ready (Codex + local embeds)"
-	// at the top of the menu so the user sees lifecycle state without
-	// opening Settings. Polls every 4 seconds; calls setStatus(text) which
-	// no-ops when the text hasn't changed.
+	// Tray status poller — surfaces "● Detour: Codex + local embeds" at the
+	// top of the menu so the user sees lifecycle state without opening
+	// Settings. Polls every 4 seconds; setStatus no-ops when the text
+	// hasn't changed.
 	//
-	// Reads directly from in-process services (no HTTP fetch).
+	// Reads directly from in-process services (no HTTP fetch). User can
+	// flip between terse (`● Claude`) and verbose (`● Detour: Claude +
+	// local embeds`) modes in Settings → Tray.
 	const refreshTrayStatus = async (): Promise<void> => {
 		try {
 			const active = opts.core.runtime.getCurrentProvider();
@@ -57,8 +59,19 @@ export function createKernel(opts: {
 			} else {
 				llamaLabel = "embeds starting";
 			}
+			let labelMode: "terse" | "verbose" = "verbose";
+			try {
+				const prefs = await opts.core.rpcDeps.config.getTrayPrefs();
+				labelMode = prefs.statusLabelMode;
+			} catch {
+				/* keep verbose */
+			}
 			let label: string;
-			if (active && llama.running) {
+			if (labelMode === "terse") {
+				if (active) label = `● ${providerLabel}`;
+				else if (llama.running) label = `○ no LLM`;
+				else label = "○ starting…";
+			} else if (active && llama.running) {
 				label = `● Detour: ${providerLabel} + ${llamaLabel}`;
 			} else if (active) {
 				label = `● Detour: ${providerLabel} (${llamaLabel})`;
