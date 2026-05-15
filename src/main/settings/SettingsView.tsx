@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SidebarIcon, type IconName } from "../SidebarIcon";
 import { ProvidersTab } from "./ProvidersTab";
 import { InventoryTab } from "./InventoryTab";
@@ -24,8 +24,10 @@ type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | 
 type VaultTab = "inventory" | "saved-logins" | "backends";
 type CloudTab = "elizacloud" | "apps" | "containers";
 
+// Tabs are visually grouped by ordering (no nested headers — the
+// sidebar's flat tab list keeps the IA simple): models/providers,
+// then agent surfaces, then channel/wallet, then system.
 const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
-	{ id: "appearance", label: "Appearance" },
 	{ id: "providers", label: "Providers" },
 	{ id: "models", label: "Models & Routing" },
 	{ id: "local-ai", label: "Local AI" },
@@ -34,8 +36,9 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "agent", label: "Agent Permissions" },
 	{ id: "skills", label: "Skills" },
 	{ id: "phantom", label: "Phantom wallet" },
-	{ id: "os", label: "OS Permissions" },
+	{ id: "appearance", label: "Appearance" },
 	{ id: "window", label: "Window" },
+	{ id: "os", label: "OS Permissions" },
 ];
 
 const VAULT_TABS: { id: VaultTab; label: string }[] = [
@@ -151,11 +154,63 @@ function SidebarSection<T extends string>({
 	);
 }
 
-export function SettingsView() {
+type DeepLink = `${Section}:${ConfigTab | VaultTab | CloudTab}`;
+
+const CONFIG_TAB_IDS = new Set<string>(CONFIG_TABS.map((t) => t.id));
+const VAULT_TAB_IDS = new Set<string>(VAULT_TABS.map((t) => t.id));
+const CLOUD_TAB_IDS = new Set<string>(CLOUD_TABS.map((t) => t.id));
+
+/**
+ * Parse a deep-link of the form `section:tab` (e.g. `configuration:local-ai`)
+ * and return the {section, tab} pair if it's valid, else null. Lets the
+ * command palette and any other deep-linker jump straight to a setting.
+ */
+function parseDeepLink(link: string | null | undefined): {
+	section: Section;
+	tab: ConfigTab | VaultTab | CloudTab;
+} | null {
+	if (!link) return null;
+	const [sectionRaw, tabRaw] = link.split(":");
+	if (!sectionRaw || !tabRaw) return null;
+	if (sectionRaw === "configuration" && CONFIG_TAB_IDS.has(tabRaw)) {
+		return { section: "configuration", tab: tabRaw as ConfigTab };
+	}
+	if (sectionRaw === "vault" && VAULT_TAB_IDS.has(tabRaw)) {
+		return { section: "vault", tab: tabRaw as VaultTab };
+	}
+	if (sectionRaw === "cloud" && CLOUD_TAB_IDS.has(tabRaw)) {
+		return { section: "cloud", tab: tabRaw as CloudTab };
+	}
+	return null;
+}
+
+export interface SettingsViewProps {
+	/**
+	 * Optional deep-link to land on a specific tab. Format:
+	 * `"configuration:local-ai"`. Consumed once; caller is notified via
+	 * `onConsumeDeepLink` so it can clear its own state.
+	 */
+	deepLink?: string;
+	onConsumeDeepLink?: () => void;
+}
+
+export function SettingsView({ deepLink, onConsumeDeepLink }: SettingsViewProps = {}) {
 	const [section, setSection] = useState<Section>("configuration");
-	const [configTab, setConfigTab] = useState<ConfigTab>("appearance");
+	const [configTab, setConfigTab] = useState<ConfigTab>("providers");
 	const [vaultTab, setVaultTab] = useState<VaultTab>("inventory");
 	const [cloudTab, setCloudTab] = useState<CloudTab>("elizacloud");
+
+	// Apply any deep-link prop on mount and on subsequent changes — the
+	// parent (chat App) re-sets it on each uiOpenSettings broadcast.
+	useEffect(() => {
+		const parsed = parseDeepLink(deepLink);
+		if (!parsed) return;
+		setSection(parsed.section);
+		if (parsed.section === "configuration") setConfigTab(parsed.tab as ConfigTab);
+		else if (parsed.section === "vault") setVaultTab(parsed.tab as VaultTab);
+		else if (parsed.section === "cloud") setCloudTab(parsed.tab as CloudTab);
+		onConsumeDeepLink?.();
+	}, [deepLink, onConsumeDeepLink]);
 
 	return (
 		<div className="settings-shell">
@@ -172,7 +227,7 @@ export function SettingsView() {
 				<SidebarSection
 					active={section === "vault"}
 					current={vaultTab}
-					label="Vault Nav"
+					label="Vault"
 					icon="vault"
 					onSelect={() => setSection("vault")}
 					onTab={setVaultTab}

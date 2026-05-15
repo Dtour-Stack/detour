@@ -70,7 +70,16 @@ export type ChatMessages = {
 	// uiOpenPensieve by showing/focusing itself, etc.
 	uiOpenChat: Record<string, never>;
 	uiOpenCommandPalette: Record<string, never>;
-	uiOpenSettings: Record<string, never>;
+	uiOpenSettings: {
+		/**
+		 * Optional deep-link to a specific tab. Format: `"<section>:<tab>"`
+		 * where section is one of `configuration`, `vault`, `cloud`. The
+		 * SettingsView reads this on mount + on subsequent broadcasts to
+		 * switch its internal state. Omit (empty object) to just open the
+		 * drawer without changing the active tab.
+		 */
+		tab?: string;
+	};
 	uiOpenPensieve: Record<string, never>;
 	uiOpenActivity: Record<string, never>;
 	uiOpenBrowser: Record<string, never>;

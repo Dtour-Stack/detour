@@ -1,3 +1,4 @@
+import { Utils } from "electrobun/bun";
 import type { OsPermissionId, OsPermissionInfo } from "../../../../shared/index";
 import { listPermissions, openPermissionPane, type PermissionId } from "../../os-permissions";
 import type { RpcDeps } from "../types";
@@ -18,6 +19,14 @@ export function osRequests(_deps: RpcDeps) {
 		},
 		osOpenPermissionPane: async (params: { id: OsPermissionId }): Promise<{ ok: true }> => {
 			await openPermissionPane(params.id as PermissionId);
+			return { ok: true };
+		},
+		appQuit: async (_params: Record<string, never>): Promise<{ ok: true }> => {
+			// Defer the actual quit so the RPC response can return first;
+			// otherwise Electrobun tears the webview down before the
+			// caller's await resolves and the popover renders an ugly
+			// "RPC error" before disappearing.
+			setTimeout(() => Utils.quit(), 50);
 			return { ok: true };
 		},
 	};

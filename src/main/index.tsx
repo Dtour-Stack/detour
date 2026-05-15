@@ -8,6 +8,7 @@ import { PortlessView } from "./portless/PortlessView";
 import { WorkspaceView } from "./workspace/WorkspaceView";
 import { PetWindow } from "./pet/PetWindow";
 import { GalleryView } from "./gallery/GalleryView";
+import { TrayPopoverView } from "./tray-popover/TrayPopoverView";
 import { DetourPhantomRoot } from "./wallet/DetourPhantomRoot";
 import "./index.css";
 
@@ -33,10 +34,14 @@ const root =
 	view === "workspace" ? <WorkspaceView /> :
 	view === "pet" ? <PetWindow /> :
 	view === "gallery" ? <GalleryView /> :
+	view === "tray-popover" ? <TrayPopoverView /> :
 	<App />;
 
+// The tray popover is a transient menu — it doesn't need the Phantom
+// wallet provider tree (which is heavy and unused at this surface). Skip
+// the wrapper for that view so the popover is small + cheap.
+const wrapped = view === "tray-popover" ? root : <DetourPhantomRoot>{root}</DetourPhantomRoot>;
+
 createRoot(document.getElementById("root")!).render(
-	<StrictMode>
-		<DetourPhantomRoot>{root}</DetourPhantomRoot>
-	</StrictMode>,
+	<StrictMode>{wrapped}</StrictMode>,
 );

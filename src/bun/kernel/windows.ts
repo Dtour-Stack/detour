@@ -224,4 +224,31 @@ export class WindowFactory {
 		const clampedY = Math.max(0, Math.min(y, display.bounds.height - windowHeight));
 		handle.window.setPosition(clampedX, clampedY);
 	}
+
+	/**
+	 * Position a popover BELOW the tray icon — the macOS menu-bar case.
+	 * Centers horizontally on the tray icon, clamps to keep the window
+	 * fully on-screen. Used by the rich tray popover (Octowatch /
+	 * MeetingBar style).
+	 */
+	positionBelowTrayBounds(
+		handle: WindowHandle,
+		bounds: { x: number; y: number; width: number; height: number },
+		windowWidth: number,
+		windowHeight: number,
+		gap = 4,
+	) {
+		const display = Screen.getPrimaryDisplay();
+		const x = Math.round(bounds.x + bounds.width / 2 - windowWidth / 2);
+		const y = Math.round(bounds.y + bounds.height + gap);
+		const clampedX = Math.max(
+			4,
+			Math.min(x, display.bounds.width - windowWidth - 4),
+		);
+		const clampedY = Math.max(
+			4,
+			Math.min(y, display.bounds.height - windowHeight - 4),
+		);
+		handle.window.setPosition(clampedX, clampedY);
+	}
 }

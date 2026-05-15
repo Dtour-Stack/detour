@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import type { ChannelStatus, ThemeChoice } from "../../shared/index";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+	ChannelStatus,
+	ProviderId,
+	ProviderInfo,
+	ThemeChoice,
+} from "../../shared/index";
 import { ChatView } from "./ChatView";
 import { ChannelRail, hubChannelId, isHubToolView, type HubToolView, type HubView } from "./ChannelRail";
 import { ChannelView } from "./ChannelView";
@@ -63,6 +68,8 @@ function applyAccent(accent: string) {
 const PROVIDER_LABELS: Record<string, string> = {
 	openai: "Codex",
 	anthropic: "Claude",
+	openrouter: "OpenRouter",
+	elizacloud: "Eliza Cloud",
 };
 
 type HubDrawer = "settings" | "channels";
@@ -79,6 +86,10 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 	const [appearancePopover, setAppearancePopover] = useState(false);
 	const appearanceRef = useRef<HTMLDivElement>(null);
 	const [activeProvider, setActiveProvider] = useState<string | null>(null);
+	const [providers, setProviders] = useState<ProviderInfo[]>([]);
+	const [settingsDeepLink, setSettingsDeepLink] = useState<string | null>(null);
+	const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+	const providerMenuRef = useRef<HTMLDivElement>(null);
 	const [llamaReady, setLlamaReady] = useState<boolean | null>(null);
 	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
 	const [activeView, setActiveView] = useState<HubView>(initialView);
@@ -116,7 +127,10 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 			.catch(() => {
 				/* keep defaults */
 			});
-		const offSettings = onUiOpenSettings(() => setDrawer("settings"));
+		const offSettings = onUiOpenSettings((p) => {
+			setDrawer("settings");
+			if (p?.tab) setSettingsDeepLink(p.tab);
+		});
 		const offChat = onUiOpenChat(() => {
 			setActiveView("chat");
 			setDrawer(null);
@@ -134,6 +148,7 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		// Active provider for the header chip.
 		void rpc.request.providersList({}).then((ps) => {
+			setProviders(ps);
 			setActiveProvider(ps.find((p) => p.active)?.id ?? null);
 		}).catch(() => {});
 		// Llama-server status: poll every 4s. The header chip flips from
@@ -210,6 +225,30 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 		return () => document.removeEventListener("mousedown", onClick);
 	}, [appearancePopover]);
 
+	// Click-outside for the provider switcher menu.
+	useEffect(() => {
+		if (!providerMenuOpen) return;
+		const onClick = (e: MouseEvent) => {
+			if (!providerMenuRef.current?.contains(e.target as Node)) {
+				setProviderMenuOpen(false);
+			}
+		};
+		setTimeout(() => document.addEventListener("mousedown", onClick), 0);
+		return () => document.removeEventListener("mousedown", onClick);
+	}, [providerMenuOpen]);
+
+	const switchProvider = useCallback(async (id: ProviderId) => {
+		setProviderMenuOpen(false);
+		try {
+			await rpc.request.providersSetActive({ id });
+			const refreshed = await rpc.request.providersList({});
+			setProviders(refreshed);
+			setActiveProvider(refreshed.find((p) => p.active)?.id ?? null);
+		} catch {
+			/* swallow */
+		}
+	}, []);
+
 	function changeTheme(next: ThemeChoice) {
 		setTheme(next);
 		applyTheme(next);
@@ -234,23 +273,116 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 			<header className="popup-header electrobun-webkit-app-region-drag">
 				<div className="popup-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
 					<span>Detour</span>
-					{activeProvider && (
-						<span
+					<div
+						className="provider-switcher"
+						ref={providerMenuRef}
+						style={{ position: "relative", display: "inline-flex" }}
+					>
+						<button
+							type="button"
+							onClick={() => setProviderMenuOpen((v) => !v)}
+							disabled={providers.length === 0}
+							title={
+								activeProvider
+									? `Active LLM provider: ${activeProvider} — click to switch`
+									: "No provider configured"
+							}
 							style={{
 								fontSize: 10,
 								padding: "2px 8px",
 								borderRadius: 999,
-								background: "var(--accent, #0a84ff)",
-								color: "white",
-								opacity: 0.85,
+								background: activeProvider
+									? "var(--accent, #0a84ff)"
+									: "rgba(120,120,128,0.25)",
+								color: activeProvider ? "white" : "var(--text, #ccc)",
+								opacity: activeProvider ? 0.9 : 0.8,
 								fontWeight: 600,
 								letterSpacing: 0.3,
+								border: "none",
+								cursor: providers.length > 0 ? "pointer" : "not-allowed",
+								display: "inline-flex",
+								alignItems: "center",
+								gap: 4,
 							}}
-							title={`Active LLM provider: ${activeProvider}`}
 						>
-							via {PROVIDER_LABELS[activeProvider] ?? activeProvider}
-						</span>
-					)}
+							{activeProvider
+								? `via ${PROVIDER_LABELS[activeProvider] ?? activeProvider}`
+								: "no provider"}
+							<span style={{ fontSize: 8, opacity: 0.7 }}>▾</span>
+						</button>
+						{providerMenuOpen && (
+							<div
+								style={{
+									position: "absolute",
+									top: "calc(100% + 6px)",
+									left: 0,
+									minWidth: 160,
+									padding: 4,
+									background: "var(--bg-elev, #2a2a2c)",
+									border: "1px solid var(--border, rgba(255,255,255,0.1))",
+									borderRadius: 8,
+									boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+									zIndex: 100,
+								}}
+							>
+								{providers.map((p) => {
+									const configured =
+										p.hasKey || (p.oauthAccountCount ?? 0) > 0;
+									return (
+										<button
+											type="button"
+											key={p.id}
+											onClick={() => switchProvider(p.id)}
+											disabled={!configured}
+											title={
+												configured
+													? ""
+													: "Not configured — add a key or sign in via Settings"
+											}
+											style={{
+												width: "100%",
+												display: "flex",
+												alignItems: "center",
+												gap: 6,
+												padding: "6px 8px",
+												background: "transparent",
+												border: "none",
+												borderRadius: 5,
+												color: "inherit",
+												fontSize: 11,
+												cursor: configured ? "pointer" : "not-allowed",
+												textAlign: "left",
+												opacity: configured ? 1 : 0.5,
+											}}
+										>
+											<span
+												style={{
+													width: 6,
+													height: 6,
+													borderRadius: 999,
+													background: p.active ? "#30d158" : "rgba(255,255,255,0.2)",
+												}}
+											/>
+											<span
+												style={{
+													flex: 1,
+													fontWeight: p.active ? 600 : 400,
+													color: p.active ? "var(--accent, #0a84ff)" : "inherit",
+												}}
+											>
+												{PROVIDER_LABELS[p.id] ?? p.id}
+											</span>
+											{!configured && (
+												<span style={{ fontSize: 9, opacity: 0.6, fontStyle: "italic" }}>
+													not set
+												</span>
+											)}
+										</button>
+									);
+								})}
+							</div>
+						)}
+					</div>
 					{llamaReady === true && !llamaProgress && (
 						<span
 							style={{
@@ -399,14 +531,24 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 							</button>
 						</div>
 						<div className="drawer-body">
-							{drawer === "channels" ? <ChannelsView /> : <SettingsView />}
+							{drawer === "channels" ? (
+								<ChannelsView />
+							) : (
+								<SettingsView
+									{...(settingsDeepLink ? { deepLink: settingsDeepLink } : {})}
+									onConsumeDeepLink={() => setSettingsDeepLink(null)}
+								/>
+							)}
 						</div>
 					</div>
 				)}
 				<CommandPalette
 					open={paletteOpen}
 					onClose={() => setPaletteOpen(false)}
-					onOpenSettings={() => setDrawer("settings")}
+					onOpenSettings={(deepLink) => {
+						setDrawer("settings");
+						if (deepLink) setSettingsDeepLink(deepLink);
+					}}
 					onChatCommand={(command) => {
 						// Round-trip through bun so the chat view picks
 						// up the command via its onChatCommandRun

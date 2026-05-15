@@ -100,6 +100,7 @@ export default {
 			"src/main/portless.html": "views/main/portless.html",
 			"src/main/workspace.html": "views/main/workspace.html",
 			"src/main/gallery.html": "views/main/gallery.html",
+			"src/main/tray-popover.html": "views/main/tray-popover.html",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk
 			// (Bun.Worker reads .ts source directly). Worker import of the SDK
 			// resolves via the path-preserving copy of carrot-sdk/index.ts, so

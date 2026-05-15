@@ -20,7 +20,7 @@ type ChatCommandRequest = {
 type Props = {
 	open: boolean;
 	onClose: () => void;
-	onOpenSettings: () => void;
+	onOpenSettings: (deepLink?: string) => void;
 	onChatCommand: (request: ChatCommandRequest) => void;
 	windowed?: boolean;
 };
@@ -38,6 +38,37 @@ const WINDOW_COMMANDS: Array<{
 	{ id: "browser", title: "Open agent browser", subtitle: "Inspect, automate, and use saved login flows.", kicker: "Window" },
 	{ id: "agents", title: "Open coding agents", subtitle: "Workspace sessions, logs, previews, and project files.", kicker: "Window" },
 	{ id: "gallery", title: "Open gallery", subtitle: "Generated pictures, videos, and audio.", kicker: "Window" },
+];
+
+/**
+ * Deep-link palette items — jump straight to a Settings tab. The format
+ * `<section>:<tab>` matches what SettingsView.parseDeepLink expects. Keep
+ * this in sync with src/main/settings/SettingsView.tsx CONFIG_TABS /
+ * VAULT_TABS / CLOUD_TABS.
+ */
+const SETTINGS_DEEP_LINKS: Array<{
+	id: string;
+	title: string;
+	subtitle: string;
+	keywords: string;
+}> = [
+	{ id: "configuration:appearance", title: "Settings → Appearance", subtitle: "Theme, accent color, fonts.", keywords: "theme dark light accent color font" },
+	{ id: "configuration:providers", title: "Settings → Providers", subtitle: "Anthropic, OpenAI / Codex, OpenRouter, Eliza Cloud.", keywords: "anthropic openai codex openrouter elizacloud api key oauth" },
+	{ id: "configuration:models", title: "Settings → Models & Routing", subtitle: "Per-tier model picker + fallback chain.", keywords: "model routing fallback codex anthropic openrouter" },
+	{ id: "configuration:local-ai", title: "Settings → Local AI", subtitle: "llama-server status, local chat, companion, memory budget.", keywords: "llama local chat companion embed embedding memory ram budget gguf" },
+	{ id: "configuration:audio", title: "Settings → Audio", subtitle: "TTS, voice cloning, audio generation.", keywords: "audio tts voice elevenlabs cartesia" },
+	{ id: "configuration:character", title: "Settings → Agent Character", subtitle: "Bio, lore, voice templates.", keywords: "character bio persona prompt template voice" },
+	{ id: "configuration:agent", title: "Settings → Agent Permissions", subtitle: "Vault scope, browser/computer use, coding sandbox.", keywords: "agent permissions vault browser computer sandbox elevated" },
+	{ id: "configuration:skills", title: "Settings → Skills", subtitle: "Bundled + user-installed agent skills.", keywords: "skills tools capabilities agent-skills" },
+	{ id: "configuration:phantom", title: "Settings → Phantom wallet", subtitle: "Embedded Connect, Portal config, Solana + EVM.", keywords: "phantom wallet solana evm crypto portal connect" },
+	{ id: "configuration:os", title: "Settings → OS Permissions", subtitle: "Camera, microphone, accessibility, automation.", keywords: "tcc os permissions camera microphone accessibility automation screen recording" },
+	{ id: "configuration:window", title: "Settings → Window", subtitle: "Size, hide-on-blur, always-on-top.", keywords: "window size hide blur top" },
+	{ id: "vault:inventory", title: "Settings → Vault inventory", subtitle: "All vault keys + their categories.", keywords: "vault keys secrets inventory" },
+	{ id: "vault:saved-logins", title: "Settings → Saved logins", subtitle: "1Password / Bitwarden / in-house entries.", keywords: "1password bitwarden saved logins passwords" },
+	{ id: "vault:backends", title: "Settings → Vault backends", subtitle: "Enable / sign in to 1Password, Bitwarden, ProtonPass.", keywords: "1password bitwarden protonpass backend signin" },
+	{ id: "cloud:elizacloud", title: "Settings → ElizaOS Cloud", subtitle: "Cloud auth, model catalog.", keywords: "elizacloud eliza cloud auth model catalog" },
+	{ id: "cloud:apps", title: "Settings → Cloud apps", subtitle: "Managed app deployments.", keywords: "cloud apps deploy" },
+	{ id: "cloud:containers", title: "Settings → Cloud containers", subtitle: "Managed container runtime status.", keywords: "cloud containers" },
 ];
 
 function normalize(value: string): string {
@@ -62,8 +93,9 @@ function commandNeedsInput(command: ChatCommandInfo): boolean {
 
 function groupRank(group: string): number {
 	if (group === "Windows") return 0;
-	if (group === "Chat commands") return 1;
-	return 2;
+	if (group === "Settings") return 1;
+	if (group === "Chat commands") return 2;
+	return 3;
 }
 
 export function CommandPalette({
@@ -110,6 +142,19 @@ export function CommandPalette({
 			},
 		}));
 
+		const settingsItems: PaletteItem[] = SETTINGS_DEEP_LINKS.map((link) => ({
+			id: `settings-tab:${link.id}`,
+			title: link.title,
+			subtitle: link.subtitle,
+			kicker: "Settings",
+			group: "Settings",
+			keywords: `${link.id} ${link.keywords}`,
+			run: () => {
+				onClose();
+				onOpenSettings(link.id);
+			},
+		}));
+
 		const chatItems: PaletteItem[] = commands.map((command) => ({
 			id: `command:${command.name}`,
 			title: command.name,
@@ -126,7 +171,7 @@ export function CommandPalette({
 			},
 		}));
 
-		return [...windowItems, ...chatItems];
+		return [...windowItems, ...settingsItems, ...chatItems];
 	}, [commands, onChatCommand, onClose, onOpenSettings]);
 
 	const filtered = useMemo(() => {

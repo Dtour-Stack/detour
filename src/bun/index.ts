@@ -106,12 +106,17 @@ const { portlessFeature } = await import("./features/portless");
 const { workspaceFeature } = await import("./features/workspace");
 const { petFeature } = await import("./features/pet");
 const { galleryFeature } = await import("./features/gallery");
+const { trayPopoverFeature } = await import("./features/tray-popover");
 
 console.log("[main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
 
 console.log("[main] loading features");
 await loadFeatures(kernel, [
+	// trayPopoverFeature MUST load before chatFeature so the popover
+	// owns the tray-icon-click target. (Both register handlers on the
+	// same event; the first to bind wins as the canonical menu.)
+	trayPopoverFeature,
 	chatFeature,
 	settingsFeature,
 	pensieveFeature,

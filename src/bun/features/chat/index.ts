@@ -85,7 +85,10 @@ export const chatFeature: Feature = {
 			else show();
 		}
 
-		deps.tray.onIconClicked(() => toggle());
+		// Tray-icon click is owned by the tray-popover feature (richer
+		// menu — see src/bun/features/tray-popover/). The chat menu item
+		// stays so right-click → menu still has the canonical entry; the
+		// popover also has an "Open Chat" grid button.
 		deps.tray.addMenuItem(
 			{ label: "Open Detour", action: "chat:open", order: 10 },
 			() => toggle(),

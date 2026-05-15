@@ -14,4 +14,13 @@ export type OsRequests = {
 		params: { id: OsPermissionId };
 		response: { ok: true };
 	};
+	/**
+	 * Quit the Detour app process. Used by the tray popover's footer
+	 * Quit button. Goes through Utils.quit for graceful CEF cleanup;
+	 * the before-quit shutdown hooks in src/bun/index.ts still fire.
+	 */
+	appQuit: {
+		params: Record<string, never>;
+		response: { ok: true };
+	};
 };
