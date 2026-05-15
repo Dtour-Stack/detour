@@ -226,14 +226,7 @@ export function machineFitsPreset(preset: LocalChatModelPreset): boolean | null 
 	return totalGB >= preset.approxLiveRamGB + headroom;
 }
 
-/**
- * Snapshot used by CompanionService to decide whether it can share this
- * server's port instead of spawning its own copy of the same model.
- *
- * `modelRef` is the resolved Hugging Face ref the server is actually
- * running (preset.modelRef OR config.customModelRef); equality on this
- * string is what the dedup check uses.
- */
+/** Companion's dedup check compares against `modelRef` for equality. */
 export interface LocalChatActiveServerInfo {
 	readonly url: string;
 	readonly modelRef: string;
@@ -246,20 +239,10 @@ export class LocalChatService {
 	private currentModelRef: string | null = null;
 	private arbiter: MemoryArbiter | null = null;
 
-	/**
-	 * Attach a MemoryArbiter so `start()` can refuse over-budget spawns
-	 * and `stop()` can release the reservation. Optional — without an
-	 * arbiter the service starts unconditionally (legacy behavior).
-	 */
 	attachArbiter(arbiter: MemoryArbiter | null): void {
 		this.arbiter = arbiter;
 	}
 
-	/**
-	 * If a chat server is currently running, return enough info for
-	 * CompanionService to decide whether to share it. Returns `null` when
-	 * no server is up — caller (companion) then spawns its own.
-	 */
 	getActiveServerInfo(): LocalChatActiveServerInfo | null {
 		if (!this.llama) return null;
 		const status = this.llama.status();
@@ -308,22 +291,14 @@ export class LocalChatService {
 			}
 		}
 		// Tear down any prior instance — different preset means different
-		// model file, must restart.
-		if (this.llama) {
-			try {
-				this.llama.stop();
-			} catch {
-				// best-effort
-			}
-			this.llama = null;
-		}
+		// model file, must restart. Skip arbiter release here: a fresh
+		// successful reservation comes right below, and tearDown clears it.
+		this.tearDown();
 		const preset = resolvePresetByIdOrRef(presetId) ?? DEFAULT_LOCAL_CHAT_PRESET;
 		const modelRef = config.customModelRef ?? preset.modelRef;
 		const ctx = config.contextSize ?? preset.contextSize;
 		const threads = Math.max(2, cpus().length - 2);
-		// Arbiter check BEFORE allocating anything. Refusal returns null
-		// with the reason exposed via this.lastArbiterReason for the RPC
-		// layer + LocalAITab to render a clear inline error.
+		// Gate BEFORE allocating; refusal surfaces via getLastArbiterRefusal.
 		if (this.arbiter) {
 			const decision = this.arbiter.shouldAllowStart("chat", preset.approxLiveRamGB);
 			if (!decision.ok) {
@@ -346,44 +321,39 @@ export class LocalChatService {
 		});
 		const result = await this.llama.ensureRunning();
 		if (!result) return null;
-		// Reserve only after a successful spawn so a failed start doesn't
-		// leave a phantom reservation blocking the next attempt.
-		if (this.arbiter) {
-			this.arbiter.reserve("chat", preset.approxLiveRamGB);
-		}
-		// Expose the URL so the local-chat plugin can find it.
+		// Reserve only after success so a failed spawn doesn't leak a slot.
+		this.arbiter?.reserve("chat", preset.approxLiveRamGB);
 		process.env.DETOUR_LOCAL_CHAT_URL = result.url;
 		process.env.DETOUR_LOCAL_CHAT_MODEL = preset.id;
-		// Surface the preset's mode so the plugin's handler picks the
-		// right endpoint (/v1/chat/completions for instruct-tuned models,
-		// /v1/completions with a Q:/A: wrap for base models like eliza-1).
+		// `mode` selects /v1/chat/completions vs /v1/completions+Q:A wrap.
 		process.env.DETOUR_LOCAL_CHAT_MODE = preset.mode ?? "chat";
 		return result;
 	}
 
 	stop(): void {
-		if (this.llama) {
-			try {
-				this.llama.stop();
-			} catch {
-				// best-effort
-			}
-			this.llama = null;
-			this.currentPresetId = null;
-			this.currentModelRef = null;
-			if (this.arbiter) {
-				this.arbiter.release("chat");
-			}
-			delete process.env.DETOUR_LOCAL_CHAT_URL;
-			delete process.env.DETOUR_LOCAL_CHAT_MODEL;
-			delete process.env.DETOUR_LOCAL_CHAT_MODE;
-		}
+		this.tearDown();
 	}
 
 	/**
-	 * Last reason the arbiter refused a start, or null if the most recent
-	 * start was allowed. UI surfaces this inline when start() returns null.
+	 * Idempotent. Drops handle + preset state, releases arbiter slot,
+	 * clears the env vars the local-chat plugin reads.
 	 */
+	private tearDown(): void {
+		if (!this.llama) return;
+		try {
+			this.llama.stop();
+		} catch {
+			/* best-effort */
+		}
+		this.llama = null;
+		this.currentPresetId = null;
+		this.currentModelRef = null;
+		this.arbiter?.release("chat");
+		delete process.env.DETOUR_LOCAL_CHAT_URL;
+		delete process.env.DETOUR_LOCAL_CHAT_MODEL;
+		delete process.env.DETOUR_LOCAL_CHAT_MODE;
+	}
+
 	private lastArbiterRefusal: string | null = null;
 	getLastArbiterRefusal(): string | null {
 		return this.lastArbiterRefusal;

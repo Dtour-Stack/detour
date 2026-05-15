@@ -296,17 +296,11 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		console.warn("[core] llama-server start failed:", err instanceof Error ? err.message : err);
 	}
 
-	// Memory arbiter — single coordination point that gates llama-server
-	// spawns against the machine's RAM budget. Each tier asks before
-	// spawning; refusal returns null with a human-readable reason the
-	// UI surfaces. Embedding takes a fixed ~0.5 GB reservation up front
-	// (it's already running by this point). Chat + companion check
-	// against the remainder on every start() call. See memory-arbiter.ts
-	// for the budget model.
+	// Shared RAM-budget gate for the three llama tiers; see memory-arbiter.ts.
+	// Embedding is already running by this point — reserve its ~0.5 GB
+	// working set so chat/companion checks see the real budget.
 	const { MemoryArbiter } = await import("./llama/memory-arbiter");
 	const arbiter = new MemoryArbiter();
-	// bge-small-en-v1.5 is ~25 MB on disk; live working set with KV cache
-	// is ~500 MB. Reserve generously so the arbiter doesn't underestimate.
 	arbiter.reserve("embedding", 0.5);
 
 	// Local chat service — second llama-server instance for chat completions.

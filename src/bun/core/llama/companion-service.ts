@@ -263,25 +263,13 @@ export class CompanionService {
 	private classical: CompanionBackend = new CompanionClassicalBackend();
 	private llm: CompanionBackend;
 	/**
-	 * Optional reference to LocalChatService. When set and the chat server
-	 * is running the SAME modelRef the companion would otherwise spawn,
-	 * the companion skips its own server and routes job calls to the
-	 * chat server's port. Saves the duplicate ~3 GB live RAM on machines
-	 * where chat+companion picked the same model (a real overlap when
-	 * a user picks eliza-1 0.6B for both, or Qwen3-0.6B/1.7B for both).
-	 *
-	 * Re-resolved on every `requireUrl()` call, NOT cached at start(),
-	 * so if the user stops local-chat while the companion is in shared
-	 * mode `requireUrl()` returns null next call → dispatcher falls back
-	 * to the classical backend cleanly (matches the existing "every job
-	 * returns null on failure" pattern; no respawn races).
+	 * When set and the chat server is running the SAME modelRef the
+	 * companion would otherwise spawn, the companion skips its own server
+	 * and routes job calls to the chat server's port. Re-resolved on every
+	 * `requireUrl()` call (not cached) so a chat-server stop degrades to
+	 * classical-only on the next call without respawn races.
 	 */
 	private localChatRef: LocalChatService | null = null;
-	/**
-	 * True when the companion was started in shared mode (chat server's
-	 * port is being reused). Status surfaces this so the UI can show
-	 * "Running on chat server (shared)" instead of a phantom PID.
-	 */
 	private sharedWithLocalChat = false;
 	private arbiter: MemoryArbiter | null = null;
 	private lastArbiterRefusal: string | null = null;
@@ -290,32 +278,28 @@ export class CompanionService {
 		this.llm = new CompanionLlmBackend(this);
 	}
 
-	/**
-	 * Wire a LocalChatService reference so start() can choose to share
-	 * its server when the resolved companion modelRef matches. Set once
-	 * at boot from core/index.ts; passing null detaches.
-	 */
 	attachLocalChat(ref: LocalChatService | null): void {
 		this.localChatRef = ref;
 	}
 
-	/**
-	 * Attach a MemoryArbiter so owned-process spawns are gated by the
-	 * shared RAM budget. Shared-mode start() is NOT gated (no new
-	 * process means no new RAM cost). Optional — without an arbiter the
-	 * service starts unconditionally (legacy behavior).
-	 */
 	attachArbiter(arbiter: MemoryArbiter | null): void {
 		this.arbiter = arbiter;
 	}
 
-	/**
-	 * Last reason the arbiter refused a companion start, or null if the
-	 * most recent start was allowed (or wasn't gated). UI surfaces this
-	 * inline when start() returns null.
-	 */
 	getLastArbiterRefusal(): string | null {
 		return this.lastArbiterRefusal;
+	}
+
+	/** Idempotent. Shared mode skips this path — never spawns or reserves. */
+	private tearDownOwnedProcess(): void {
+		if (!this.llama) return;
+		try {
+			this.llama.stop();
+		} catch {
+			/* best-effort */
+		}
+		this.llama = null;
+		this.arbiter?.release("companion");
 	}
 
 	/**
@@ -483,38 +467,22 @@ export class CompanionService {
 				DEFAULT_COMPANION_PRESET;
 		}
 		const contextSize = config.contextSize ?? preset.contextSize ?? 16384;
-		// Dedup path: if LocalChatService is running the SAME modelRef,
-		// reuse its server instead of spawning our own. Saves the
-		// duplicate ~3 GB live RAM when users picked the same model for
-		// both tiers. We don't hold a snapshot — requireUrl() re-resolves
-		// every call, so a chat-server stop cleanly degrades to
-		// "classical only" without us having to listen for stop events.
-		const sharedFromChat =
-			this.localChatRef?.getActiveServerInfo() ?? null;
+		// Dedup: if chat is already running our modelRef, reuse its port.
+		// Saves the duplicate ~3 GB live RAM. requireUrl() re-resolves on
+		// every call so a chat-stop degrades to classical-only cleanly.
+		// DETOUR_COMPANION_URL is intentionally NOT set here — that env
+		// would persist past chat-stop and defeat the graceful fallback.
+		const sharedFromChat = this.localChatRef?.getActiveServerInfo() ?? null;
 		if (sharedFromChat && sharedFromChat.modelRef === modelRef) {
-			// Tear down any prior owned process — if the user previously
-			// started a dedicated companion and then bumped local-chat to
-			// the same model, we want the duplicate process gone. ALSO
-			// release the arbiter slot the owned process held; shared mode
-			// takes no reservation because no new RAM is allocated.
-			if (this.llama) {
-				try { this.llama.stop(); } catch { /* best-effort */ }
-				this.llama = null;
-				this.arbiter?.release("companion");
-			}
+			this.tearDownOwnedProcess();
 			this.modelRef = modelRef;
 			this.presetId = preset.id;
 			this.contextSize = contextSize;
 			this.sharedWithLocalChat = true;
 			this.lastArbiterRefusal = null;
-			// Intentionally DO NOT set DETOUR_COMPANION_URL here. The
-			// requireUrl() resolver consults `localChatRef` directly in
-			// shared mode; setting the env would leave a stale URL behind
-			// when the chat server stops and would defeat the graceful
-			// "drop to classical-only" path.
 			return { url: sharedFromChat.url, modelPath: modelRef };
 		}
-		// If already running with the same modelRef, return the live URL.
+		// Re-entry with same modelRef: return the existing handle.
 		if (this.llama && this.modelRef === modelRef && !this.sharedWithLocalChat) {
 			const s = this.llama.status();
 			if (s.running && s.url) {
@@ -523,17 +491,9 @@ export class CompanionService {
 				return { url: s.url, modelPath: s.modelPath ?? "" };
 			}
 		}
-		if (this.llama) {
-			try {
-				this.llama.stop();
-			} catch {
-				// best-effort
-			}
-			this.llama = null;
-			this.arbiter?.release("companion");
-		}
-		// Arbiter gate — only on the owned-process branch. Shared-mode
-		// start above is exempt (zero new allocation).
+		this.tearDownOwnedProcess();
+		// Arbiter only gates the owned-process branch; shared mode above
+		// allocates nothing and is exempt.
 		if (this.arbiter) {
 			const decision = this.arbiter.shouldAllowStart(
 				"companion",
@@ -576,24 +536,11 @@ export class CompanionService {
 	}
 
 	stop(): void {
-		// Two cases:
-		//  1. Owned process: kill the subprocess as before and release the
-		//     arbiter reservation so the freed RAM is available again.
-		//  2. Shared-with-local-chat: just drop the shared flag + env var;
-		//     never stop the chat server (it's not ours to kill) and never
-		//     touch the arbiter (we never reserved in shared mode).
-		if (this.llama) {
-			try {
-				this.llama.stop();
-			} catch {
-				// best-effort
-			}
-			this.llama = null;
-			this.arbiter?.release("companion");
-		}
-		if (this.sharedWithLocalChat) {
-			this.sharedWithLocalChat = false;
-		}
+		// Shared mode: never stop the chat server (not ours to kill) and
+		// never touch the arbiter (we never reserved). Owned process:
+		// tearDownOwnedProcess handles both.
+		this.tearDownOwnedProcess();
+		this.sharedWithLocalChat = false;
 		delete process.env.DETOUR_COMPANION_URL;
 	}
 
@@ -723,24 +670,15 @@ export class CompanionService {
 	// ── internals ─────────────────────────────────────────────────────────
 
 	private requireUrl(): string | null {
-		// Re-resolved on every call (intentional — see the shared-mode
-		// comment on `localChatRef`). Priority order:
-		//   1. Owned llama-server, if we spawned one and it's running.
-		//   2. Shared chat server, IF we entered shared mode AND chat is
-		//      still up with the same modelRef. Mismatched modelRef means
-		//      the user changed the chat preset; fall through to (3) so
-		//      we don't accidentally feed companion prompts to the wrong
-		//      model.
-		//   3. The static DETOUR_COMPANION_URL env (manual override only).
-		// Returns null when nothing usable is live; the dispatcher then
-		// routes through the classical backend or records a "no decision."
+		// Resolution order: owned process → shared chat (if same modelRef)
+		// → DETOUR_COMPANION_URL manual override. Re-resolved on every call
+		// so a chat stop in shared mode drops cleanly to null next call,
+		// letting the dispatcher fall back to classical without races.
 		const own = this.llama?.status().url ?? null;
 		if (own) return own;
 		if (this.sharedWithLocalChat) {
 			const shared = this.localChatRef?.getActiveServerInfo() ?? null;
-			if (shared && shared.modelRef === this.modelRef) {
-				return shared.url;
-			}
+			if (shared && shared.modelRef === this.modelRef) return shared.url;
 		}
 		return pickSetting("DETOUR_COMPANION_URL") ?? null;
 	}

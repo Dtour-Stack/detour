@@ -90,17 +90,10 @@ function extractStreamCallback(
 }
 
 /**
- * Pull the forwardable sampling controls off a `GenerateTextParams`
- * object. The local-chat handlers previously hardcoded `maxTokens`
- * and `temperature` and silently dropped `stopSequences`, which meant
- * a planner call asking for, say, 100 tokens with stop=["\n\n"] got
- * 512 tokens with no stop. That broke parsers that expected truncated
- * output.
- *
- * Caller-supplied values win; the per-tier defaults (passed in as
- * `defaults`) cover the legacy "no params" path. `stopSequences`
- * arrives as either an array (per `GenerateTextParams`) or a single
- * string (some upstream callers); both are normalized to `string[]`.
+ * Forward `maxTokens` / `temperature` / `stopSequences` from
+ * `GenerateTextParams`; caller wins, otherwise per-tier defaults apply.
+ * `stopSequences` accepts string-or-array (upstream callers vary) and
+ * normalizes to string[].
  */
 function extractSamplingControls(
 	params: GenerateTextParams | unknown,
@@ -383,6 +376,49 @@ function resolvePriority(): number {
 	return 200;
 }
 
+/**
+ * Per-tier default `maxTokens`. Caller params override via
+ * `extractSamplingControls`; these only apply when the caller didn't
+ * specify a maxTokens of their own.
+ */
+const DEFAULT_MAX_TOKENS: Record<string, number> = {
+	[ModelType.TEXT_SMALL]: 512,
+	[ModelType.TEXT_MEDIUM]: 1024,
+	[ModelType.TEXT_LARGE]: 2048,
+};
+
+function makeTextHandler(modelType: string) {
+	return async (
+		runtime: IAgentRuntime,
+		params: GenerateTextParams | string,
+	): Promise<string> => {
+		const url = resolveLocalChatUrl(runtime);
+		const prompt = extractPromptText(params);
+		if (!prompt) return "";
+		const onStreamChunk = extractStreamCallback(params);
+		const controls = extractSamplingControls(params, {
+			maxTokens: DEFAULT_MAX_TOKENS[modelType] ?? 1024,
+			temperature: 0.7,
+		});
+		try {
+			return await callLocalChat(url, prompt, {
+				...controls,
+				...(onStreamChunk ? { onStreamChunk } : {}),
+			});
+		} catch (err) {
+			logger.warn(
+				{
+					src: "local-chat",
+					modelType,
+					err: err instanceof Error ? err.message : String(err),
+				},
+				`local-chat ${modelType} call failed`,
+			);
+			throw err;
+		}
+	};
+}
+
 export const localChatPlugin: Plugin = {
 	name: "local-chat",
 	description:
@@ -391,93 +427,9 @@ export const localChatPlugin: Plugin = {
 		return resolvePriority();
 	},
 	models: {
-		[ModelType.TEXT_SMALL]: async (
-			runtime: IAgentRuntime,
-			params: GenerateTextParams | string,
-		): Promise<string> => {
-			const url = resolveLocalChatUrl(runtime);
-			const prompt = extractPromptText(params);
-			if (!prompt) return "";
-			const onStreamChunk = extractStreamCallback(params);
-			const controls = extractSamplingControls(params, {
-				maxTokens: 512,
-				temperature: 0.7,
-			});
-			try {
-				return await callLocalChat(url, prompt, {
-					...controls,
-					...(onStreamChunk ? { onStreamChunk } : {}),
-				});
-			} catch (err) {
-				logger.warn(
-					{
-						src: "local-chat",
-						modelType: ModelType.TEXT_SMALL,
-						err: err instanceof Error ? err.message : String(err),
-					},
-					"local-chat TEXT_SMALL call failed",
-				);
-				throw err;
-			}
-		},
-		[ModelType.TEXT_MEDIUM]: async (
-			runtime: IAgentRuntime,
-			params: GenerateTextParams | string,
-		): Promise<string> => {
-			const url = resolveLocalChatUrl(runtime);
-			const prompt = extractPromptText(params);
-			if (!prompt) return "";
-			const onStreamChunk = extractStreamCallback(params);
-			const controls = extractSamplingControls(params, {
-				maxTokens: 1024,
-				temperature: 0.7,
-			});
-			try {
-				return await callLocalChat(url, prompt, {
-					...controls,
-					...(onStreamChunk ? { onStreamChunk } : {}),
-				});
-			} catch (err) {
-				logger.warn(
-					{
-						src: "local-chat",
-						modelType: ModelType.TEXT_MEDIUM,
-						err: err instanceof Error ? err.message : String(err),
-					},
-					"local-chat TEXT_MEDIUM call failed",
-				);
-				throw err;
-			}
-		},
-		[ModelType.TEXT_LARGE]: async (
-			runtime: IAgentRuntime,
-			params: GenerateTextParams | string,
-		): Promise<string> => {
-			const url = resolveLocalChatUrl(runtime);
-			const prompt = extractPromptText(params);
-			if (!prompt) return "";
-			const onStreamChunk = extractStreamCallback(params);
-			const controls = extractSamplingControls(params, {
-				maxTokens: 2048,
-				temperature: 0.7,
-			});
-			try {
-				return await callLocalChat(url, prompt, {
-					...controls,
-					...(onStreamChunk ? { onStreamChunk } : {}),
-				});
-			} catch (err) {
-				logger.warn(
-					{
-						src: "local-chat",
-						modelType: ModelType.TEXT_LARGE,
-						err: err instanceof Error ? err.message : String(err),
-					},
-					"local-chat TEXT_LARGE call failed",
-				);
-				throw err;
-			}
-		},
+		[ModelType.TEXT_SMALL]: makeTextHandler(ModelType.TEXT_SMALL),
+		[ModelType.TEXT_MEDIUM]: makeTextHandler(ModelType.TEXT_MEDIUM),
+		[ModelType.TEXT_LARGE]: makeTextHandler(ModelType.TEXT_LARGE),
 	},
 };
 
