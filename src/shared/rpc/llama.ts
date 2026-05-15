@@ -20,13 +20,15 @@ export type LlamaServerStatusWire = {
 /**
  * Local chat-server status. Same shape as the embedding-server status
  * plus a few chat-specific fields: the active preset id, the user's
- * enable toggle, and whether the machine has enough RAM for the
- * selected preset.
+ * enable toggle, whether the machine has enough RAM for the selected
+ * preset, and (if the last start was refused by the memory arbiter)
+ * the human-readable reason.
  */
 export type LocalChatStatusWire = LlamaServerStatusWire & {
 	readonly enabled: boolean;
 	readonly preset: string | null;
 	readonly ramFitsModel: boolean | null;
+	readonly lastArbiterRefusal: string | null;
 };
 
 export type LocalChatPresetWire = {
@@ -88,6 +90,14 @@ export type CompanionStatusWire = LlamaServerStatusWire & {
 	readonly recentJobs: CompanionJobLogWire[];
 	readonly preset: string | null;
 	readonly presets: CompanionModelPresetWire[];
+	/**
+	 * True when the companion is reusing the local-chat server (same
+	 * modelRef) instead of running its own llama-server. `pid`/`url`/
+	 * `modelPath` reflect the chat server; UI should label this clearly.
+	 */
+	readonly sharedWithLocalChat: boolean;
+	/** Human-readable reason the last start was refused by the memory arbiter. */
+	readonly lastArbiterRefusal: string | null;
 	readonly assignments: Record<CompanionJobName, CompanionBackendChoiceWire>;
 	readonly backends: {
 		classical: CompanionBackendHealthWire;
@@ -99,6 +109,22 @@ export type CompanionStatusWire = LlamaServerStatusWire & {
 		threshold: number;
 		runbookPath: string;
 	};
+};
+
+/**
+ * Snapshot of the shared RAM budget across all three llama tiers.
+ * Surfaced by `llamaMemoryBudget`; the UI renders a budget strip
+ * (used / total) plus inline refusal reasons.
+ */
+export type LlamaMemoryBudgetWire = {
+	readonly totalGB: number;
+	readonly headroomGB: number;
+	readonly budgetGB: number;
+	readonly usedGB: number;
+	readonly reservations: ReadonlyArray<{
+		tier: "embedding" | "chat" | "companion";
+		ramGB: number;
+	}>;
 };
 
 export type LlamaRequests = {
@@ -153,5 +179,10 @@ export type LlamaRequests = {
 	companionResetAssignments: {
 		params: Record<string, never>;
 		response: CompanionStatusWire;
+	};
+	/** Live snapshot of the shared RAM budget + per-tier reservations. */
+	llamaMemoryBudget: {
+		params: Record<string, never>;
+		response: LlamaMemoryBudgetWire;
 	};
 };

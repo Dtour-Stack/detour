@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { LlamaServerStatus } from "../../shared/index";
 import type {
 	CompanionStatusWire,
+	LlamaMemoryBudgetWire,
 	LocalChatPresetWire,
 	LocalChatStatusWire,
 } from "../../shared/rpc/llama";
@@ -101,6 +102,7 @@ export function LocalAITab() {
 	const [companionStatus, setCompanionStatus] = useState<CompanionStatusWire | null>(null);
 	const [companionError, setCompanionError] = useState<string | null>(null);
 	const [selectedCompanionPreset, setSelectedCompanionPreset] = useState<string>("");
+	const [memoryBudget, setMemoryBudget] = useState<LlamaMemoryBudgetWire | null>(null);
 	const [openaiKey, setOpenaiKey] = useState("");
 	const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
 	const [busy, setBusy] = useState<BusyState>("");
@@ -136,6 +138,11 @@ export function LocalAITab() {
 			}
 		} catch {
 			setCompanionStatus(null);
+		}
+		try {
+			setMemoryBudget(await rpc.request.llamaMemoryBudget({}));
+		} catch {
+			setMemoryBudget(null);
 		}
 	}, [selectedPreset, selectedCompanionPreset]);
 
@@ -307,6 +314,7 @@ export function LocalAITab() {
 		<div className="settings-pane" style={{ padding: 16 }}>
 			<LocalAIHeader />
 			<ServerStatusCard status={status} running={running} />
+			<MemoryBudgetCard budget={memoryBudget} />
 			<PipelineCheckCard
 				busy={busy}
 				probe={probe}
@@ -448,6 +456,9 @@ function LocalChatCard(props: {
 				>
 					{chatStatus.lastError}
 				</div>
+			)}
+			{!running && chatStatus?.lastArbiterRefusal && (
+				<ArbiterRefusalBanner reason={chatStatus.lastArbiterRefusal} />
 			)}
 			<label
 				style={{
@@ -651,33 +662,55 @@ function CompanionCard(props: {
 				}}
 			>
 				<strong>Detour Companion (0.6B sidecar)</strong>
-				<span
-					style={{
-						display: "inline-flex",
-						alignItems: "center",
-						gap: 6,
-						padding: "2px 8px",
-						borderRadius: 999,
-						fontSize: 11,
-						background: running
-							? "rgba(48,209,88,0.15)"
-							: status?.lastError
-								? "rgba(255,69,58,0.15)"
-								: "rgba(120,120,120,0.15)",
-						color: running ? "#30d158" : status?.lastError ? "#ff453a" : "#888",
-					}}
-				>
+				<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+					{status?.sharedWithLocalChat && (
+						<span
+							style={{
+								display: "inline-flex",
+								alignItems: "center",
+								gap: 4,
+								padding: "2px 8px",
+								borderRadius: 999,
+								fontSize: 11,
+								background: "rgba(99,102,241,0.15)",
+								color: "#a5b4fc",
+							}}
+							title="Companion is reusing the chat server's port — same model, zero extra RAM"
+						>
+							⇄ shared with chat
+						</span>
+					)}
 					<span
 						style={{
-							width: 6,
-							height: 6,
+							display: "inline-flex",
+							alignItems: "center",
+							gap: 6,
+							padding: "2px 8px",
 							borderRadius: 999,
-							background: running ? "#30d158" : status?.lastError ? "#ff453a" : "#888",
+							fontSize: 11,
+							background: running
+								? "rgba(48,209,88,0.15)"
+								: status?.lastError
+									? "rgba(255,69,58,0.15)"
+									: "rgba(120,120,120,0.15)",
+							color: running ? "#30d158" : status?.lastError ? "#ff453a" : "#888",
 						}}
-					/>
-					{running ? "running" : status?.lastError ? "error" : "stopped"}
-				</span>
+					>
+						<span
+							style={{
+								width: 6,
+								height: 6,
+								borderRadius: 999,
+								background: running ? "#30d158" : status?.lastError ? "#ff453a" : "#888",
+							}}
+						/>
+						{running ? "running" : status?.lastError ? "error" : "stopped"}
+					</span>
+				</div>
 			</div>
+			{!running && status?.lastArbiterRefusal && (
+				<ArbiterRefusalBanner reason={status.lastArbiterRefusal} />
+			)}
 			<div style={{ fontSize: 12, opacity: 0.7, marginBottom: 12, lineHeight: 1.5 }}>
 				A hybrid local helper that does <em>five</em> light jobs — <strong>triage</strong>,{" "}
 				<strong>should-respond</strong>, <strong>memory query</strong>,{" "}
@@ -1160,6 +1193,95 @@ function DownloadProgress({ dl }: { dl: NonNullable<LlamaServerStatus["downloadP
 				<div style={{ width: `${dl.percent}%`, height: "100%", background: "var(--accent, #0a84ff)" }} />
 			</div>
 		</div>
+	);
+}
+
+function ArbiterRefusalBanner({ reason }: { reason: string }) {
+	return (
+		<div
+			className="banner warn"
+			style={{
+				marginBottom: 10,
+				padding: 8,
+				fontSize: 12,
+				borderRadius: 4,
+				background: "rgba(255,159,10,0.12)",
+				color: "#ff9f0a",
+				border: "1px solid rgba(255,159,10,0.3)",
+				lineHeight: 1.4,
+			}}
+		>
+			<strong style={{ display: "block", marginBottom: 2 }}>RAM budget</strong>
+			{reason}
+		</div>
+	);
+}
+
+export function MemoryBudgetCard({
+	budget,
+}: {
+	budget: LlamaMemoryBudgetWire | null;
+}) {
+	if (!budget) return null;
+	const pct = budget.budgetGB > 0
+		? Math.min(100, Math.round((budget.usedGB / budget.budgetGB) * 100))
+		: 0;
+	const tone = pct >= 90 ? "#ff453a" : pct >= 70 ? "#ff9f0a" : "#30d158";
+	return (
+		<section
+			style={{
+				border: "1px solid var(--border, #333)",
+				borderRadius: 8,
+				padding: 14,
+				marginBottom: 14,
+			}}
+		>
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "space-between",
+					marginBottom: 8,
+				}}
+			>
+				<strong>Memory budget</strong>
+				<span style={{ fontSize: 11, opacity: 0.7, fontFamily: "monospace" }}>
+					{budget.usedGB.toFixed(1)} / {budget.budgetGB.toFixed(1)} GB
+					<span style={{ opacity: 0.5 }}>
+						{" "}· {budget.headroomGB.toFixed(1)} GB held back
+					</span>
+				</span>
+			</div>
+			<div
+				style={{
+					height: 6,
+					background: "rgba(128,128,128,0.2)",
+					borderRadius: 3,
+					overflow: "hidden",
+					marginBottom: 8,
+				}}
+			>
+				<div style={{ width: `${pct}%`, height: "100%", background: tone }} />
+			</div>
+			<div style={{ display: "flex", gap: 8, fontSize: 11, opacity: 0.7 }}>
+				{budget.reservations.length === 0 ? (
+					<span>nothing reserved</span>
+				) : (
+					budget.reservations.map((r) => (
+						<span
+							key={r.tier}
+							style={{
+								padding: "2px 6px",
+								borderRadius: 4,
+								background: "rgba(120,120,120,0.15)",
+							}}
+						>
+							{r.tier} · {r.ramGB.toFixed(1)} GB
+						</span>
+					))
+				)}
+			</div>
+		</section>
 	);
 }
 

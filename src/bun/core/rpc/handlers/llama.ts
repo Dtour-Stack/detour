@@ -2,6 +2,7 @@ import type {
 	CompanionBackendChoiceWire,
 	CompanionJobName,
 	CompanionStatusWire,
+	LlamaMemoryBudgetWire,
 	LlamaServerStatusWire,
 	LocalChatPresetWire,
 	LocalChatStatusWire,
@@ -47,6 +48,7 @@ export function llamaRequests(deps: RpcDeps) {
 		enabled: s.enabled,
 		preset: s.preset,
 		ramFitsModel: s.ramFitsModel,
+		lastArbiterRefusal: deps.localChat.getLastArbiterRefusal(),
 	});
 	const presets: LocalChatPresetWire[] = LOCAL_CHAT_PRESETS.map((p) => ({
 		id: p.id,
@@ -112,7 +114,7 @@ export function llamaRequests(deps: RpcDeps) {
 		companionStatus: async (
 			_params: Record<string, never>,
 		): Promise<CompanionStatusWire> => {
-			return toCompanionStatusWire(deps.companion.status());
+			return toCompanionStatusWire(deps.companion.status(), deps);
 		},
 		companionStart: async (params: {
 			modelRef?: string;
@@ -132,14 +134,14 @@ export function llamaRequests(deps: RpcDeps) {
 			if (typeof params.preset === "string" && params.preset.length > 0)
 				config.preset = params.preset;
 			await deps.companion.start(config);
-			return toCompanionStatusWire(deps.companion.status());
+			return toCompanionStatusWire(deps.companion.status(), deps);
 		},
 		companionStop: async (
 			_params: Record<string, never>,
 		): Promise<CompanionStatusWire> => {
 			deps.companion.stop();
 			delete process.env.DETOUR_COMPANION_ENABLED;
-			return toCompanionStatusWire(deps.companion.status());
+			return toCompanionStatusWire(deps.companion.status(), deps);
 		},
 		companionSetAssignments: async (params: {
 			assignments: Partial<
@@ -152,19 +154,25 @@ export function llamaRequests(deps: RpcDeps) {
 				if (!choice || !VALID_BACKEND_CHOICES.has(choice)) continue;
 				deps.companion.setJobBackend(job as CompanionJobName, choice);
 			}
-			return toCompanionStatusWire(deps.companion.status());
+			return toCompanionStatusWire(deps.companion.status(), deps);
 		},
 		companionResetAssignments: async (
 			_params: Record<string, never>,
 		): Promise<CompanionStatusWire> => {
 			deps.companion.resetAssignments();
-			return toCompanionStatusWire(deps.companion.status());
+			return toCompanionStatusWire(deps.companion.status(), deps);
+		},
+		llamaMemoryBudget: async (
+			_params: Record<string, never>,
+		): Promise<LlamaMemoryBudgetWire> => {
+			return deps.memoryArbiter.inspect();
 		},
 	};
 }
 
 function toCompanionStatusWire(
 	s: ReturnType<RpcDeps["companion"]["status"]>,
+	deps: RpcDeps,
 ): CompanionStatusWire {
 	return {
 		running: s.running,
@@ -200,6 +208,8 @@ function toCompanionStatusWire(
 			mode: p.mode,
 			description: p.description,
 		})),
+		sharedWithLocalChat: s.sharedWithLocalChat,
+		lastArbiterRefusal: deps.companion.getLastArbiterRefusal(),
 		assignments: s.assignments,
 		backends: s.backends,
 		fineTune: s.fineTune,

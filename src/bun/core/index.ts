@@ -478,7 +478,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const rpcDeps = buildRpcDeps({
 		runtime, vault, auth, backendOps, config, pensieve, activity,
 		agentHfSync, channels, gateway, inbox, llama, localChat, companion, cron, ownerBind, portless, previewServers,
-		goal, dream,
+		goal, dream, memoryArbiter: arbiter,
 	});
 
 	// Eager-build the runtime in the background so Pensieve / Activity have

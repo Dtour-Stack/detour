@@ -21,6 +21,7 @@ import type { InboxService } from "../inbox";
 import type { LlamaServerService } from "../llama/server-service";
 import type { LocalChatService } from "../llama/chat-service";
 import type { CompanionService } from "../llama/companion-service";
+import type { MemoryArbiter } from "../llama/memory-arbiter";
 import type { OwnerBindService } from "../owner-bind";
 import type { PensieveService } from "../pensieve";
 import type { PortlessService } from "../portless";
@@ -59,6 +60,7 @@ export type RpcDeps = {
 	llama: LlamaServerService;
 	localChat: LocalChatService;
 	companion: CompanionService;
+	memoryArbiter: MemoryArbiter;
 	cron: CronService;
 	ownerBind: OwnerBindService;
 	portless: PortlessService;
