@@ -414,6 +414,73 @@ export class ApiServer {
 				);
 			}
 		},
+		// Local-AI control surface for the Swift tray (and any other
+		// trusted client on 127.0.0.1). POST /api/local-ai/{chat|companion}
+		// /{start|stop}. start() with a `preset` body kicks off a model
+		// download if the GGUF isn't already on disk — the same code path
+		// the React Local AI tab uses, just exposed over HTTP so the
+		// native tray menu can fire it without going through RPC.
+		//
+		// 127.0.0.1 only — we never bind to 0.0.0.0 (see start() at the
+		// bottom of this file). No auth on these because the tray runs
+		// as the same user as Detour itself.
+		async (ctx) => {
+			const { req, path, json, error } = ctx;
+			if (req.method !== "POST") return null;
+			if (!path.startsWith("/api/local-ai/")) return null;
+			const tail = path.slice("/api/local-ai/".length);
+			const [tier, action] = tail.split("/");
+			if (
+				(tier !== "chat" && tier !== "companion") ||
+				(action !== "start" && action !== "stop")
+			) {
+				return error("unknown local-ai route", 404);
+			}
+			const svc = tier === "chat"
+				? this.selfImprovement?.localChat
+				: this.selfImprovement?.companion;
+			if (!svc) return error(`${tier} service not wired`, 503);
+			let body: { preset?: string } = {};
+			try {
+				const raw = await req.text();
+				if (raw.length > 0) body = JSON.parse(raw) as typeof body;
+			} catch {
+				return error("invalid JSON body", 400);
+			}
+			try {
+				if (action === "stop") {
+					svc.stop();
+					return json({ ok: true, action: "stop", tier });
+				}
+				// Start — kicks off model download on first run for a
+				// preset whose file isn't on disk yet. Surfaces the
+				// arbiter refusal (RAM budget) via getLastArbiterRefusal.
+				const cfg: { preset?: string } = {};
+				if (typeof body.preset === "string" && body.preset.length > 0) {
+					cfg.preset = body.preset;
+				}
+				const result = await svc.start(cfg);
+				if (!result) {
+					const reason = svc.getLastArbiterRefusal();
+					return json(
+						{ ok: false, action: "start", tier, reason: reason ?? "start returned null (see logs)" },
+						409,
+					);
+				}
+				return json({
+					ok: true,
+					action: "start",
+					tier,
+					url: result.url,
+					modelPath: result.modelPath,
+				});
+			} catch (err) {
+				return error(
+					err instanceof Error ? err.message : `${tier} ${action} failed`,
+					500,
+				);
+			}
+		},
 		// Debug: invoke an eliza action by name directly through the built
 		// runtime, bypassing the LLM action selector. Used to validate the
 		// carrot bridge end-to-end (and any other plugin's actions) without

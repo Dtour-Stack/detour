@@ -82,3 +82,8 @@ await import("./post-build-applescript-bridge");
 // menu-bar NSStatusItem with a rich native NSMenu (MeetingBar-style).
 // Replaces Electrobun's basic tray. Best-effort; same skip behavior.
 await import("./post-build-tray-bridge");
+
+// Compile + embed DetourSettings.app — the SwiftUI Settings companion.
+// The React Settings stays as fallback for tabs the SwiftUI surface
+// doesn't cover yet.
+await import("./post-build-settings-bridge");

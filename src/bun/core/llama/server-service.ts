@@ -99,6 +99,26 @@ type ByteReader = {
 	read(): Promise<{ done: boolean; value?: Uint8Array }>;
 };
 
+/**
+ * True if the file backing a hf:// ref is already on disk in the
+ * default models dir (so a start would be instant, no download). The
+ * tray's preset picker uses this to label presets "(downloaded)".
+ * Non-hf:// refs are checked as absolute paths.
+ */
+export function isModelDownloaded(modelRef: string): boolean {
+	try {
+		if (!modelRef.startsWith("hf://")) {
+			return existsSync(modelRef) && statSync(modelRef).size >= MIN_MODEL_BYTES;
+		}
+		const ref = parseHfModelRef(modelRef);
+		const modelsDir = join(resolveStateDir(), "llama", "models");
+		const localPath = join(modelsDir, ref.fileName);
+		return existsSync(localPath) && statSync(localPath).size >= MIN_MODEL_BYTES;
+	} catch {
+		return false;
+	}
+}
+
 function parseHfModelRef(modelRef: string): HfModelRef {
 	const hfPath = modelRef.slice("hf://".length);
 	const segments = hfPath.split("/");

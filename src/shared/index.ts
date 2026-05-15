@@ -535,6 +535,22 @@ export const DEFAULT_TRAY_SLOTS: TraySlot[] = [
  * its native NSMenu without needing direct access to Detour's
  * internals. Wire-only — no Bun-specific types leak through.
  */
+/**
+ * Slim preset descriptor surfaced to the Swift tray's preset-picker
+ * submenu. Trimmed from the full LocalChatModelPreset /
+ * CompanionModelPreset shapes — just what the UI needs.
+ */
+export type TrayPresetWire = {
+	readonly id: string;
+	readonly label: string;
+	/** Approximate live RAM in GB (used to flag "won't fit"). */
+	readonly approxLiveRamGB: number;
+	/** Approximate on-disk size in GB. */
+	readonly approxDiskGB: number;
+	/** Whether the model is already downloaded (no fetch needed on start). */
+	readonly downloaded: boolean;
+};
+
 export type TraySnapshotWire = {
 	/** Active LLM provider id, or null when none configured. */
 	readonly activeProviderId: ProviderId | null;
@@ -549,6 +565,8 @@ export type TraySnapshotWire = {
 	readonly embed: {
 		readonly running: boolean;
 		readonly downloadPercent?: number;
+		readonly downloadedBytes?: number;
+		readonly totalBytes?: number;
 		readonly lastError: string | null;
 	};
 	/** Optional local chat tier. */
@@ -556,6 +574,11 @@ export type TraySnapshotWire = {
 		readonly enabled: boolean;
 		readonly running: boolean;
 		readonly preset: string | null;
+		readonly downloadPercent?: number;
+		readonly downloadedBytes?: number;
+		readonly totalBytes?: number;
+		readonly lastArbiterRefusal: string | null;
+		readonly presets: ReadonlyArray<TrayPresetWire>;
 	};
 	/** Optional companion sidecar. */
 	readonly companion: {
@@ -563,6 +586,11 @@ export type TraySnapshotWire = {
 		readonly running: boolean;
 		readonly preset: string | null;
 		readonly sharedWithLocalChat: boolean;
+		readonly downloadPercent?: number;
+		readonly downloadedBytes?: number;
+		readonly totalBytes?: number;
+		readonly lastArbiterRefusal: string | null;
+		readonly presets: ReadonlyArray<TrayPresetWire>;
 	};
 	/** Shared RAM budget across the three llama tiers. */
 	readonly memory: {

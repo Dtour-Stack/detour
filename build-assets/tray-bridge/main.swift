@@ -40,13 +40,28 @@ struct TrayProvider: Decodable {
 struct TrayEmbed: Decodable {
     let running: Bool
     let downloadPercent: Int?
+    let downloadedBytes: Int?
+    let totalBytes: Int?
     let lastError: String?
+}
+
+struct TrayPreset: Decodable {
+    let id: String
+    let label: String
+    let approxLiveRamGB: Double
+    let approxDiskGB: Double
+    let downloaded: Bool
 }
 
 struct TrayLocalChat: Decodable {
     let enabled: Bool
     let running: Bool
     let preset: String?
+    let downloadPercent: Int?
+    let downloadedBytes: Int?
+    let totalBytes: Int?
+    let lastArbiterRefusal: String?
+    let presets: [TrayPreset]
 }
 
 struct TrayCompanion: Decodable {
@@ -54,6 +69,11 @@ struct TrayCompanion: Decodable {
     let running: Bool
     let preset: String?
     let sharedWithLocalChat: Bool
+    let downloadPercent: Int?
+    let downloadedBytes: Int?
+    let totalBytes: Int?
+    let lastArbiterRefusal: String?
+    let presets: [TrayPreset]
 }
 
 struct TrayMemory: Decodable {
@@ -322,39 +342,86 @@ final class TrayController: NSObject {
             menu.addItem(providerItem)
         }
 
-        // Local AI submenu
+        // Local AI submenu — clickable. Each tier has its current state
+        // shown as a disabled status row, then start/stop + a preset
+        // picker. Picking a preset that isn't downloaded triggers an
+        // automatic download via llama-server's HF fetch path.
         let localItem = NSMenuItem(title: "Local AI", action: nil, keyEquivalent: "")
         let localMenu = NSMenu()
         localMenu.autoenablesItems = false
 
-        let embedItem = NSMenuItem(
-            title: embedLabel(),
-            action: nil,
-            keyEquivalent: "",
-        )
-        embedItem.isEnabled = false
-        embedItem.state = (snapshot?.embed.running ?? false) ? .on : .off
-        localMenu.addItem(embedItem)
+        // Embed (always-on; can't be stopped via tray since it's required
+        // for the agent to work). Show download progress if active.
+        let embedStatus = NSMenuItem(title: embedLabel(), action: nil, keyEquivalent: "")
+        embedStatus.isEnabled = false
+        embedStatus.state = (snapshot?.embed.running ?? false) ? .on : .off
+        localMenu.addItem(embedStatus)
 
+        localMenu.addItem(NSMenuItem.separator())
+
+        // Chat tier — status, start/stop, preset picker
         let chat = snapshot?.localChat
-        let chatItem = NSMenuItem(
-            title: chatLabel(chat),
-            action: nil,
-            keyEquivalent: "",
-        )
-        chatItem.state = (chat?.running ?? false) ? .on : .off
-        chatItem.isEnabled = false
-        localMenu.addItem(chatItem)
+        let chatStatusItem = NSMenuItem(title: chatLabel(chat), action: nil, keyEquivalent: "")
+        chatStatusItem.isEnabled = false
+        chatStatusItem.state = (chat?.running ?? false) ? .on : .off
+        localMenu.addItem(chatStatusItem)
+        if let refusal = chat?.lastArbiterRefusal, !refusal.isEmpty {
+            let refusalItem = NSMenuItem(title: "⚠ RAM: \(truncate(refusal, 60))", action: nil, keyEquivalent: "")
+            refusalItem.isEnabled = false
+            localMenu.addItem(refusalItem)
+        }
+        if let dl = chat?.downloadPercent, dl < 100 {
+            let dlItem = NSMenuItem(title: "↓ downloading \(dl)%", action: nil, keyEquivalent: "")
+            dlItem.isEnabled = false
+            localMenu.addItem(dlItem)
+        }
+        if chat?.running == true {
+            let stopItem = NSMenuItem(title: "Stop Chat", action: #selector(stopChat), keyEquivalent: "")
+            stopItem.target = self
+            localMenu.addItem(stopItem)
+        } else {
+            // "Start with…" submenu of presets. Clicking starts (and
+            // downloads if needed) the chosen model.
+            let startItem = NSMenuItem(title: "Start Chat with…", action: nil, keyEquivalent: "")
+            startItem.submenu = buildPresetMenu(
+                presets: chat?.presets ?? [],
+                action: #selector(startChatWithPreset(_:)),
+                memoryBudget: snapshot?.memory,
+            )
+            localMenu.addItem(startItem)
+        }
 
+        localMenu.addItem(NSMenuItem.separator())
+
+        // Companion tier — same shape as chat
         let comp = snapshot?.companion
-        let compItem = NSMenuItem(
-            title: companionLabel(comp),
-            action: nil,
-            keyEquivalent: "",
-        )
-        compItem.state = (comp?.running ?? false) ? .on : .off
-        compItem.isEnabled = false
-        localMenu.addItem(compItem)
+        let compStatusItem = NSMenuItem(title: companionLabel(comp), action: nil, keyEquivalent: "")
+        compStatusItem.isEnabled = false
+        compStatusItem.state = (comp?.running ?? false) ? .on : .off
+        localMenu.addItem(compStatusItem)
+        if let refusal = comp?.lastArbiterRefusal, !refusal.isEmpty {
+            let refusalItem = NSMenuItem(title: "⚠ RAM: \(truncate(refusal, 60))", action: nil, keyEquivalent: "")
+            refusalItem.isEnabled = false
+            localMenu.addItem(refusalItem)
+        }
+        if let dl = comp?.downloadPercent, dl < 100 {
+            let dlItem = NSMenuItem(title: "↓ downloading \(dl)%", action: nil, keyEquivalent: "")
+            dlItem.isEnabled = false
+            localMenu.addItem(dlItem)
+        }
+        if comp?.running == true {
+            let stopItem = NSMenuItem(title: "Stop Companion", action: #selector(stopCompanion), keyEquivalent: "")
+            stopItem.target = self
+            localMenu.addItem(stopItem)
+        } else {
+            let startItem = NSMenuItem(title: "Start Companion with…", action: nil, keyEquivalent: "")
+            startItem.submenu = buildPresetMenu(
+                presets: comp?.presets ?? [],
+                action: #selector(startCompanionWithPreset(_:)),
+                memoryBudget: snapshot?.memory,
+            )
+            localMenu.addItem(startItem)
+        }
 
         localMenu.addItem(NSMenuItem.separator())
         let openSettings = NSMenuItem(
@@ -499,6 +566,82 @@ final class TrayController: NSObject {
         // the icon disappears even if Detour was slow.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { exit(0) }
     }
+
+    // ── Local AI controls ─────────────────────────────────────────────
+
+    @objc func stopChat() {
+        openDetourURL("detour://localchat/stop")
+        // Trigger an immediate poll so the menu reflects the new state
+        // on the next render without waiting for the regular 4s tick.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.pollOnce() }
+    }
+
+    @objc func startChatWithPreset(_ sender: NSMenuItem) {
+        guard let preset = sender.representedObject as? String else { return }
+        openDetourURL("detour://localchat/start?preset=\(percentEncode(preset))")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.pollOnce() }
+    }
+
+    @objc func stopCompanion() {
+        openDetourURL("detour://companion/stop")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.pollOnce() }
+    }
+
+    @objc func startCompanionWithPreset(_ sender: NSMenuItem) {
+        guard let preset = sender.representedObject as? String else { return }
+        openDetourURL("detour://companion/start?preset=\(percentEncode(preset))")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.pollOnce() }
+    }
+
+    /// Build a submenu of presets with one item per preset. Each item
+    /// is annotated with disk + RAM hints; if `memoryBudget` is
+    /// provided, presets that would over-budget are flagged.
+    private func buildPresetMenu(
+        presets: [TrayPreset],
+        action: Selector,
+        memoryBudget: TrayMemory?,
+    ) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if presets.isEmpty {
+            let empty = NSMenuItem(title: "No presets available", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return menu
+        }
+        for p in presets {
+            let ramStr = String(format: "%.1f GB", p.approxLiveRamGB)
+            let diskStr = p.approxDiskGB >= 1.0
+                ? String(format: "%.1f GB on disk", p.approxDiskGB)
+                : String(format: "%d MB on disk", Int(p.approxDiskGB * 1024))
+            let mark: String
+            if p.downloaded {
+                mark = "✓ downloaded"
+            } else {
+                mark = "↓ will download"
+            }
+            // Approximate fit: if current used + this preset's RAM
+            // exceeds the budget, warn. The arbiter does the real check.
+            var fitWarning = ""
+            if let mem = memoryBudget {
+                let projected = mem.usedGB + p.approxLiveRamGB
+                if projected > mem.budgetGB {
+                    fitWarning = "  ⚠ over RAM budget"
+                }
+            }
+            let title = "\(p.label) — \(ramStr) live, \(diskStr) (\(mark))\(fitWarning)"
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = p.id
+            menu.addItem(item)
+        }
+        return menu
+    }
+}
+
+private func truncate(_ s: String, _ n: Int) -> String {
+    if s.count <= n { return s }
+    return String(s.prefix(n)) + "…"
 }
 
 // MARK: - App boot

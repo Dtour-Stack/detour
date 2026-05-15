@@ -57,3 +57,5 @@ eliza/*-export.jsonl
 # Compiled Swift AppleScript bridge — produced by build-assets/applescript-bridge/build.sh
 # and re-embedded into Detour.app on every build. Source files are tracked.
 build-assets/applescript-bridge/DetourBridge.app/
+build-assets/tray-bridge/DetourTray.app/
+build-assets/settings-bridge/DetourSettings.app/

@@ -467,6 +467,10 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// Tray-state builder for the Swift DetourTray.app companion. Gathers
 	// from every service it needs in one read — kept compact since the
 	// tray polls every ~4s.
+	const { LOCAL_CHAT_PRESETS } = await import("./llama/chat-service");
+	const { COMPANION_MODEL_PRESETS } = await import("./llama/companion-service");
+	const { isModelDownloaded } = await import("./llama/server-service");
+
 	const buildTraySnapshot = async () => {
 		const llamaSnap = llama.status();
 		const localChatSnap = localChat.status();
@@ -483,6 +487,20 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 				status?: string;
 			}> }));
 		const prefs = await config.getTrayPrefs().catch(() => null);
+		const chatPresets = LOCAL_CHAT_PRESETS.map((p) => ({
+			id: p.id,
+			label: p.label,
+			approxLiveRamGB: p.approxLiveRamGB,
+			approxDiskGB: p.approxDiskGB,
+			downloaded: isModelDownloaded(p.modelRef),
+		}));
+		const companionPresets = COMPANION_MODEL_PRESETS.map((p) => ({
+			id: p.id,
+			label: p.label,
+			approxLiveRamGB: p.approxLiveRamGB,
+			approxDiskGB: p.approxDiskMB / 1024,
+			downloaded: isModelDownloaded(p.modelRef),
+		}));
 		return {
 			activeProviderId,
 			providers: providers.map((p) => ({
@@ -494,7 +512,11 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			embed: {
 				running: llamaSnap.running,
 				...(llamaSnap.downloadProgress
-					? { downloadPercent: llamaSnap.downloadProgress.percent }
+					? {
+						downloadPercent: llamaSnap.downloadProgress.percent,
+						downloadedBytes: llamaSnap.downloadProgress.downloadedBytes,
+						totalBytes: llamaSnap.downloadProgress.totalBytes,
+					}
 					: {}),
 				lastError: llamaSnap.lastError,
 			},
@@ -502,12 +524,30 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 				enabled: localChatSnap.enabled,
 				running: localChatSnap.running,
 				preset: localChatSnap.preset,
+				...(localChatSnap.downloadProgress
+					? {
+						downloadPercent: localChatSnap.downloadProgress.percent,
+						downloadedBytes: localChatSnap.downloadProgress.downloadedBytes,
+						totalBytes: localChatSnap.downloadProgress.totalBytes,
+					}
+					: {}),
+				lastArbiterRefusal: localChat.getLastArbiterRefusal(),
+				presets: chatPresets,
 			},
 			companion: {
 				enabled: companionSnap.enabled,
 				running: companionSnap.running,
 				preset: companionSnap.preset,
 				sharedWithLocalChat: companionSnap.sharedWithLocalChat,
+				...(companionSnap.downloadProgress
+					? {
+						downloadPercent: companionSnap.downloadProgress.percent,
+						downloadedBytes: companionSnap.downloadProgress.downloadedBytes,
+						totalBytes: companionSnap.downloadProgress.totalBytes,
+					}
+					: {}),
+				lastArbiterRefusal: companion.getLastArbiterRefusal(),
+				presets: companionPresets,
 			},
 			memory: {
 				totalGB: memorySnap.totalGB,

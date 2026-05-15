@@ -76,6 +76,33 @@ function findBundledBridge(): string | null {
 	return null;
 }
 
+/**
+ * Locate the embedded DetourSettings.app inside our own bundle. The
+ * postBuild hook drops it at Resources/DetourSettings.app. Returns
+ * null in dev source mode (no bundle yet) so the React Settings
+ * drawer stays as the fallback.
+ */
+function findBundledSettings(): string | null {
+	if (!process.execPath) return null;
+	const candidates = [
+		join(
+			dirname(process.execPath),
+			"..",
+			"Resources",
+			"app",
+			"DetourSettings.app",
+		),
+		join(
+			dirname(process.execPath),
+			"..",
+			"Resources",
+			"DetourSettings.app",
+		),
+	];
+	for (const c of candidates) if (existsSync(c)) return c;
+	return null;
+}
+
 function registerBridgeWithLaunchServices(): void {
 	const bridgePath = findBundledBridge();
 	if (!bridgePath) {
@@ -198,11 +225,29 @@ function handleRoute(
 
 		case "settings": {
 			const tab = asString(params.get("tab"));
+			// Prefer the SwiftUI DetourSettings.app companion when bundled.
+			// Tabs DetourSettings doesn't cover yet fall through to the
+			// React drawer (its label-only entries broadcast back with a
+			// deep-link via uiOpenSettings, the legacy path).
+			const SWIFT_TABS = new Set([
+				"",
+				"configuration:providers",
+				"configuration:local-ai",
+				"configuration:tray",
+			]);
+			const bridgePath = findBundledSettings();
+			if (bridgePath && (!tab || SWIFT_TABS.has(tab))) {
+				const binary = join(bridgePath, "Contents", "MacOS", "DetourSettings");
+				if (existsSync(binary)) {
+					try {
+						spawn(binary, [], { stdio: "ignore", detached: true }).unref();
+						return;
+					} catch (err) {
+						console.warn("[url-scheme] DetourSettings spawn failed, falling through:", err);
+					}
+				}
+			}
 			deps.events.emit("ui:open-settings", {});
-			// Two broadcasts: one opens the drawer, one re-fires with the
-			// tab payload so the SettingsView deep-link effect picks it
-			// up. (uiOpenSettings already covers both via its payload
-			// shape — pass tab if present.)
 			broadcaster.broadcast("uiOpenSettings", tab ? { tab } : {});
 			return;
 		}
@@ -212,6 +257,30 @@ function handleRoute(
 			if (target && VALID_TARGETS.has(target as WindowOpenTarget)) {
 				broadcaster.broadcast(`uiOpen${capitalize(target)}` as never, {});
 			}
+			return;
+		}
+
+		case "localchat":
+		case "companion": {
+			// detour://localchat/start?preset=… / detour://localchat/stop
+			// detour://companion/start?preset=… / detour://companion/stop
+			// Routes back into the same HTTP /api/local-ai/*/{start,stop}
+			// endpoint via localhost so we have ONE code path that
+			// validates + drives the service.
+			const tier = route === "localchat" ? "chat" : "companion";
+			if (sub !== "start" && sub !== "stop") {
+				console.warn(`[url-scheme] /${route} requires /start or /stop`);
+				return;
+			}
+			const preset = asString(params.get("preset"));
+			const body = sub === "start" && preset ? { preset } : {};
+			void fetch(`http://127.0.0.1:2138/api/local-ai/${tier}/${sub}`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			}).catch((err) => {
+				console.warn(`[url-scheme] /${route}/${sub} fetch failed:`, err);
+			});
 			return;
 		}
 
