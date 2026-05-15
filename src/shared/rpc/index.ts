@@ -46,6 +46,8 @@ import type { MediaRequests } from "./media";
 import type { GoalsRequests, GoalsMessages } from "./goals";
 import type { DreamsRequests, DreamsMessages } from "./dreams";
 import type { PromptSlotsRequests } from "./prompt-slots";
+import type { SkillsRequests } from "./skills";
+import type { WalletStatsRequests } from "./wallet-stats";
 
 export type DetourBunRequests =
 	& VaultRequests
@@ -74,6 +76,8 @@ export type DetourBunRequests =
 	& GoalsRequests
 	& DreamsRequests
 	& PromptSlotsRequests
+	& SkillsRequests
+	& WalletStatsRequests
 	& PhantomBunRequests;
 
 // All `messages` (both bun→view and view→bun) live in DetourBunMessages.

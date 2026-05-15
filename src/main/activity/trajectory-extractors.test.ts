@@ -262,5 +262,106 @@ describe("trajectory extractors", () => {
 		expect(view.thinking).toHaveLength(1);
 		expect(view.actionsTaken).toHaveLength(1);
 		expect(view.actionsTaken[0]?.name).toBe("REPLY");
+		// New fields land too:
+		expect(view.totals).toBeDefined();
+		expect(view.providers).toBeDefined();
+		expect(view.companion).toBeDefined();
+		expect(view.failures).toBeDefined();
+	});
+
+	test("extractSimpleView totals counts LLM calls, tokens, latency, action successes/failures", () => {
+		const d = baseDetail();
+		d.llmCalls = [
+			{ callId: "c1", stepNumber: 1, timestamp: 10, model: "claude-opus-4", promptTokens: 100, completionTokens: 50, latencyMs: 800 } as never,
+			{ callId: "c2", stepNumber: 2, timestamp: 20, model: "claude-opus-4", promptTokens: 200, completionTokens: 75, latencyMs: 1200 } as never,
+		];
+		d.actions = [
+			{ attemptId: "a1", stepNumber: 1, timestamp: 10, actionName: "REPLY", success: true, result: {} },
+			{ attemptId: "a2", stepNumber: 2, timestamp: 20, actionName: "GENERATE_IMAGE", success: false, result: { error: "bad prompt" } },
+			{ attemptId: "a3", stepNumber: 3, timestamp: 30, actionName: "pending", success: false, result: {} }, // pending — should NOT count
+		];
+		const view = extractSimpleView(d);
+		expect(view.totals.llmCallCount).toBe(2);
+		expect(view.totals.totalPromptTokens).toBe(300);
+		expect(view.totals.totalCompletionTokens).toBe(125);
+		expect(view.totals.totalLatencyMs).toBe(2000);
+		expect(view.totals.successfulActionCount).toBe(1);
+		expect(view.totals.failedActionCount).toBe(1);
+	});
+
+	test("extractSimpleView providers groups by model + purpose, preserves first-seen order", () => {
+		const d = baseDetail();
+		d.llmCalls = [
+			{ callId: "c1", stepNumber: 1, timestamp: 10, model: "claude-opus-4", purpose: "response", promptTokens: 100, completionTokens: 50, latencyMs: 800 } as never,
+			{ callId: "c2", stepNumber: 2, timestamp: 20, model: "claude-opus-4", purpose: "response", promptTokens: 50, completionTokens: 25, latencyMs: 400 } as never,
+			{ callId: "c3", stepNumber: 3, timestamp: 30, model: "gpt-4-mini", purpose: "evaluator", promptTokens: 30, completionTokens: 10, latencyMs: 300 } as never,
+		];
+		const view = extractSimpleView(d);
+		expect(view.providers).toHaveLength(2);
+		expect(view.providers[0]?.model).toBe("claude-opus-4");
+		expect(view.providers[0]?.calls).toBe(2);
+		expect(view.providers[0]?.promptTokens).toBe(150);
+		expect(view.providers[1]?.model).toBe("gpt-4-mini");
+		expect(view.providers[1]?.purpose).toBe("evaluator");
+	});
+
+	test("extractSimpleView companion pulls metadata.companion fields when present", () => {
+		const d = baseDetail();
+		d.trajectory = {
+			id: "t1",
+			source: "tray-app",
+			status: "completed",
+			metadata: {
+				companion: {
+					triage: "tool",
+					personaFrame: "User wants to ship today; reply should commit.",
+					memoryQueries: ["deploy timing", "feature progress"],
+					compressedHistory: "User and agent discussed shipping the eval API.",
+					shouldRespond: true,
+				},
+			},
+		} as never;
+		const view = extractSimpleView(d);
+		expect(view.companion.triage).toBe("tool");
+		expect(view.companion.personaFrame).toContain("ship today");
+		expect(view.companion.memoryQueries).toHaveLength(2);
+		expect(view.companion.compressedHistory).toContain("eval API");
+		expect(view.companion.shouldRespond).toBe(true);
+	});
+
+	test("extractSimpleView companion is empty when metadata absent (graceful default)", () => {
+		const d = baseDetail();
+		const view = extractSimpleView(d);
+		expect(view.companion).toEqual({});
+	});
+
+	test("extractSimpleView failures aggregates llm errors + failed actions", () => {
+		const d = baseDetail();
+		d.llmCalls = [
+			{ callId: "c1", stepNumber: 1, timestamp: 10, model: "claude", error: "rate-limit hit" } as never,
+		];
+		d.actions = [
+			{ attemptId: "a1", stepNumber: 2, timestamp: 20, actionName: "GENERATE_IMAGE", success: false, result: { error: "invalid prompt" } },
+		];
+		const view = extractSimpleView(d);
+		expect(view.failures).toHaveLength(2);
+		expect(view.failures[0]?.source).toBe("llm");
+		expect(view.failures[0]?.message).toBe("rate-limit hit");
+		expect(view.failures[1]?.source).toBe("action");
+		expect(view.failures[1]?.message).toBe("invalid prompt");
+	});
+
+	test("extractSimpleView source falls back through trajectory.source → metadata.source → null", () => {
+		const d1 = baseDetail();
+		d1.trajectory = { id: "t1", source: "tray-app" } as never;
+		expect(extractSimpleView(d1).source).toBe("tray-app");
+
+		const d2 = baseDetail();
+		d2.trajectory = { id: "t2", metadata: { source: "discord" } } as never;
+		expect(extractSimpleView(d2).source).toBe("discord");
+
+		const d3 = baseDetail();
+		d3.trajectory = null as never; // explicit no-trajectory
+		expect(extractSimpleView(d3).source).toBeNull();
 	});
 });

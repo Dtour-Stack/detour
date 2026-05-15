@@ -20,6 +20,17 @@ export const phantomViewRequestHandlers = {
 		return getPhantomBridge().solanaSignAndSend(tx);
 	},
 
+	phantomViewSolanaSignTransaction: async (params: { serializedTransactionBase64: string }) => {
+		const raw = Uint8Array.from(atob(params.serializedTransactionBase64), (c) => c.charCodeAt(0));
+		const tx = VersionedTransaction.deserialize(raw);
+		return getPhantomBridge().solanaSignTransaction(tx);
+	},
+
+	phantomViewSolanaSignMessage: async (params: { messageBase64: string }) => {
+		const raw = Uint8Array.from(atob(params.messageBase64), (c) => c.charCodeAt(0));
+		return getPhantomBridge().solanaSignMessage(raw);
+	},
+
 	phantomViewEvmSendTransaction: async (params: {
 		to: `0x${string}`;
 		value?: string;

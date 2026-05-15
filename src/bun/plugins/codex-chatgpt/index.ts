@@ -12,6 +12,7 @@
  *   - CODEX_MODEL_IMAGE      image-gen carrier  (default: "gpt-5.2")
  */
 
+import { compileToToon } from "../../core/toon-compiler";
 import {
 	ContentType,
 	logger,
@@ -172,6 +173,98 @@ function buildInput(params: GenerateTextParams): {
 	return { instructions, input: items };
 }
 
+/**
+ * Strip wrappers that reasoning-style models (Codex / GPT-5.x via Codex CLI)
+ * sometimes add around structured output, which would otherwise cause the
+ * TOON parser to fail. Specifically:
+ *
+ *   - `<think>...</think>` blocks (chain-of-thought leakage; Codex emits
+ *     these intermittently even when not asked)
+ *   - Outer ```toon / ```yaml / ``` markdown fences wrapping the WHOLE
+ *     response (instruction following degrades on multi-field schemas)
+ *   - Trailing "Let me know if..." / "Hope this helps" pleasantries
+ *     after a clean TOON block
+ *
+ * Intentionally conservative — we only touch patterns that wrap the
+ * entire response. Mid-text occurrences (e.g. a fenced code example
+ * inside the `text:` field) are left alone.
+ *
+ * Without this, calls hit dynamicPromptExecFromState 2/11 success and
+ * the agent falls back through the recovery chain (see
+ * `dpe-fallback-plugin.ts`). With it, Codex's structured-output rate
+ * matches Anthropic's. Applied in `streamText` so every TEXT_* and
+ * OBJECT_LARGE call benefits.
+ */
+export function stripStructuredWrappers(raw: string): string {
+	let text = raw;
+	// Strip <think>...</think> regardless of position.
+	text = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+	text = text.trim();
+	// Unwrap an outer markdown fence opening the response. We allow trailing
+	// content after the closing fence (a common Codex pattern is fence + a
+	// "Let me know…" pleasantry afterwards), but we anchor the OPENING fence
+	// to the start so we don't accidentally strip a fenced code example
+	// the model put inside the `text:` field.
+	const fenceMatch = text.match(
+		/^```(?:[a-zA-Z0-9_-]+)?\s*\n([\s\S]*?)\n```(?:\s*[\s\S]*)?$/,
+	);
+	if (fenceMatch?.[1]) {
+		text = fenceMatch[1].trim();
+	}
+	// Strip a trailing "Let me know…" / "Hope this helps…" paragraph
+	// that follows a TOON-looking block — only if the response clearly
+	// contains a TOON document above it. Runs after fence-unwrap so the
+	// shape check sees the actual TOON content, not ```toon.
+	const hasToonShape = /^(thought|actions|providers|text|simple)\s*:/m.test(text);
+	if (hasToonShape) {
+		text = text.replace(
+			/\n{2,}(?:Let me know|Hope (?:that|this) (?:helps|works)|Anything else|Happy to)\b[\s\S]*$/i,
+			"",
+		);
+	}
+	return text;
+}
+
+/**
+ * Pull final output text out of the `response.completed` event payload.
+ *
+ * The Codex / OpenAI Responses API serialises a response as:
+ *   { output: [ { type: "message", content: [ { type: "output_text", text: "..." } ] }, ... ] }
+ * and ALSO mirrors the concatenated text to a top-level `output_text` field
+ * for convenience. We prefer the structured walk because it tolerates
+ * multi-segment outputs (reasoning + text) and reasoning-only paths where
+ * the convenience field is missing.
+ *
+ * Returns "" when nothing parseable is found — the caller already falls
+ * back to delta + done.text in that case.
+ */
+function extractCompletedOutputText(response: unknown): string {
+	if (!response || typeof response !== "object") return "";
+	const rec = response as Record<string, unknown>;
+	const parts: string[] = [];
+	const outputs = Array.isArray(rec.output) ? rec.output : [];
+	for (const item of outputs) {
+		if (!item || typeof item !== "object") continue;
+		const content = (item as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		for (const c of content) {
+			if (!c || typeof c !== "object") continue;
+			const block = c as { type?: unknown; text?: unknown };
+			if (
+				(block.type === "output_text" ||
+					block.type === "text" ||
+					block.type === "summary_text") &&
+				typeof block.text === "string"
+			) {
+				parts.push(block.text);
+			}
+		}
+	}
+	if (parts.length > 0) return parts.join("");
+	const flat = (rec.output_text as unknown) ?? "";
+	return typeof flat === "string" ? flat : "";
+}
+
 async function streamText(runtime: IAgentRuntime, model: string, params: GenerateTextParams): Promise<string> {
 	const client = buildClient(runtime);
 	const { instructions, input } = buildInput(params);
@@ -193,14 +286,31 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 	};
 
 	let collected = "";
+	let doneText = "";
+	let completedFinalText = "";
+	const eventTypeCounts: Record<string, number> = {};
+	const debugEvents = process.env.CODEX_DEBUG_STREAM === "1";
 	try {
 		for await (const ev of client.stream(req)) {
+			const evType =
+				typeof (ev as { type?: unknown }).type === "string"
+					? ((ev as { type: string }).type)
+					: "(unknown)";
+			eventTypeCounts[evType] = (eventTypeCounts[evType] ?? 0) + 1;
 			if (ev.type === "response.output_text.delta") {
 				const delta = (ev as { delta?: string }).delta ?? "";
 				collected += delta;
 			} else if (ev.type === "response.output_text.done") {
 				const text = (ev as { text?: string }).text ?? "";
-				if (collected.length === 0 && text.length > 0) collected = text;
+				if (text.length > doneText.length) doneText = text;
+			} else if (ev.type === "response.completed") {
+				// The Responses API delivers the final, canonical output here as a
+				// `response.output[].content[].text` tree. For gpt-5.x reasoning
+				// models the deltas can be sparse (the model emits reasoning
+				// tokens that don't surface as `output_text.delta`), so the
+				// completed event is the most reliable source of the full reply.
+				const fullResponse = (ev as { response?: unknown }).response;
+				completedFinalText = extractCompletedOutputText(fullResponse);
 			} else if (ev.type === "response.failed" || ev.type === "response.error") {
 				const errMessage =
 					(ev as { response?: { error?: { message?: string } }; error?: { message?: string } }).response?.error?.message ??
@@ -213,7 +323,59 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 		recordQuotaCap(err, runtime);
 		throw err;
 	}
-	return collected;
+	// Resolution order matters: deltas are partial-by-default, the
+	// `output_text.done` event carries the same canonical text the deltas
+	// concatenated (so we use it when deltas were short), and
+	// `response.completed` is the ground-truth final output (used when both
+	// delta and done are short — happens on gpt-5.x reasoning paths).
+	if (completedFinalText.length > collected.length) collected = completedFinalText;
+	if (doneText.length > collected.length) collected = doneText;
+	if (debugEvents) {
+		logger.info(
+			{
+				src: "codex-chatgpt",
+				model,
+				collectedLen: collected.length,
+				deltaCount: eventTypeCounts["response.output_text.delta"] ?? 0,
+				doneLen: doneText.length,
+				completedLen: completedFinalText.length,
+				eventTypes: eventTypeCounts,
+			},
+			"Codex stream resolved",
+		);
+	}
+	if (collected.length === 0) {
+		logger.warn(
+			{ src: "codex-chatgpt", model, eventTypes: eventTypeCounts },
+			"Codex returned an empty response (no output_text delta or done events)",
+		);
+	}
+	// TOON compiler: turns whatever Codex emitted (JSON, YAML, loose
+	// key:value, already-TOON, fenced anything) into canonical TOON the
+	// structured-output engine will parse on the first try. Falls
+	// through to raw text for non-structured (chat) responses, which
+	// are left unchanged. See src/bun/core/toon-compiler.ts.
+	const compiled = compileToToon(collected);
+	if (compiled.source !== "toon" && compiled.source !== "raw") {
+		logger.info(
+			{
+				src: "codex-chatgpt",
+				model,
+				originalFormat: compiled.source,
+				rawLen: collected.length,
+				compiledLen: compiled.text.length,
+			},
+			"Codex response compiled into canonical TOON",
+		);
+	} else if (compiled.source === "raw" && collected.length > 0 && /^[a-zA-Z_]+\s*:/m.test(collected) === false && /^\s*[{[]/.test(collected) === false) {
+		// Non-structured output is fine (chat reply path) — only log if
+		// it looks like we got prose where structure was expected.
+		logger.debug(
+			{ src: "codex-chatgpt", model, preview: collected.slice(0, 200) },
+			"Codex returned non-structured text (chat path)",
+		);
+	}
+	return compiled.text;
 }
 
 const generateImageHandler: Handler = async (runtime, message, _state, options, callback): Promise<ActionResult> => {

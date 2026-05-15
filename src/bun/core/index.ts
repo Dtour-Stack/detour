@@ -181,6 +181,15 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	dream.start();
 	const discordObservations = new DiscordObservationService(runtime, pensieve.memories, gateway);
 	discordObservations.start();
+	// The companion is created later (line ~300) so we capture a
+	// reference here that gets populated when it's ready. The gate
+	// safely returns null if the companion hasn't booted yet — no
+	// startup-order dependency, no race.
+	let companionRef: import("./llama/companion-service").CompanionService | null = null;
+	discordObservations.setShouldRespondHook(async ({ agentName, channel, recentMessages }) => {
+		if (!companionRef) return null;
+		return companionRef.shouldRespond(agentName, channel, recentMessages);
+	});
 	runtime.setGateway(gateway);
 	runtime.onAfterBuild((state) => {
 		gateway.attach(state.runtime);
@@ -287,6 +296,132 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		console.warn("[core] llama-server start failed:", err instanceof Error ? err.message : err);
 	}
 
+	// Memory arbiter — single coordination point that gates llama-server
+	// spawns against the machine's RAM budget. Each tier asks before
+	// spawning; refusal returns null with a human-readable reason the
+	// UI surfaces. Embedding takes a fixed ~0.5 GB reservation up front
+	// (it's already running by this point). Chat + companion check
+	// against the remainder on every start() call. See memory-arbiter.ts
+	// for the budget model.
+	const { MemoryArbiter } = await import("./llama/memory-arbiter");
+	const arbiter = new MemoryArbiter();
+	// bge-small-en-v1.5 is ~25 MB on disk; live working set with KV cache
+	// is ~500 MB. Reserve generously so the arbiter doesn't underestimate.
+	arbiter.reserve("embedding", 0.5);
+
+	// Local chat service — second llama-server instance for chat completions.
+	// Off by default; user enables from Settings → Local AI. When enabled,
+	// the `local-chat` plugin (already registered in basePlugins) reads the
+	// URL from DETOUR_LOCAL_CHAT_URL and routes TEXT_SMALL/MEDIUM/LARGE
+	// against it.
+	const { LocalChatService } = await import("./llama/chat-service");
+	const localChat = new LocalChatService();
+	localChat.attachArbiter(arbiter);
+	if (process.env.DETOUR_LOCAL_CHAT_ENABLED === "true") {
+		try {
+			const result = await localChat.start();
+			if (result) {
+				console.log(`[core] local-chat ready at ${result.url} model=${result.modelPath}`);
+			} else {
+				console.warn("[core] local-chat enabled but failed to start");
+			}
+		} catch (err) {
+			console.warn(
+				"[core] local-chat start failed:",
+				err instanceof Error ? err.message : err,
+			);
+		}
+	}
+
+	// Companion — small 0.6B sidecar model. Runs 5 light jobs to
+	// offload trivial decisions (triage, should-respond, memory query
+	// rewrite, context compression, persona pre-pass) from the cloud
+	// planner. Off by default. When DETOUR_COMPANION_ENABLED=true is
+	// set, auto-starts at boot; the runtime then wires the
+	// shouldRespond gate into the Discord observation tick. Every
+	// failure path returns null — agent hot paths never block on the
+	// companion.
+	const { CompanionService } = await import("./llama/companion-service");
+	const companion = new CompanionService();
+	// Wire the companion → local-chat dedup: when the user picks the same
+	// modelRef for both tiers (e.g. eliza-1 0.6B for chat AND companion,
+	// or Qwen3-0.6B for both), companion.start() will reuse the chat
+	// server's port instead of spawning a duplicate ~3 GB process. Lookup
+	// is re-resolved on each call, so stopping local-chat cleanly drops
+	// the companion to classical-only.
+	companion.attachLocalChat(localChat);
+	companion.attachArbiter(arbiter);
+	companionRef = companion;
+	// Wire the Pensieve query-expansion hook to the companion's
+	// memoryQuery job. When the companion is off this returns null
+	// and Pensieve runs its literal-text path; no race, no startup
+	// dependency.
+	pensieve.memories.setMemoryQueryHook(async (userText) => {
+		return companion.memoryQuery(userText);
+	});
+	// Persist every companion job to the memory store so the HF
+	// auto-dump captures companion activity in the corpus that feeds
+	// APOLLO fine-tuning. Cheap writes; the agent's main flow doesn't
+	// retrieve `companion-job` entries (they're tagged for export only).
+	companion.setPersistHook(async (entry) => {
+		await pensieve.memories.create({
+			text: `[companion:${entry.job}] ${entry.summary} (${entry.durationMs}ms ${entry.ok ? "ok" : "fail"})`,
+			path: `/companion/${entry.job}`,
+			type: "companion-job",
+			tags: ["companion", `job:${entry.job}`, entry.ok ? "ok" : "fail"],
+			extraMetadata: {
+				job: entry.job,
+				startedAt: entry.startedAt,
+				durationMs: entry.durationMs,
+				ok: entry.ok,
+				summary: entry.summary,
+			},
+		});
+	});
+	// Wire APOLLO fine-tune readiness probe: count successful
+	// trajectories since the last fine-tune marker. When the count
+	// crosses APOLLO_FINETUNE_THRESHOLD, the LocalAITab Companion
+	// section shows a "ready to retrain" indicator pointing at the
+	// runbook in docs/companion-apollo-finetune.md.
+	companion.setTrajectoryCountProbe(async () => {
+		try {
+			const result = await activity.trajectories.list({
+				limit: 1,
+				status: "completed",
+			});
+			return typeof result.total === "number" ? result.total : null;
+		} catch {
+			return null;
+		}
+	});
+	// Wire the planner pre-pass (personaPrePass + compress + triage).
+	// dpe-fallback-plugin reads this on every dynamicPromptExecFromState
+	// call. Null returns are safe; the planner runs unchanged.
+	const { setCompanionPlannerHook } = await import("./dpe-fallback-plugin");
+	setCompanionPlannerHook({
+		personaPrePass: (agentName, userText) =>
+			companion.personaPrePass(agentName, userText),
+		compress: (history, target) => companion.compress(history, target),
+		triage: (userText) => companion.triage(userText),
+	});
+	if (process.env.DETOUR_COMPANION_ENABLED === "true") {
+		try {
+			const result = await companion.start();
+			if (result) {
+				console.log(
+					`[core] companion ready at ${result.url} model=${result.modelPath}`,
+				);
+			} else {
+				console.warn("[core] companion enabled but failed to start");
+			}
+		} catch (err) {
+			console.warn(
+				"[core] companion start failed:",
+				err instanceof Error ? err.message : err,
+			);
+		}
+	}
+
 	// Import macOS contacts → entity graph + relationships, on every build
 	// where the iMessage plugin is live. The iMessage service starts async
 	// AFTER this hook fires (and itself spawns AppleScript to read Contacts.app
@@ -324,7 +459,13 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
 		}
 	});
-	const api = new ApiServer(runtime, activity);
+	const api = new ApiServer(runtime, activity, {
+		dream,
+		improvement,
+		agentHfSync,
+		localChat,
+		companion,
+	});
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
@@ -342,7 +483,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// bag is mounted on every webview's RPC instance via WindowFactory.
 	const rpcDeps = buildRpcDeps({
 		runtime, vault, auth, backendOps, config, pensieve, activity,
-		agentHfSync, channels, gateway, inbox, llama, cron, ownerBind, portless, previewServers,
+		agentHfSync, channels, gateway, inbox, llama, localChat, companion, cron, ownerBind, portless, previewServers,
 		goal, dream,
 	});
 

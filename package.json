@@ -38,6 +38,8 @@
     "@solana/web3.js": "^1.98.4",
     "drizzle-orm": "0.45.2",
     "electrobun": "1.18.1",
+    "json5": "^2.2.3",
+    "yaml": "^2.8.4",
     "monaco-editor": "^0.55.1",
     "portless": "^0.13.0",
     "react": "^19.0.0",

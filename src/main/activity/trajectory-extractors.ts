@@ -20,6 +20,49 @@ export interface TrajectorySimpleView {
 	reply: string | null;
 	thinking: TrajectoryThinkingStep[];
 	actionsTaken: TrajectoryActionTaken[];
+	/** Aggregate cost + count signals so the UI can show "what did this turn use" at a glance. */
+	totals: TrajectoryTotalsSummary;
+	/** Models/providers that handled LLM calls on this turn, in order of first appearance. */
+	providers: TrajectoryProviderSummary[];
+	/** Companion (small sidecar) job outputs captured during the turn. */
+	companion: TrajectoryCompanionSummary;
+	/** Channel of origin (chat / discord / x / telegram / cron / x_autonomy / messageService …) */
+	source: string | null;
+	/** Hard failures — model errors, parse failures, etc — for quick scan. */
+	failures: TrajectoryFailureSummary[];
+}
+
+export interface TrajectoryTotalsSummary {
+	llmCallCount: number;
+	totalPromptTokens: number;
+	totalCompletionTokens: number;
+	totalLatencyMs: number;
+	successfulActionCount: number;
+	failedActionCount: number;
+}
+
+export interface TrajectoryProviderSummary {
+	model: string;
+	purpose?: string;
+	calls: number;
+	promptTokens: number;
+	completionTokens: number;
+	latencyMs: number;
+}
+
+export interface TrajectoryCompanionSummary {
+	triage?: string;
+	personaFrame?: string;
+	memoryQueries?: string[];
+	compressedHistory?: string;
+	shouldRespond?: boolean;
+}
+
+export interface TrajectoryFailureSummary {
+	stepNumber: number;
+	source: "llm" | "action" | "step";
+	model?: string;
+	message: string;
 }
 
 export interface TrajectoryThinkingStep {
@@ -252,21 +295,32 @@ export function extractThinking(
 export function extractActionsTaken(
 	detail: ActivityTrajectoryDetail,
 ): TrajectoryActionTaken[] {
-	return detail.actions.map((a) => {
-		const name = a.actionName ?? a.actionType ?? "(unknown)";
-		const resultRec = asRecord(a.result);
-		const preview =
-			asString(resultRec?.text) ??
-			asString(resultRec?.summary) ??
-			asString(resultRec?.message);
-		return {
-			stepNumber: a.stepNumber,
-			timestamp: a.timestamp,
-			name,
-			...(typeof a.success === "boolean" && { success: a.success }),
-			...(preview && { resultPreview: preview.slice(0, 240) }),
-		};
-	});
+	return detail.actions
+		.map((a) => {
+			const name = a.actionName ?? a.actionType ?? "(unknown)";
+			const resultRec = asRecord(a.result);
+			const preview =
+				asString(resultRec?.text) ??
+				asString(resultRec?.summary) ??
+				asString(resultRec?.message);
+			return {
+				stepNumber: a.stepNumber,
+				timestamp: a.timestamp,
+				name,
+				...(typeof a.success === "boolean" && { success: a.success }),
+				...(preview && { resultPreview: preview.slice(0, 240) }),
+			};
+		})
+		// Drop pending placeholders. Every trajectory step is initialised
+		// with a `{ actionName: "pending", actionType: "pending", success:
+		// false }` action stub by TrajectoriesService.createStep, and only
+		// the steps that actually represent action invocations get that
+		// stub overwritten via completeActionTrajectoryStep. LLM-call and
+		// provider-render steps legitimately leave the stub in place — so
+		// surfacing it as an "action taken" in the simple view turns every
+		// turn into a wall of "150 pending action attempts" that doesn't
+		// reflect what the agent actually did.
+		.filter((a) => a.name !== "pending" && a.name !== "(unknown)");
 }
 
 export function extractSimpleView(detail: ActivityTrajectoryDetail): TrajectorySimpleView {
@@ -275,7 +329,162 @@ export function extractSimpleView(detail: ActivityTrajectoryDetail): TrajectoryS
 		reply: extractReply(detail),
 		thinking: extractThinking(detail),
 		actionsTaken: extractActionsTaken(detail),
+		totals: extractTotals(detail),
+		providers: extractProviders(detail),
+		companion: extractCompanion(detail),
+		source: extractSource(detail),
+		failures: extractFailures(detail),
 	};
+}
+
+/**
+ * Sum LLM calls + token counts + latency + action success/failure counts
+ * so the UI can render "this turn used N calls, M tokens, T seconds, K
+ * actions (J failed)" in one line.
+ */
+export function extractTotals(detail: ActivityTrajectoryDetail): TrajectoryTotalsSummary {
+	let totalPromptTokens = 0;
+	let totalCompletionTokens = 0;
+	let totalLatencyMs = 0;
+	let llmCallCount = 0;
+	for (const c of detail.llmCalls) {
+		llmCallCount += 1;
+		const prompt = (c as { promptTokens?: number }).promptTokens ?? 0;
+		const completion = (c as { completionTokens?: number }).completionTokens ?? 0;
+		const latency = (c as { latencyMs?: number }).latencyMs ?? 0;
+		totalPromptTokens += prompt;
+		totalCompletionTokens += completion;
+		totalLatencyMs += latency;
+	}
+	let successfulActionCount = 0;
+	let failedActionCount = 0;
+	for (const a of detail.actions) {
+		const name = a.actionName ?? a.actionType ?? "";
+		if (!name || name === "pending") continue;
+		if (a.success === true) successfulActionCount += 1;
+		else if (a.success === false) failedActionCount += 1;
+	}
+	return {
+		llmCallCount,
+		totalPromptTokens,
+		totalCompletionTokens,
+		totalLatencyMs,
+		successfulActionCount,
+		failedActionCount,
+	};
+}
+
+/**
+ * Walk llmCalls grouped by model (plus purpose when distinct) so the
+ * Simple view can show "Codex did 4 calls, Anthropic did 1 retry,
+ * companion did 3 jobs." Order: first-seen.
+ */
+export function extractProviders(
+	detail: ActivityTrajectoryDetail,
+): TrajectoryProviderSummary[] {
+	const order: string[] = [];
+	const byKey = new Map<string, TrajectoryProviderSummary>();
+	for (const c of detail.llmCalls) {
+		const model = c.model ?? "unknown";
+		const purpose = c.purpose ?? undefined;
+		const key = purpose ? `${model}#${purpose}` : model;
+		if (!byKey.has(key)) {
+			order.push(key);
+			byKey.set(key, {
+				model,
+				...(purpose ? { purpose } : {}),
+				calls: 0,
+				promptTokens: 0,
+				completionTokens: 0,
+				latencyMs: 0,
+			});
+		}
+		const summary = byKey.get(key)!;
+		summary.calls += 1;
+		summary.promptTokens += (c as { promptTokens?: number }).promptTokens ?? 0;
+		summary.completionTokens +=
+			(c as { completionTokens?: number }).completionTokens ?? 0;
+		summary.latencyMs += (c as { latencyMs?: number }).latencyMs ?? 0;
+	}
+	return order.map((k) => byKey.get(k)!);
+}
+
+/**
+ * Pull companion job outputs from trajectory metadata when the agent
+ * recorded them. CompanionService writes a `companion` block per turn
+ * onto the trajectory metadata (see AgentHfSyncService for the dump
+ * schema). When absent, returns an empty object — the UI gracefully
+ * hides the section.
+ */
+export function extractCompanion(
+	detail: ActivityTrajectoryDetail,
+): TrajectoryCompanionSummary {
+	const meta = (detail.trajectory as { metadata?: Record<string, unknown> } | null)
+		?.metadata;
+	if (!meta || typeof meta !== "object") return {};
+	const companion =
+		(meta as { companion?: Record<string, unknown> }).companion ?? {};
+	if (!companion || typeof companion !== "object") return {};
+	const result: TrajectoryCompanionSummary = {};
+	if (typeof companion.triage === "string") result.triage = companion.triage;
+	if (typeof companion.personaFrame === "string")
+		result.personaFrame = companion.personaFrame;
+	if (Array.isArray(companion.memoryQueries)) {
+		result.memoryQueries = (companion.memoryQueries as unknown[])
+			.filter((q): q is string => typeof q === "string")
+			.slice(0, 5);
+	}
+	if (typeof companion.compressedHistory === "string")
+		result.compressedHistory = companion.compressedHistory;
+	if (typeof companion.shouldRespond === "boolean")
+		result.shouldRespond = companion.shouldRespond;
+	return result;
+}
+
+export function extractSource(detail: ActivityTrajectoryDetail): string | null {
+	const traj = detail.trajectory as { source?: string } | null;
+	if (traj?.source && typeof traj.source === "string") return traj.source;
+	const meta = (detail.trajectory as { metadata?: Record<string, unknown> } | null)
+		?.metadata;
+	if (meta && typeof meta === "object") {
+		const s = (meta as { source?: unknown }).source;
+		if (typeof s === "string" && s.length > 0) return s;
+	}
+	return null;
+}
+
+export function extractFailures(
+	detail: ActivityTrajectoryDetail,
+): TrajectoryFailureSummary[] {
+	const out: TrajectoryFailureSummary[] = [];
+	for (const c of detail.llmCalls) {
+		const error = (c as { error?: unknown }).error;
+		if (typeof error === "string" && error.length > 0) {
+			out.push({
+				stepNumber: c.stepNumber ?? 0,
+				source: "llm",
+				...(c.model ? { model: c.model } : {}),
+				message: error,
+			});
+		}
+	}
+	for (const a of detail.actions) {
+		if (a.success === false) {
+			const name = a.actionName ?? a.actionType ?? "action";
+			if (name === "pending") continue;
+			const result = a.result as { error?: string; text?: string } | undefined;
+			const msg =
+				(typeof result?.error === "string" && result.error) ||
+				(typeof result?.text === "string" && result.text) ||
+				`${name} failed`;
+			out.push({
+				stepNumber: a.stepNumber ?? 0,
+				source: "action",
+				message: msg.slice(0, 240),
+			});
+		}
+	}
+	return out;
 }
 
 /**

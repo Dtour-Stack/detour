@@ -212,23 +212,234 @@ function TrajectoryViewModeTabs({
 	);
 }
 
+/**
+ * Single-line summary across the top of the Simple view. Surfaces the
+ * 4 things you actually want at a glance: source (where this turn
+ * came from), models used (which providers handled it), totals
+ * (calls/tokens/latency), and a copy-all-as-JSON button so agents
+ * can grab the whole thing in one click.
+ */
+function TrajectorySimpleTopBar({
+	view,
+	onCopyAll,
+}: {
+	view: TrajectorySimpleView;
+	onCopyAll: () => void;
+}) {
+	const { totals, providers, source } = view;
+	const fmtTotalMs = (ms: number): string => {
+		if (ms < 1000) return `${ms}ms`;
+		if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+		return `${(ms / 60_000).toFixed(1)}m`;
+	};
+	const fmtKt = (n: number): string =>
+		n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
+	return (
+		<div
+			style={{
+				display: "flex",
+				flexWrap: "wrap",
+				alignItems: "center",
+				gap: 12,
+				padding: "8px 12px",
+				marginBottom: 12,
+				borderRadius: 6,
+				background: "rgba(120,120,120,0.08)",
+				fontSize: 12,
+			}}
+		>
+			{source && (
+				<span>
+					<span style={{ opacity: 0.6 }}>via</span>{" "}
+					<code style={{ background: "rgba(0,0,0,0.18)", padding: "1px 6px", borderRadius: 4 }}>
+						{source}
+					</code>
+				</span>
+			)}
+			{providers.length > 0 && (
+				<span>
+					<span style={{ opacity: 0.6 }}>models</span>{" "}
+					{providers
+						.map(
+							(p) =>
+								`${p.model}${p.purpose ? `(${p.purpose})` : ""}×${p.calls}`,
+						)
+						.join(" · ")}
+				</span>
+			)}
+			<span>
+				<span style={{ opacity: 0.6 }}>llm</span> {totals.llmCallCount} calls,{" "}
+				{fmtKt(totals.totalPromptTokens + totals.totalCompletionTokens)} tokens,{" "}
+				{fmtTotalMs(totals.totalLatencyMs)}
+			</span>
+			{(totals.successfulActionCount > 0 || totals.failedActionCount > 0) && (
+				<span>
+					<span style={{ opacity: 0.6 }}>actions</span>{" "}
+					{totals.successfulActionCount} ok
+					{totals.failedActionCount > 0 ? `, ${totals.failedActionCount} failed` : ""}
+				</span>
+			)}
+			<button
+				type="button"
+				className="link"
+				onClick={onCopyAll}
+				style={{ marginLeft: "auto" }}
+			>
+				copy all (json)
+			</button>
+		</div>
+	);
+}
+
 function TrajectorySimpleBlock({ view }: { view: TrajectorySimpleView }) {
 	const [showThinking, setShowThinking] = useState(true);
 	const [showActions, setShowActions] = useState(true);
+	const copyJson = useCallback(async (label: string, data: unknown) => {
+		try {
+			await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+		} catch {
+			// best-effort; UI doesn't surface clipboard failures
+		}
+		void label;
+	}, []);
 	return (
 		<div className="trajectory-simple">
+			<TrajectorySimpleTopBar view={view} onCopyAll={() => copyJson("simple-view", view)} />
 			<div className="trajectory-simple-card">
-				<div className="trajectory-simple-label">User asked</div>
+				<div className="trajectory-simple-label-row">
+					<div className="trajectory-simple-label">User asked</div>
+					<button
+						type="button"
+						className="link"
+						onClick={() => copyJson("request", view.request)}
+					>
+						copy
+					</button>
+				</div>
 				<div className="trajectory-simple-body">
 					{view.request ?? <span className="hint">(no request text captured)</span>}
 				</div>
 			</div>
 			<div className="trajectory-simple-card">
-				<div className="trajectory-simple-label">Agent replied</div>
+				<div className="trajectory-simple-label-row">
+					<div className="trajectory-simple-label">Agent replied</div>
+					<button
+						type="button"
+						className="link"
+						onClick={() => copyJson("reply", view.reply)}
+					>
+						copy
+					</button>
+				</div>
 				<div className="trajectory-simple-body">
 					{view.reply ?? <span className="hint">(no reply captured — see Full trace for raw steps)</span>}
 				</div>
 			</div>
+			{view.failures.length > 0 && (
+				<div
+					className="trajectory-simple-card"
+					style={{
+						background: "rgba(255,69,58,0.08)",
+						borderColor: "rgba(255,69,58,0.3)",
+					}}
+				>
+					<div className="trajectory-simple-label-row">
+						<div className="trajectory-simple-label" style={{ color: "#ff453a" }}>
+							Failures ({view.failures.length})
+						</div>
+						<button
+							type="button"
+							className="link"
+							onClick={() => copyJson("failures", view.failures)}
+						>
+							copy
+						</button>
+					</div>
+					<ul className="trajectory-simple-actions">
+						{view.failures.map((f, i) => (
+							<li key={`${f.stepNumber}-${f.source}-${i}`}>
+								<span className="trajectory-simple-action-name">
+									{f.source}
+									{f.model ? ` · ${f.model}` : ""}
+								</span>
+								<span className="trajectory-simple-action-preview">
+									{f.message}
+								</span>
+							</li>
+						))}
+					</ul>
+				</div>
+			)}
+			{(view.companion.triage ||
+				view.companion.personaFrame ||
+				view.companion.memoryQueries ||
+				view.companion.compressedHistory ||
+				view.companion.shouldRespond !== undefined) && (
+				<div className="trajectory-simple-card">
+					<div className="trajectory-simple-label-row">
+						<div className="trajectory-simple-label">Companion (sidecar) outputs</div>
+						<button
+							type="button"
+							className="link"
+							onClick={() => copyJson("companion", view.companion)}
+						>
+							copy
+						</button>
+					</div>
+					<dl
+						style={{
+							display: "grid",
+							gridTemplateColumns: "auto 1fr",
+							gap: "4px 12px",
+							margin: 0,
+							fontSize: 12,
+						}}
+					>
+						{view.companion.triage && (
+							<>
+								<dt style={{ opacity: 0.6 }}>Triage</dt>
+								<dd style={{ margin: 0 }}>
+									<code>{view.companion.triage}</code>
+								</dd>
+							</>
+						)}
+						{view.companion.shouldRespond !== undefined && (
+							<>
+								<dt style={{ opacity: 0.6 }}>Should respond</dt>
+								<dd style={{ margin: 0 }}>
+									<code>{view.companion.shouldRespond ? "yes" : "no"}</code>
+								</dd>
+							</>
+						)}
+						{view.companion.personaFrame && (
+							<>
+								<dt style={{ opacity: 0.6 }}>Persona frame</dt>
+								<dd style={{ margin: 0 }}>{view.companion.personaFrame}</dd>
+							</>
+						)}
+						{view.companion.memoryQueries && view.companion.memoryQueries.length > 0 && (
+							<>
+								<dt style={{ opacity: 0.6 }}>Memory queries</dt>
+								<dd style={{ margin: 0 }}>
+									<ul style={{ margin: 0, paddingLeft: 16 }}>
+										{view.companion.memoryQueries.map((q) => (
+											<li key={q}>{q}</li>
+										))}
+									</ul>
+								</dd>
+							</>
+						)}
+						{view.companion.compressedHistory && (
+							<>
+								<dt style={{ opacity: 0.6 }}>Compressed history</dt>
+								<dd style={{ margin: 0, fontStyle: "italic" }}>
+									{view.companion.compressedHistory}
+								</dd>
+							</>
+						)}
+					</dl>
+				</div>
+			)}
 			{view.actionsTaken.length > 0 && (
 				<div className="trajectory-simple-card">
 					<div className="trajectory-simple-label-row">

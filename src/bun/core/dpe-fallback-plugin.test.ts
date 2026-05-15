@@ -178,6 +178,142 @@ describe("dpe fallback patch", () => {
 		expect(result?.actions).toEqual(["SEND_IMESSAGE"]);
 	});
 
+	test("recovery prefers Anthropic over OpenRouter when both are configured", async () => {
+		// Regression test for "structured planner falls back through weak
+		// OpenRouter free model when Anthropic/Claude is also available".
+		// PROVIDER_RECOVERY_TARGETS order must put anthropic first so the
+		// agent's structured-output path doesn't hand TOON schemas to a
+		// free-tier model that can't reliably emit them.
+		const plannerProviders: unknown[] = [];
+		const args = {
+			options: { modelType: ModelType.ACTION_PLANNER },
+			schema: [
+				{ field: "thought" },
+				{ field: "actions" },
+				{ field: "providers" },
+				{ field: "text" },
+				{ field: "simple" },
+			],
+			state: {
+				values: { recentMessages: "user: Detour fetch the report" },
+				text: "Detour fetch the report",
+			},
+		} as never;
+		const { runtime } = makeRuntime(
+			async (input) => {
+				const record = input as { options?: Record<string, unknown>; state?: { data?: Record<string, unknown> } };
+				plannerProviders.push(record.options?.model ?? "active");
+				if (record.options?.model === "anthropic") {
+					return {
+						thought: "anthropic recovered",
+						actions: ["FETCH_REPORT"],
+						providers: "",
+						text: "fetching the report",
+						simple: false,
+					};
+				}
+				record.state!.data = {
+					structuredOutputFailure: {
+						kind: "model_error",
+						parseError: "Codex Responses API 503: upstream connection timeout",
+						responsePreview: "",
+					},
+				};
+				return null;
+			},
+			async () => "plain reply",
+			{ name: "Detour Squirrel" },
+			// Both keys present — anthropic must be tried FIRST.
+			{ ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" },
+		);
+
+		const result = await runWithPlannerFallbackContext(
+			{ source: "telegram", addressed: true },
+			() => runtime.dynamicPromptExecFromState(args),
+		);
+
+		// Two failed "active" attempts (planner retries), then anthropic
+		// recovers FIRST — openrouter never gets called because anthropic
+		// succeeds. Order in plannerProviders is [active, active, anthropic].
+		expect(plannerProviders).toEqual(["active", "active", "anthropic"]);
+		expect(plannerProviders).not.toContain("openrouter");
+		expect(result?.actions).toEqual(["FETCH_REPORT"]);
+	});
+
+	test("recovery includes OAuth-paired providers even without API_KEY env", async () => {
+		// Regression: user has Anthropic via Claude Pro OAuth (no
+		// ANTHROPIC_API_KEY env var) AND Codex as the active provider via
+		// CODEX OAuth. When Codex's structured output fails, recovery
+		// must still try Anthropic (whose plugin registered a TEXT_LARGE
+		// handler at runtime) instead of silently skipping it because
+		// the env-key check returns false.
+		const plannerProviders: unknown[] = [];
+		const args = {
+			options: { modelType: ModelType.ACTION_PLANNER },
+			schema: [
+				{ field: "thought" },
+				{ field: "actions" },
+				{ field: "providers" },
+				{ field: "text" },
+				{ field: "simple" },
+			],
+			state: {
+				values: { recentMessages: "user: Detour summarize this" },
+				text: "Detour summarize this",
+			},
+		} as never;
+		const calls: string[] = [];
+		// Simulate runtime where ONLY the registered-model-handler check
+		// (not env keys, not settings) reveals Anthropic as available.
+		const modelsMap = new Map<string, Array<{ provider?: string }>>([
+			["TEXT_LARGE", [{ provider: "openai" }, { provider: "anthropic" }]],
+		]);
+		const runtime = {
+			character: { name: "Detour Squirrel" },
+			getSetting: () => undefined, // no settings configured
+			dynamicPromptExecFromState: async (input: unknown) => {
+				calls.push("original");
+				const record = input as { options?: Record<string, unknown>; state?: { data?: Record<string, unknown> } };
+				plannerProviders.push(record.options?.model ?? "active");
+				if (record.options?.model === "anthropic") {
+					return {
+						thought: "anthropic recovered via oauth",
+						actions: ["SUMMARIZE"],
+						providers: "",
+						text: "summarizing",
+						simple: false,
+					};
+				}
+				record.state!.data = {
+					structuredOutputFailure: {
+						kind: "model_error",
+						parseError: "Codex Responses API 503: upstream connection timeout",
+						responsePreview: "",
+					},
+				};
+				return null;
+			},
+			useModel: async () => "plain reply",
+			logger: { warn: () => undefined },
+			models: modelsMap,
+		} as never;
+		installDpeFallbackPatch(runtime);
+
+		// No env vars set — clear them to simulate OAuth-only Anthropic.
+		const originalEnv = process.env.ANTHROPIC_API_KEY;
+		delete process.env.ANTHROPIC_API_KEY;
+		try {
+			const result = await runWithPlannerFallbackContext(
+				{ source: "telegram", addressed: true },
+				() => (runtime as IAgentRuntime).dynamicPromptExecFromState(args),
+			);
+			expect(plannerProviders).toContain("anthropic");
+			expect(result?.actions).toEqual(["SUMMARIZE"]);
+		} finally {
+			if (originalEnv !== undefined) process.env.ANTHROPIC_API_KEY = originalEnv;
+		}
+	});
+
 	test("tries provider recovery for non-reply structured response handlers", async () => {
 		const seenProviders: unknown[] = [];
 		const responseArgs = {

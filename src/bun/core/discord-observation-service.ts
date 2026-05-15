@@ -300,6 +300,14 @@ export function planDiscordObservationWrites(
 	},
 ): DiscordObservationWrite[] {
 	const known = new Set(opts.knownHashes);
+	// Tracks hashes already added during THIS planning call. Without this,
+	// the same fact extracted across multiple rooms / multiple iterations
+	// (e.g. "Dexploarer is Detour's dev/operator" mentioned in three
+	// channels) produces three identical inserts in a single tick — the DB
+	// "memories" table has a unique constraint that rejects all three, so
+	// `writeCount=3 failedCount=3` lands in the logs every tick. Dedup
+	// in-flight so each unique hash gets at most one write per planner call.
+	const seenThisCall = new Set<string>();
 	const sorted = messages
 		.filter((message) => message.channel === "discord" && message.roomId && message.time > 0)
 		.sort((a, b) => a.time - b.time);
@@ -314,7 +322,8 @@ export function planDiscordObservationWrites(
 		const newMessages = roomMessages.filter((message) => message.time > opts.lastProcessedAt);
 		const maxMessageAt = newMessages.reduce((max, message) => Math.max(max, message.time), opts.lastProcessedAt);
 		const noteHash = hashText(`discord-note:${roomId}:${newMessages.map((message) => `${message.id}:${message.time}`).join("|")}`);
-		if (!known.has(noteHash)) {
+		if (!known.has(noteHash) && !seenThisCall.has(noteHash)) {
+			seenThisCall.add(noteHash);
 			writes.push({
 				hash: noteHash,
 				maxMessageAt,
@@ -338,7 +347,8 @@ export function planDiscordObservationWrites(
 		}
 		for (const fact of factCandidates(roomId, roomMessages, opts.agentId)) {
 			const factHash = hashText(`discord-fact:${fact.entityId}:${fact.text}`);
-			if (known.has(factHash)) continue;
+			if (known.has(factHash) || seenThisCall.has(factHash)) continue;
+			seenThisCall.add(factHash);
 			writes.push({
 				hash: factHash,
 				maxMessageAt,
@@ -369,12 +379,43 @@ export function planDiscordObservationWrites(
 
 export class DiscordObservationService {
 	private inFlight = false;
+	/**
+	 * Optional companion hook. When wired, the observation tick asks
+	 * the companion's shouldRespond() classifier whether the current
+	 * Discord message batch contains anything addressed to the agent
+	 * BEFORE doing any extraction work. Returns null when the companion
+	 * is off or can't decide — the tick proceeds with default behavior.
+	 */
+	private shouldRespondHook:
+		| ((args: {
+				agentName: string;
+				channel: string;
+				recentMessages: { author: string; text: string }[];
+		  }) => Promise<boolean | null>)
+		| null = null;
 
 	constructor(
 		private readonly runtimeService: RuntimeService,
 		private readonly memories: PensieveMemoryService,
 		private readonly gateway: ChannelGatewayService,
 	) {}
+
+	/**
+	 * Wire a companion-backed should-respond classifier. Optional —
+	 * when unset the observation service runs full extraction on every
+	 * tick (legacy behavior). When wired, ticks skip extraction on
+	 * messages the companion classifies as not warranting a reply,
+	 * cutting wasted planner-adjacent work.
+	 */
+	setShouldRespondHook(
+		hook: (args: {
+			agentName: string;
+			channel: string;
+			recentMessages: { author: string; text: string }[];
+		}) => Promise<boolean | null>,
+	): void {
+		this.shouldRespondHook = hook;
+	}
 
 	start(): void {
 		this.runtimeService.onAfterBuild(async (state) => {
@@ -419,6 +460,64 @@ export class DiscordObservationService {
 		const lastProcessedAt = readTimestamp(metadata.discordObservationLastProcessedAt);
 		const messages = this.gateway.list({ channel: "discord", limit: MAX_MESSAGES_PER_SCAN }).messages;
 		const latestMessageAt = messages.reduce((max, message) => Math.max(max, message.time), lastProcessedAt);
+
+		// Companion should-respond gate: when wired, ask the local 0.6B
+		// classifier whether anything in the message batch warrants a
+		// reply BEFORE we plan extractions. Skipping early means no
+		// memory writes, no hash list growth, no log noise from
+		// confirmed-dupe inserts on rooms where nothing's addressed to
+		// the agent. The gate is optional — `null` means "couldn't
+		// decide; proceed with default behavior."
+		if (this.shouldRespondHook && messages.length > 0) {
+			try {
+				const agentName =
+					(runtime.character?.name as string | undefined) ?? "agent";
+				const recentMessages = messages
+					.filter((m) => m.time > lastProcessedAt)
+					.slice(-12)
+					.map((m) => ({
+						author: m.externalHandle ?? m.entityId?.slice(0, 8) ?? "user",
+						text: (m.text ?? "").slice(0, 240),
+					}));
+				if (recentMessages.length > 0) {
+					const decision = await this.shouldRespondHook({
+						agentName,
+						channel: "discord",
+						recentMessages,
+					});
+					if (decision === false) {
+						logger.info(
+							{
+								src: "discord-observations",
+								agentName,
+								newMessages: recentMessages.length,
+							},
+							"companion gate said skip — no observation work this tick",
+						);
+						await this.updateTask(runtime, task, {
+							metadata,
+							hashes,
+							createdIds: [],
+							failedCount: 0,
+							lastProcessedAt,
+							latestMessageAt,
+							writeCount: 0,
+						});
+						return;
+					}
+				}
+			} catch (err) {
+				// Gate failures must never block the legacy path.
+				logger.debug(
+					{
+						src: "discord-observations",
+						err: err instanceof Error ? err.message : err,
+					},
+					"companion shouldRespond gate threw — proceeding with default behavior",
+				);
+			}
+		}
+
 		const writes = planDiscordObservationWrites(messages, {
 			agentId: String(runtime.agentId),
 			lastProcessedAt,

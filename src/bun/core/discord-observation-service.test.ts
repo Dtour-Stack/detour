@@ -72,4 +72,45 @@ describe("Discord observation service", () => {
 
 		expect(second).toEqual([]);
 	});
+
+	test("dedups identical fact hashes WITHIN a single planning call", () => {
+		// Regression for the prod log spam: three messages in the same room
+		// all surfaced the "Dexploarer is dev/operator" fact, the planner
+		// returned three identical writes (same hash, same content, same
+		// room), the DB unique constraint rejected all three, and the tick
+		// logged `writeCount=3 failedCount=3` every cycle. The dedup must
+		// happen inside one planning call, not just against persisted
+		// hashes from previous ticks.
+		const room2 = "11111111-1111-1111-1111-111111111111";
+		const room3 = "22222222-2222-2222-2222-222222222222";
+		const writes = planDiscordObservationWrites([
+			message({
+				id: "1",
+				time: 10,
+				text: "[Discord #a] @dEXploarer (Wed): @Detour gm dev",
+				roomId,
+			}),
+			message({
+				id: "2",
+				time: 20,
+				text: "[Discord #b] @dEXploarer (Wed): @Detour gm dev",
+				roomId: room2,
+			}),
+			message({
+				id: "3",
+				time: 30,
+				text: "[Discord #c] @dEXploarer (Wed): @Detour gm dev",
+				roomId: room3,
+			}),
+		], {
+			agentId,
+			lastProcessedAt: 0,
+			knownHashes: [],
+		});
+		// Every fact hash should appear at most once across the entire
+		// returned write list.
+		const factWrites = writes.filter((write) => write.input.tableName === "facts");
+		const factHashes = factWrites.map((write) => write.hash);
+		expect(new Set(factHashes).size).toBe(factHashes.length);
+	});
 });

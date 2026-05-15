@@ -20,6 +20,10 @@ import {
 	type ModelConfig,
 	type WindowConfig,
 } from "../../shared/index";
+import {
+	MIRRORED_ENV_KEYS,
+	isMirroredEnvKey,
+} from "../../shared/secrets-registry";
 import { setPermissionConfig, type AgentVaultMode } from "../plugins/vault-tools/index";
 import type { VaultService } from "./vault";
 import { DEFAULT_AGENT_CHARACTER } from "./agent-character";
@@ -125,6 +129,9 @@ export class ConfigService {
 		this.applyAgent(agent);
 		const models = await this.getModels();
 		this.applyModels(models);
+		// Apply vault-stored secrets last so a UI-saved value wins over
+		// any stale `.env` value the user might have forgotten to clear.
+		await this.applySecretsFromVault();
 	}
 
 	// ── Agent (vault-tools permissions) ────────────────────────────────
@@ -310,6 +317,41 @@ export class ConfigService {
 		const sanitized = this.sanitizeHfSyncState(recordFromUnknown(next));
 		await this.writeJson(KEY_HF_SYNC_STATE, sanitized);
 		return sanitized;
+	}
+
+	// ── Env-mirrored vault entries ─────────────────────────────────────
+
+	/** Allowlist of vault entry keys whose values should appear in
+	 *  process.env, so plugins/services that read `process.env.X` see
+	 *  values added via Settings → Vault → Inventory. */
+	private async applySecretsFromVault(): Promise<void> {
+		const v = await this.vault.vault();
+		for (const envKey of MIRRORED_ENV_KEYS) {
+			try {
+				if (!(await v.has(envKey))) continue;
+				const value = (await v.get(envKey)).trim();
+				if (value.length > 0) process.env[envKey] = value;
+			} catch (err) {
+				console.warn(
+					`[config] failed to mirror vault[${envKey}] to env: ${err instanceof Error ? err.message : err}`,
+				);
+			}
+		}
+	}
+
+	/** Call after the user edits a vault entry through the inventory UI.
+	 *  Mirrors known env-var keys into process.env immediately so the
+	 *  running runtime sees the new value without a restart. Returns
+	 *  true when the change was applied (i.e. a mirrored key was hit). */
+	async onVaultEntryChanged(key: string, value: string | null): Promise<boolean> {
+		if (!isMirroredEnvKey(key)) return false;
+		const trimmed = (value ?? "").trim();
+		if (trimmed.length === 0) {
+			delete process.env[key];
+		} else {
+			process.env[key] = trimmed;
+		}
+		return true;
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────

@@ -1,0 +1,6 @@
+{
+  "id": "detour",
+  "displayName": "Detour",
+  "description": "A Codex-style Detour squirrel pet based on the provided reference.",
+  "spritesheetPath": "spritesheet.webp"
+}

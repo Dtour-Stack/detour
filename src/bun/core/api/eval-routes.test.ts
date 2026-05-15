@@ -1,6 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { evalApiEnabled, evalRoutes, type EvalRouteDeps, type EvalRouteHelpers } from "./eval-routes";
 import type { ActivityService } from "../activity";
+import { CompanionService } from "../llama/companion-service";
 import type { RuntimeService } from "../runtime";
 
 const TOKEN = "test-token-abcdef";
@@ -252,5 +253,280 @@ describe("eval routes — trajectory", () => {
 		const trajs = out.body.trajectories as Array<Record<string, unknown>>;
 		expect(Array.isArray(trajs)).toBe(true);
 		expect(trajs[0]?.id).toBe("tj-1");
+	});
+});
+
+// Self-improvement loop endpoints: dreams, HF sync, continuous-improvement.
+// Each one is gated behind the corresponding optional dep — when the service
+// isn't wired into the deps object, the route returns 503 (not implemented)
+// instead of crashing. The harness uses these to confirm Dreams are running,
+// HF buckets sync, and reflections are landing — all without touching RPC.
+describe("eval routes — self-improvement", () => {
+	test("GET /api/eval/dreams returns 503 when dream service is not wired", async () => {
+		const route = evalRoutes(makeDeps(), jsonHelper());
+		const out = await call(route, "GET", "/api/eval/dreams", undefined, TOKEN);
+		expect(out.status).toBe(503);
+	});
+
+	test("GET /api/eval/dreams returns snapshot when service is wired", async () => {
+		const deps: EvalRouteDeps = {
+			...makeDeps(),
+			dream: {
+				snapshot: async () => ({
+					dreams: [
+						{
+							id: "dr-1",
+							createdAt: 12345,
+							summary: "add=2 merge=1 replace=0 delete=0",
+							counts: { additions: 2, merges: 1, replacements: 0, deletions: 0 },
+							pendingCount: 3,
+						},
+					],
+				}),
+				runNow: async () => ({
+					planId: "dr-2",
+					plan: {
+						additions: [{ op: "addition", text: "x" }],
+						merges: [],
+						replacements: [],
+						deletions: [],
+					},
+				}),
+				apply: async () => ({ applied: 1, skipped: 0, failed: 0, errors: [] }),
+				reject: async () => ({ removed: 3 }),
+			} as unknown as import("../dream-service").DreamService,
+		};
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(route, "GET", "/api/eval/dreams", undefined, TOKEN);
+		expect(out.status).toBe(200);
+		const dreams = out.body.dreams as Array<{ id: string }>;
+		expect(dreams[0]?.id).toBe("dr-1");
+	});
+
+	test("POST /api/eval/dreams/run triggers an ad-hoc dream", async () => {
+		const deps: EvalRouteDeps = {
+			...makeDeps(),
+			dream: {
+				snapshot: async () => ({ dreams: [] }),
+				runNow: async (opts?: { instructions?: string }) => ({
+					planId: "dr-3",
+					plan: {
+						additions: [
+							{ op: "addition", text: opts?.instructions ?? "default" },
+						],
+						merges: [],
+						replacements: [],
+						deletions: [],
+					},
+				}),
+				apply: async () => ({ applied: 0, skipped: 0, failed: 0, errors: [] }),
+				reject: async () => ({ removed: 0 }),
+			} as unknown as import("../dream-service").DreamService,
+		};
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(
+			route,
+			"POST",
+			"/api/eval/dreams/run",
+			{ instructions: "focus on coding quirks" },
+			TOKEN,
+		);
+		expect(out.status).toBe(200);
+		expect(out.body.planId).toBe("dr-3");
+		const plan = out.body.plan as { additions: { text: string }[] };
+		expect(plan.additions[0]?.text).toBe("focus on coding quirks");
+	});
+
+	test("GET /api/eval/hf-sync returns 503 when not wired, status when wired", async () => {
+		const route1 = evalRoutes(makeDeps(), jsonHelper());
+		const noService = await call(route1, "GET", "/api/eval/hf-sync", undefined, TOKEN);
+		expect(noService.status).toBe(503);
+
+		const deps: EvalRouteDeps = {
+			...makeDeps(),
+			agentHfSync: {
+				status: async () => ({
+					defaultDestination: "hf://detour/dumps",
+					hfAvailable: true,
+					activeJob: null,
+					policy: {
+						enabled: true,
+						destination: "hf://detour/dumps",
+						daily: true,
+						dailyTimeUtc: "03:00",
+						everyNewTrajectories: 50,
+						syncOnStartup: true,
+						minIntervalMinutes: 60,
+						failureCooldownMinutes: 30,
+						limit: 500,
+					},
+					state: {
+						lastAttemptAt: null,
+						lastSuccessAt: null,
+						lastFailureAt: null,
+						lastError: null,
+						lastReason: null,
+						lastSyncedTrajectoryTotal: null,
+						lastObservedTrajectoryTotal: null,
+						lastDailySyncDateUtc: null,
+						lastCounts: null,
+					},
+				}),
+				startSync: async () => ({
+					id: "job-1",
+					destination: "hf://detour/dumps",
+					command: "hf datasets sync ...",
+					reason: "manual",
+					status: "running",
+					startedAt: new Date().toISOString(),
+					finishedAt: null,
+					counts: null,
+					stdout: null,
+					stderr: null,
+					error: null,
+				}),
+				checkNow: async () => null,
+			} as unknown as import("../agent-hf-sync-service").AgentHfSyncService,
+		};
+		const route2 = evalRoutes(deps, jsonHelper());
+		const ok = await call(route2, "GET", "/api/eval/hf-sync", undefined, TOKEN);
+		expect(ok.status).toBe(200);
+		expect((ok.body.policy as { enabled: boolean }).enabled).toBe(true);
+	});
+
+	test("POST /api/eval/hf-sync/run kicks off a manual sync job", async () => {
+		const calls: { reason?: string; destination?: string; limit?: number }[] = [];
+		const deps: EvalRouteDeps = {
+			...makeDeps(),
+			agentHfSync: {
+				status: async () => ({}) as never,
+				startSync: async (
+					reason: string,
+					opts?: { destination?: string; limit?: number },
+				) => {
+					calls.push({
+						reason,
+						...(opts?.destination !== undefined
+							? { destination: opts.destination }
+							: {}),
+						...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
+					});
+					return {
+						id: "job-2",
+						destination: opts?.destination ?? "hf://detour/dumps",
+						command: "hf ...",
+						reason,
+						status: "running",
+						startedAt: new Date().toISOString(),
+						finishedAt: null,
+						counts: null,
+						stdout: null,
+						stderr: null,
+						error: null,
+					};
+				},
+				checkNow: async () => null,
+			} as unknown as import("../agent-hf-sync-service").AgentHfSyncService,
+		};
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(
+			route,
+			"POST",
+			"/api/eval/hf-sync/run",
+			{ reason: "manual", limit: 100 },
+			TOKEN,
+		);
+		expect(out.status).toBe(200);
+		const job = out.body.job as { id: string };
+		expect(job.id).toBe("job-2");
+		expect(calls[0]?.reason).toBe("manual");
+		expect(calls[0]?.limit).toBe(100);
+	});
+});
+
+describe("eval routes — companion", () => {
+	test("GET /api/eval/companion exposes preset, assignments, backends", async () => {
+		const companion = new CompanionService();
+		const deps: EvalRouteDeps = { ...makeDeps(), companion };
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(route, "GET", "/api/eval/companion", undefined, TOKEN);
+		expect(out.status).toBe(200);
+		expect(out.body.ok).toBe(true);
+		expect(typeof out.body.preset).toBe("string");
+		const presets = out.body.presets as Array<{ id: string }>;
+		expect(presets.length).toBeGreaterThan(0);
+		const assignments = out.body.assignments as Record<string, string>;
+		expect(assignments.triage).toBe("classical");
+		expect(assignments.personaPrePass).toBe("llm");
+		const backends = out.body.backends as Record<
+			string,
+			{ available: boolean }
+		>;
+		expect(backends.classical.available).toBe(true);
+	});
+
+	test("POST /api/eval/companion/assignments updates a single job", async () => {
+		const companion = new CompanionService();
+		const deps: EvalRouteDeps = { ...makeDeps(), companion };
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(
+			route,
+			"POST",
+			"/api/eval/companion/assignments",
+			{ assignments: { triage: "llm" } },
+			TOKEN,
+		);
+		expect(out.status).toBe(200);
+		const assignments = out.body.assignments as Record<string, string>;
+		expect(assignments.triage).toBe("llm");
+		// other rows untouched
+		expect(assignments.shouldRespond).toBe("classical");
+	});
+
+	test("POST /api/eval/companion/assignments with reset:true restores defaults", async () => {
+		const companion = new CompanionService();
+		companion.setJobBackend("triage", "off");
+		companion.setJobBackend("shouldRespond", "llm");
+		const deps: EvalRouteDeps = { ...makeDeps(), companion };
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(
+			route,
+			"POST",
+			"/api/eval/companion/assignments",
+			{ reset: true },
+			TOKEN,
+		);
+		expect(out.status).toBe(200);
+		const assignments = out.body.assignments as Record<string, string>;
+		expect(assignments.triage).toBe("classical");
+		expect(assignments.shouldRespond).toBe("classical");
+	});
+
+	test("POST /api/eval/companion/assignments rejects unknown job/choice silently", async () => {
+		const companion = new CompanionService();
+		const deps: EvalRouteDeps = { ...makeDeps(), companion };
+		const route = evalRoutes(deps, jsonHelper());
+		const out = await call(
+			route,
+			"POST",
+			"/api/eval/companion/assignments",
+			{
+				assignments: {
+					triage: "bogus",
+					nonExistentJob: "llm",
+				},
+			},
+			TOKEN,
+		);
+		expect(out.status).toBe(200);
+		const assignments = out.body.assignments as Record<string, string>;
+		// triage stayed at default because "bogus" was rejected
+		expect(assignments.triage).toBe("classical");
+	});
+
+	test("GET /api/eval/companion returns 503 when companion not wired", async () => {
+		const route = evalRoutes(makeDeps(), jsonHelper());
+		const out = await call(route, "GET", "/api/eval/companion", undefined, TOKEN);
+		expect(out.status).toBe(503);
 	});
 });

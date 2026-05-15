@@ -1,12 +1,15 @@
 /**
  * Pick the right URL for a tray window's React view.
  *
- *   - Default: `views://main/index.html#<route>` — Electrobun resolves
- *     `views://` against `Resources/app/views/`, where electrobun.config.ts
- *     copies the bundled view (electrobun dev AND build both produce this).
- *   - With DETOUR_DEV_URL set: use that as the base instead, with a hash
- *     route. Useful when you want a separate Vite dev server for hot
- *     reload (not the default — electrobun dev already rebuilds on save).
+ *   - Default: `views://main/index.html` (and per-view `.html` files) —
+ *     Electrobun resolves `views://` against `Resources/app/views/`,
+ *     where electrobun.config.ts copies the bundled view (electrobun dev
+ *     AND build both produce this).
+ *   - With DETOUR_DEV_URL set: use that as the base, hitting per-view
+ *     `.html` files (e.g. `${DEV_URL}/activity.html`). Required for
+ *     Phantom OAuth: the WebView is served from a public HTTPS origin
+ *     so Phantom's full-page redirect lands back in the same WebView
+ *     with the SDK on it.
  */
 
 import { existsSync } from "node:fs";
@@ -54,21 +57,20 @@ function resolveBundledIndex(): string | null {
  * (not URL fragments) because electrobun's views:// scheme handler
  * doesn't strip URL fragments and would 404 on `index.html#activity`.
  *
- * In DETOUR_DEV_URL mode we fall back to the URL-fragment form, which
- * is fine because a real HTTP server (e.g. Vite) handles fragments
- * correctly.
+ * In DETOUR_DEV_URL mode we hit per-view `.html` files — the Vercel
+ * deploy (or any static HTTP server) serves them at their literal paths,
+ * and each per-view HTML inlines its own `window.__detourView = "<view>"`
+ * before the shared JS bundle runs, so React picks the right component.
  */
 export function resolveViewUrl(view?: string): string {
 	const bundled = resolveBundledIndex();
+	const file = view ? `${view}.html` : "index.html";
 	if (bundled) {
-		const file = view ? `${view}.html` : "index.html";
 		return `views://main/${file}`;
 	}
 	if (DEV_URL) {
-		const fragment = view ? `#${view}` : "";
-		return `${DEV_URL}/${fragment}`;
+		return `${DEV_URL}/${file}`;
 	}
 	console.warn("[view-url] no bundled index.html found and no DETOUR_DEV_URL set — webview will be blank");
-	const file = view ? `${view}.html` : "index.html";
 	return `views://main/${file}`;
 }

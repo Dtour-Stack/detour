@@ -51,6 +51,24 @@ export interface LlamaServerConfig {
 	readonly threads?: number;
 	/** Context size. Default: 512 (small for embeddings). */
 	readonly contextSize?: number;
+	/**
+	 * Number of layers to offload to GPU (`-ngl`). When unset, llama-server
+	 * decides on its own (usually "all layers on GPU"). Set to `0` to force
+	 * CPU-only inference — useful when running multiple llama-server
+	 * instances concurrently on macOS where Metal working set is shared.
+	 */
+	readonly gpuLayers?: number;
+	/**
+	 * Unique id for this service instance. Detour spawns three concurrent
+	 * llama-servers (`embedding`, `chat`, `companion`); without separate
+	 * pid-files they all share `${ELIZA_STATE_DIR}/llama/server.pid`,
+	 * and the next instance's reapOrphan() kills the previous one (the
+	 * pid in the file IS a real llama-server, just not its own).
+	 * Defaults to `"server"` to preserve the legacy path for the
+	 * embedding server, which is the only consumer that existed when
+	 * the pid-file scheme was introduced.
+	 */
+	readonly instanceId?: string;
 }
 
 export interface LlamaServerStatus {
@@ -176,6 +194,9 @@ export class LlamaServerService {
 			];
 			if (this.config.embeddingOnly !== false) args.push("--embedding");
 			if (this.config.threads) args.push("--threads", String(this.config.threads));
+			if (this.config.gpuLayers !== undefined) {
+				args.push("-ngl", String(this.config.gpuLayers));
+			}
 
 			const child = spawn(binary, args, {
 				stdio: ["ignore", "pipe", "pipe"],
@@ -240,7 +261,11 @@ export class LlamaServerService {
 	}
 
 	private pidFilePath(): string {
-		return join(resolveStateDir(), "llama", "server.pid");
+		const id = this.config.instanceId ?? "server";
+		// Sanitize: allow only [A-Za-z0-9._-] so the id can't escape the
+		// llama state dir even if it's user-supplied.
+		const safe = id.replace(/[^A-Za-z0-9._-]/g, "_") || "server";
+		return join(resolveStateDir(), "llama", `${safe}.pid`);
 	}
 
 	private writePidFile(pid: number): void {

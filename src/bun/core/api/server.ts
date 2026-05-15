@@ -1,7 +1,7 @@
 import type { Memory, UUID } from "@elizaos/core";
-import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, extname, join, normalize, resolve as pathResolve, sep } from "node:path";
 import type { RuntimeService } from "../runtime";
 import type { ActivityService } from "../activity";
 import { broadcaster } from "../rpc/registry";
@@ -13,6 +13,73 @@ import type {
 } from "../../../shared/index";
 
 const VERSION = "0.0.1";
+
+/** Resolve the bundled `Resources/app/views/main/` directory on disk —
+ *  same logic `view-url.ts` uses for the WKWebView's local file URL. We
+ *  serve from that exact tree so the HTTP-served UI is byte-identical to
+ *  what the WebView would load via the `views://` scheme. */
+let cachedViewRoot: string | null | undefined;
+function resolveViewRoot(): string | null {
+	if (cachedViewRoot !== undefined) return cachedViewRoot;
+	const candidates = [
+		process.execPath ? join(dirname(process.execPath), "..", "Resources", "app", "views", "main") : null,
+		process.execPath ? join(dirname(process.execPath), "views", "main") : null,
+	].filter((p): p is string => typeof p === "string" && p.length > 0);
+	for (const candidate of candidates) {
+		if (existsSync(candidate)) {
+			cachedViewRoot = candidate;
+			return candidate;
+		}
+	}
+	cachedViewRoot = null;
+	return null;
+}
+
+const STATIC_MIME: Record<string, string> = {
+	".html": "text/html; charset=utf-8",
+	".js": "text/javascript; charset=utf-8",
+	".mjs": "text/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".json": "application/json",
+	".map": "application/json",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".ico": "image/x-icon",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+	".otf": "font/otf",
+	".wasm": "application/wasm",
+	".txt": "text/plain; charset=utf-8",
+};
+
+async function serveStaticAsset(requestPath: string): Promise<Response | null> {
+	const root = resolveViewRoot();
+	if (!root) return null;
+	const rel = requestPath === "/" ? "/index.html" : requestPath;
+	const relNoSlash = rel.startsWith("/") ? rel.slice(1) : rel;
+	const normalized = normalize(relNoSlash).replace(/^(\.\.[/\\])+/, "");
+	const candidate = pathResolve(root, normalized);
+	// Path-traversal guard — refuse anything that escapes the view root.
+	if (!candidate.startsWith(root + sep) && candidate !== root) return null;
+	if (!existsSync(candidate)) return null;
+	let target = candidate;
+	try {
+		if (statSync(candidate).isDirectory()) {
+			target = join(candidate, "index.html");
+			if (!existsSync(target)) return null;
+		}
+	} catch {
+		return null;
+	}
+	const file = Bun.file(target);
+	const mime = STATIC_MIME[extname(target).toLowerCase()] ?? "application/octet-stream";
+	return new Response(file, { headers: { "content-type": mime, "cache-control": "no-cache" } });
+}
 
 type ApiResponseHelpers = {
 	json(data: unknown, status?: number): Response;
@@ -137,6 +204,13 @@ export class ApiServer {
 	constructor(
 		private readonly runtime: RuntimeService,
 		private readonly activity: ActivityService,
+		private readonly selfImprovement?: {
+			dream?: import("../dream-service").DreamService;
+			improvement?: import("../continuous-improvement-service").ContinuousImprovementService;
+			agentHfSync?: import("../agent-hf-sync-service").AgentHfSyncService;
+			localChat?: import("../llama/chat-service").LocalChatService;
+			companion?: import("../llama/companion-service").CompanionService;
+		},
 	) {}
 
 	private installBrowserControlGlobal(): void {
@@ -368,10 +442,39 @@ export class ApiServer {
 			const { req, url, path, json, error } = ctx;
 			if (!path.startsWith("/api/eval/")) return null;
 			const route = evalRoutes(
-				{ runtime: this.runtime, activity: this.activity },
+				{
+					runtime: this.runtime,
+					activity: this.activity,
+					...(this.selfImprovement?.dream
+						? { dream: this.selfImprovement.dream }
+						: {}),
+					...(this.selfImprovement?.improvement
+						? { improvement: this.selfImprovement.improvement }
+						: {}),
+					...(this.selfImprovement?.agentHfSync
+						? { agentHfSync: this.selfImprovement.agentHfSync }
+						: {}),
+					...(this.selfImprovement?.localChat
+						? { localChat: this.selfImprovement.localChat }
+						: {}),
+					...(this.selfImprovement?.companion
+						? { companion: this.selfImprovement.companion }
+						: {}),
+				},
 				{ json, error },
 			);
 			return route(req, url, path);
+		},
+		// Static-file fallback for the bundled view assets. Lets the
+		// WKWebView (or an external browser, e.g. when the OAuth redirect
+		// loads our redirect URL via a Cloudflare Tunnel) load
+		// `views/main/index.html` + sibling assets over HTTP. Only kicks
+		// in for GET requests that haven't matched any /api/* route.
+		async (ctx) => {
+			const { req, path } = ctx;
+			if (req.method !== "GET" && req.method !== "HEAD") return null;
+			if (path.startsWith("/api/")) return null;
+			return serveStaticAsset(path);
 		},
 	];
 

@@ -6,7 +6,15 @@ import type {
 	CodexPetSummary,
 	CodexPetsResponse,
 } from "../../../../shared/index";
-import { listCodexPets, type PetSummary } from "../../../plugins/codex-pets";
+import type {
+	CodexPetCatalogEntry,
+	CodexPetsListResponse,
+} from "../../../../shared/rpc/pets";
+import {
+	listCodexPets,
+	PET_ANIMATION_ROWS,
+	type PetSummary,
+} from "../../../plugins/codex-pets";
 import type { RpcDeps } from "../types";
 
 /**
@@ -37,13 +45,23 @@ let activePetId: string | null = null;
 let activePetStateOverride: PetStateOverride | null = null;
 
 function toCodexPetSummary(pet: PetSummary): CodexPetSummary {
+	// Bundled pets live at `views/main/pets/<id>/spritesheet.webp` inside
+	// the .app — the pet window (loaded at `views://main/pet.html`) can
+	// reach them via `views://main/pets/<id>/spritesheet.webp` from the
+	// SAME origin. WKWebView blocks both file:// loads from a views://
+	// origin AND cross-path resource loads inside the views:// tree, so
+	// the spritesheet has to share the views/main/ prefix with the page.
+	//
+	// For non-bundled pets we still emit file:// (works only if the
+	// webview has explicit navigation-rule allowance). To make every
+	// user pet "just work," drop ~/.codex/pets/<id>/ into
+	// build-assets/pets/<id>/ and rebuild the app.
+	const spritesheetUrl = pet.bundled
+		? `views://main/pets/${pet.id}/spritesheet.webp`
+		: `file://${pet.spritesheetPath}`;
 	return {
 		...pet,
-		// file:// URL keeps webview rendering simple — no custom
-		// protocol, no in-memory base64 round-trip. PetWindow loads
-		// the spritesheet directly from disk; navigation rules in
-		// the pet view permit file:// for the spritesheet path.
-		spritesheetUrl: `file://${pet.spritesheetPath}`,
+		spritesheetUrl,
 		atlas: PET_ATLAS,
 	};
 }
@@ -83,6 +101,20 @@ function currentPetState(): CodexPetAnimationState {
 	return "idle";
 }
 
+function toCatalogEntry(pet: PetSummary): CodexPetCatalogEntry {
+	const summary = toCodexPetSummary(pet);
+	return {
+		...summary,
+		bundled: pet.bundled === true,
+		animations: PET_ANIMATION_ROWS.map((r) => ({
+			state: r.state as CodexPetAnimationState,
+			row: r.row,
+			frames: r.frames,
+			purpose: r.purpose,
+		})),
+	};
+}
+
 export function petsRequests(deps: RpcDeps) {
 	return {
 		petActive: async (
@@ -90,6 +122,15 @@ export function petsRequests(deps: RpcDeps) {
 		): Promise<{ pet: CodexPetSummary | null; state: CodexPetAnimationState }> => {
 			const pet = findPet();
 			return { pet, state: currentPetState() };
+		},
+		petsList: async (
+			_params: Record<string, never>,
+		): Promise<CodexPetsListResponse> => {
+			const result = listCodexPets();
+			return {
+				pets: result.pets.map(toCatalogEntry),
+				errors: result.errors,
+			};
 		},
 		petSpawn: async (params: { pet?: string }): Promise<CodexPetSpawnResponse> => {
 			const pet = findPet(typeof params.pet === "string" ? params.pet : null);

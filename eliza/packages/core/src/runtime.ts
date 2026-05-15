@@ -2844,7 +2844,29 @@ export class AgentRuntime implements IAgentRuntime {
 				);
 				continue;
 			}
-			const actions = response.content.actions;
+			// Belt-and-suspenders: planner normalization should have flattened
+			// the action list to string[], but if any upstream path (legacy
+			// caller, plugin-emitted message) leaves an object-shaped entry,
+			// `normalizeAction` below would `.toLowerCase()` on it and produce
+			// the literal string "[object object]", which silently never
+			// matches a registered action. Coerce per-entry here so dispatch
+			// is robust to either shape.
+			const actions = (
+				response.content.actions as readonly (string | { name?: unknown; action?: unknown })[]
+			)
+				.map((entry) => {
+					if (typeof entry === "string") return entry.trim();
+					if (entry && typeof entry === "object") {
+						const name = entry.name;
+						if (typeof name === "string" && name.trim().length > 0)
+							return name.trim();
+						const action = entry.action;
+						if (typeof action === "string" && action.trim().length > 0)
+							return action.trim();
+					}
+					return "";
+				})
+				.filter((s): s is string => s.length > 0);
 			const actionParamsByName = parseActionParams(response.content?.params);
 
 			const actionResults: ActionResult[] = [];
@@ -7280,6 +7302,82 @@ ${section_end}`;
 				return this.normalizeStructuredResponse(nested, depth + 1);
 			}
 		}
+
+		// Coerce common model-output drift back to whichever planner-call's
+		// expected shape it appears to need. Different dynamicPromptExecFromState
+		// call sites declare different schemas — the message-handler planner
+		// uses `providers: string`, the autonomous-mode call uses
+		// `providers: array[string]`, and `actions` is sometimes `array[string]`
+		// and sometimes `array[object]`. Models keep emitting OpenAI-style
+		// nested objects regardless of the schema.
+		//
+		// Conservative strategy: only normalise the action list (the one
+		// place where dispatch *requires* string names), and only lift the
+		// reply text out of `actions[0].params.text` when top-level text is
+		// empty. Leave `providers` ALONE — the validator decides per-call
+		// whether array or string is required and our flattening was
+		// breaking the message-handler schema (which wants string and was
+		// receiving array after our normalisation, so validation failed and
+		// every turn fell back).
+		//
+		//   actions: "REPLY"                          → ["REPLY"]
+		//   actions: [{name:"REPLY",params:{text:"X"}}] → ["REPLY"]  (lifts text)
+		//   text: "" + actions[0].params.text: "X"    → text: "X"
+		const flattenToStringArray = (raw: unknown): string[] => {
+			if (raw === null || raw === undefined) return [];
+			if (typeof raw === "string") {
+				const trimmed = raw.trim();
+				if (!trimmed) return [];
+				return trimmed
+					.split(",")
+					.map((p) => p.trim())
+					.filter((p) => p.length > 0);
+			}
+			if (!Array.isArray(raw)) return [];
+			return raw
+				.map((entry) => {
+					if (typeof entry === "string") return entry.trim();
+					if (entry && typeof entry === "object") {
+						const name = (entry as { name?: unknown; action?: unknown }).name;
+						if (typeof name === "string" && name.trim().length > 0) {
+							return name.trim();
+						}
+						const action = (entry as { action?: unknown }).action;
+						if (typeof action === "string" && action.trim().length > 0) {
+							return action.trim();
+						}
+					}
+					return "";
+				})
+				.filter((s): s is string => typeof s === "string" && s.length > 0);
+		};
+
+		// Lift actions[0].params.text → top-level text BEFORE collapsing the
+		// objects to strings. The first REPLY entry's params.text is what
+		// the model considered the user-facing reply when it wrote nested
+		// objects — without this lift, the reply gets dropped when we
+		// flatten to ["REPLY"].
+		if (
+			(responseContent.text === "" || responseContent.text == null) &&
+			Array.isArray(responseContent.actions) &&
+			responseContent.actions.length > 0
+		) {
+			const firstAction = responseContent.actions[0];
+			if (firstAction && typeof firstAction === "object") {
+				const params = (firstAction as { params?: unknown }).params;
+				if (
+					params &&
+					typeof params === "object" &&
+					typeof (params as { text?: unknown }).text === "string" &&
+					((params as { text: string }).text as string).trim().length > 0
+				) {
+					responseContent.text = (params as { text: string }).text;
+				}
+			}
+		}
+
+		responseContent.actions = flattenToStringArray(responseContent.actions);
+
 		return responseContent;
 	}
 

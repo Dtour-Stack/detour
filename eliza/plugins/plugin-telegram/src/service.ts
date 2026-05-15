@@ -465,6 +465,21 @@ export class TelegramService extends Service {
     // forget instead, with retry-on-409 so a transient lease conflict
     // (another poller stole the lease, network blip) doesn't permanently
     // kill polling for the rest of the runtime's life.
+    const isNetworkDown = (msg: string): boolean => {
+      const n = msg.toLowerCase();
+      return (
+        /unable to connect/.test(n) ||
+        /operation timed out/.test(n) ||
+        /operation was aborted/.test(n) ||
+        /etimedout/.test(n) ||
+        /econnrefused/.test(n) ||
+        /enotfound/.test(n) ||
+        /eai_again/.test(n) ||
+        /enetunreach/.test(n) ||
+        /network is unreachable/.test(n) ||
+        /fetch failed/.test(n)
+      );
+    };
     const launchOnce = (attempt: number): void => {
       bot
         .launch({
@@ -473,18 +488,35 @@ export class TelegramService extends Service {
         })
         .catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
-          logger.warn(
+          // Demote network-down errors to DEBUG. The original WARN was
+          // firing every 2-30 seconds when the user was offline (very
+          // common on flaky home networks) and producing a wall of log
+          // noise that drowned out real issues. Real failures (auth /
+          // 409 from another poller / token issues) still WARN.
+          const logLevel = isNetworkDown(msg) ? logger.debug : logger.warn;
+          logLevel.call(
+            logger,
             {
               src: 'plugin:telegram',
               agentId: this.runtime.agentId,
               attempt,
               error: msg,
+              networkDown: isNetworkDown(msg),
             },
             'Telegram bot.launch() exited; will retry',
           );
-          // Cap retries; backoff. 409 / network blips → retry. Auth /
-          // not-found → after 5 attempts, give up so we don't loop forever.
+          // For network-down failures, give up after 5 attempts and let a
+          // background heartbeat re-attempt every 5 minutes — short retries
+          // burn CPU but don't help when the radio's off.
           if (attempt >= 5) {
+            if (isNetworkDown(msg)) {
+              logger.info(
+                { src: 'plugin:telegram', agentId: this.runtime.agentId },
+                'Telegram bot.launch() paused — network unreachable; will retry every 5 min',
+              );
+              setTimeout(() => launchOnce(1), 5 * 60_000);
+              return;
+            }
             logger.error(
               { src: 'plugin:telegram', agentId: this.runtime.agentId },
               'Telegram bot.launch() exhausted retries — bot offline until next service restart',

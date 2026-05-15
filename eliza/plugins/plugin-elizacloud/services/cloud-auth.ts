@@ -46,6 +46,29 @@ async function deriveDeviceId(): Promise<string> {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+/**
+ * Recognise the error signatures that mean "the network is down or DNS
+ * is unreachable" rather than "we made a request and got back an auth
+ * failure." Network-down errors get demoted to debug so the user doesn't
+ * see a wall of WARNs every boot when they're offline. Real auth errors
+ * (401, 403, key revoked) still WARN.
+ */
+function isNetworkUnreachable(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    /unable to connect/.test(normalized) ||
+    /operation timed out/.test(normalized) ||
+    /operation was aborted/.test(normalized) ||
+    /etimedout/.test(normalized) ||
+    /econnrefused/.test(normalized) ||
+    /enotfound/.test(normalized) ||
+    /eai_again/.test(normalized) ||
+    /enetunreach/.test(normalized) ||
+    /network is unreachable/.test(normalized) ||
+    /fetch failed/.test(normalized)
+  );
+}
+
 function detectPlatform(): DevicePlatform {
   if (typeof process === "undefined") return "web";
   const map: Record<string, DevicePlatform> = {
@@ -440,11 +463,19 @@ export class CloudAuthService extends Service {
 
       // Non-blocking validation — if the key is invalid the next model
       // call will surface the error; we just log a warning here.
+      // Mark this validation as having been performed against the saved
+      // key so a follow-up failure message can distinguish "we tried and
+      // failed" from "we never tried". validateApiKey already chose its
+      // log level (debug vs warn) based on whether the failure looked like
+      // a network outage or a real auth error.
       this.validateApiKey(key)
         .then((valid) => {
           if (!valid) {
-            logger.warn(
-              "[CloudAuth] Saved API key could not be validated (cloud may be unreachable or key revoked) — model calls will use the key anyway"
+            // validateApiKey already produced the appropriate log line at
+            // the appropriate level for the failure mode. Avoid emitting a
+            // second WARN here — that just doubles the noise when offline.
+            logger.debug(
+              "[CloudAuth] Saved API key validation returned invalid — model calls will use the key anyway",
             );
           }
         })
@@ -478,7 +509,17 @@ export class CloudAuthService extends Service {
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`[CloudAuth] Could not reach cloud API to validate key: ${msg}`);
+      // Network-down errors get demoted to debug — the original WARN was
+      // firing on every boot when the user was offline, even though there's
+      // nothing actionable. Real auth errors (401/403) still surface as
+      // WARN below.
+      if (isNetworkUnreachable(msg)) {
+        logger.debug(
+          `[CloudAuth] Cloud API unreachable during key validation (will use saved key anyway): ${msg}`,
+        );
+      } else {
+        logger.warn(`[CloudAuth] Could not reach cloud API to validate key: ${msg}`);
+      }
       return false;
     }
   }

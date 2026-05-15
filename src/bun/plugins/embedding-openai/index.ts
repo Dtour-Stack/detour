@@ -96,6 +96,69 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * Split `text` into overlapping windows, each ≤ `windowChars`. Tries to
+ * break on paragraph / sentence / word boundaries when possible so chunks
+ * don't slice through tokens mid-word.
+ *
+ * Used by the chunk-and-mean-pool path: when an input is too long for the
+ * embedding model's batch limit, instead of truncating (losing 90%+ of
+ * long planner state), we embed each chunk and average the unit vectors.
+ * That preserves semantic coverage across the whole input.
+ */
+function chunkText(text: string, windowChars: number, overlapChars: number): string[] {
+	if (text.length <= windowChars) return [text];
+	const chunks: string[] = [];
+	const stride = Math.max(1, windowChars - overlapChars);
+	let cursor = 0;
+	const breakChars = ["\n\n", ". ", "! ", "? ", "\n", ", ", " "];
+	while (cursor < text.length) {
+		let end = Math.min(cursor + windowChars, text.length);
+		if (end < text.length) {
+			// Walk backward up to ~25% of the window looking for a clean break.
+			const minBreak = end - Math.floor(windowChars * 0.25);
+			for (const sep of breakChars) {
+				const idx = text.lastIndexOf(sep, end - 1);
+				if (idx >= minBreak) {
+					end = idx + sep.length;
+					break;
+				}
+			}
+		}
+		const slice = text.slice(cursor, end).trim();
+		if (slice.length > 0) chunks.push(slice);
+		if (end >= text.length) break;
+		cursor = Math.max(cursor + 1, end - overlapChars);
+	}
+	return chunks;
+}
+
+/**
+ * Mean-pool a set of equal-length unit-vector embeddings and re-normalise.
+ * Throws on empty/mismatched input rather than returning a meaningless
+ * value — the caller should never reach here with no chunks.
+ */
+function meanPoolNormalized(vectors: number[][]): number[] {
+	if (vectors.length === 0) throw new Error("meanPoolNormalized: no vectors");
+	const dim = vectors[0]!.length;
+	const out = new Array<number>(dim).fill(0);
+	for (const v of vectors) {
+		if (v.length !== dim) {
+			throw new Error(
+				`meanPoolNormalized: dim mismatch (expected ${dim}, got ${v.length})`,
+			);
+		}
+		const norm = Math.sqrt(v.reduce((acc, x) => acc + x * x, 0));
+		const scale = norm > 0 ? 1 / norm : 0;
+		for (let i = 0; i < dim; i += 1) out[i]! += v[i]! * scale;
+	}
+	for (let i = 0; i < dim; i += 1) out[i]! /= vectors.length;
+	const norm = Math.sqrt(out.reduce((acc, x) => acc + x * x, 0));
+	const scale = norm > 0 ? 1 / norm : 0;
+	for (let i = 0; i < dim; i += 1) out[i]! *= scale;
+	return out;
+}
+
 async function callOpenAIEmbeddings(opts: {
 	apiKey: string;
 	url: string;
@@ -165,14 +228,6 @@ export const embeddingOpenAIPlugin: Plugin = {
 
 			const text = extractText(params);
 			if (text.length === 0) return new Array(dim).fill(0);
-			let input = text.length > maxChars ? text.slice(0, maxChars) : text;
-			if (input.length !== text.length && !warnedTruncatedInput) {
-				warnedTruncatedInput = true;
-				logger.warn(
-					{ src: "embedding-openai", inputChars: text.length, maxChars },
-					"embedding input exceeded configured limit — truncating before HTTP request",
-				);
-			}
 
 			if (!apiKey) {
 				if (!warnedNoKey) {
@@ -184,6 +239,72 @@ export const embeddingOpenAIPlugin: Plugin = {
 				}
 				return new Array(dim).fill(0);
 			}
+
+			// Chunk-and-mean-pool for long inputs. The local bge-small llama
+			// server has a 512-token batch — anything over ~960 chars used to
+			// get truncated, throwing away 90%+ of long planner state. Now
+			// we embed each window and average the unit vectors so the final
+			// embedding reflects the WHOLE input.
+			//
+			// Hard cap on number of chunks: 8. Beyond that the bottleneck
+			// is round-trips, and we'd rather give a coarse-but-fast vector
+			// than freeze the planner waiting for 30+ embedding calls.
+			const overlapChars = Math.max(32, Math.floor(maxChars * 0.1));
+			const chunks = chunkText(text, maxChars, overlapChars).slice(0, 8);
+			if (chunks.length > 1) {
+				if (!warnedTruncatedInput) {
+					warnedTruncatedInput = true;
+					logger.info(
+						{
+							src: "embedding-openai",
+							inputChars: text.length,
+							maxChars,
+							chunkCount: chunks.length,
+						},
+						"embedding input exceeded batch limit — chunk-and-pool active",
+					);
+				}
+				const vectors: number[][] = [];
+				for (const chunk of chunks) {
+					try {
+						const v = await callOpenAIEmbeddings({
+							apiKey,
+							url,
+							model,
+							input: chunk,
+							...(dimRaw && Number.isFinite(dim) ? { dimensions: dim } : {}),
+						});
+						vectors.push(v);
+					} catch (err) {
+						logger.warn(
+							{
+								src: "embedding-openai",
+								err: err instanceof Error ? err.message : String(err),
+								chunkChars: chunk.length,
+							},
+							"embedding chunk failed — skipping and continuing with remaining chunks",
+						);
+					}
+				}
+				if (vectors.length > 0) {
+					try {
+						return meanPoolNormalized(vectors);
+					} catch (err) {
+						logger.warn(
+							{
+								src: "embedding-openai",
+								err: err instanceof Error ? err.message : String(err),
+							},
+							"mean-pool failed — falling through to single-shot path",
+						);
+					}
+				}
+				// If every chunk failed, fall through to single-shot path
+				// with the first chunk as input. The shrink-and-retry loop
+				// inside that path is the last line of defence.
+			}
+
+			let input = chunks[0] ?? text.slice(0, maxChars);
 
 			// Retry loop: if the server complains the input is too large for
 			// its batch, halve and try again. This is the local llama-server

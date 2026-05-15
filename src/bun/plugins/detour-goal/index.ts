@@ -42,6 +42,8 @@ import {
 	type State,
 } from "@elizaos/core";
 import { GoalService, type DetourGoal } from "../../core/goal-service";
+import { workerNameFromSeed } from "./worker-names";
+import { recordWorkerName } from "./worker-name-store";
 
 const WRAPPED_FOR_GOAL = Symbol.for("detour.goal.wrappedAction");
 const WRAPPED_ACTIONS = new Set(["CREATE_TASK", "SPAWN_AGENT", "START_CODING_TASK"]);
@@ -202,11 +204,13 @@ const clearGoalAction: Action = {
 
 interface SpawnParams {
 	memoryContent?: unknown;
+	name?: unknown;
 	[key: string]: unknown;
 }
 
 interface SpawnContent {
 	memoryContent?: unknown;
+	name?: unknown;
 	[key: string]: unknown;
 }
 
@@ -245,6 +249,50 @@ function wrapSpawnAction(action: Action): Action {
 		callback?: HandlerCallback,
 		responses?: Memory[],
 	) => {
+		// Worker name injection — runs unconditionally (independent of
+		// goal threading) so every spawned sub-agent gets a memorable
+		// "Hazel the Wayfarer"-style handle the user can refer back to.
+		// Skipped if the caller (LLM planner) already supplied a name,
+		// so explicit human-supplied names still win.
+		try {
+			const content = (message.content as SpawnContent) ?? {};
+			const params = options?.parameters as SpawnParams | undefined;
+			const explicitName =
+				(typeof content.name === "string" && content.name.trim()) ||
+				(typeof params?.name === "string" && params.name.trim()) ||
+				null;
+			if (!explicitName) {
+				// Seed from message id + action so the same plan rendered
+				// twice generates the same name (stable trajectories) but
+				// SPAWN_AGENT and CREATE_TASK on the same turn get distinct
+				// names (mostly — the seed has enough entropy).
+				const seedKey = `${action.name}:${(message.id as string | undefined) ?? roomIdOf(message) ?? Date.now()}`;
+				const generated = workerNameFromSeed(seedKey);
+				(message.content as SpawnContent).name = generated;
+				if (params) params.name = generated;
+				// Persist so the name survives a restart and the agent can
+				// answer "what did Hungover Owl do yesterday?" later.
+				try {
+					recordWorkerName(seedKey, {
+						name: generated,
+						generatedAt: Date.now(),
+						action: action.name,
+					});
+				} catch {
+					// Best-effort — disk write failure doesn't block spawning.
+				}
+				logger.info(
+					{ src: "detour:goal", action: action.name, workerName: generated },
+					"Generated worker name for spawn",
+				);
+			}
+		} catch (err) {
+			logger.warn(
+				{ src: "detour:goal", err: err instanceof Error ? err.message : err },
+				"Worker name injection failed — proceeding with default session id",
+			);
+		}
+
 		const service = getGoalService();
 		const roomId = roomIdOf(message);
 		if (service && roomId) {

@@ -13,6 +13,7 @@ import type {
 	Plugin,
 } from "@elizaos/core";
 import { invokeFirstViewRequest } from "../../core/rpc/view-invoker";
+import { gmgnRequest, loadGmgnConfig } from "../../core/gmgn-client";
 
 function paramsBag(opts: Record<string, unknown> | undefined): Record<string, unknown> {
 	if (!opts) return {};
@@ -87,6 +88,32 @@ const phantomSolanaHandler: Handler = async (_runtime, _message, _state, options
 	}
 };
 
+const phantomSignMessageHandler: Handler = async (_runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const text = pickString(opts, ["message", "text"]);
+	const messageBase64Param = pickString(opts, ["messageBase64", "message_base64"]);
+	let messageBase64: string;
+	if (messageBase64Param) {
+		messageBase64 = messageBase64Param;
+	} else if (text) {
+		messageBase64 = Buffer.from(text, "utf8").toString("base64");
+	} else {
+		const m = "Missing message (params: message text OR messageBase64)";
+		await emit(callback, m, "PHANTOM_SOLANA_SIGN_MESSAGE");
+		return fail(m);
+	}
+	try {
+		const out = await invokeFirstViewRequest("phantomViewSolanaSignMessage", { messageBase64 });
+		const result = JSON.stringify(out, null, 2);
+		await emit(callback, result, "PHANTOM_SOLANA_SIGN_MESSAGE");
+		return ok(result);
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		await emit(callback, msg, "PHANTOM_SOLANA_SIGN_MESSAGE");
+		return fail(msg);
+	}
+};
+
 const phantomEvmHandler: Handler = async (_runtime, _message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const to = pickString(opts, ["to"]);
@@ -117,6 +144,74 @@ const phantomEvmHandler: Handler = async (_runtime, _message, _state, options, c
 	}
 };
 
+const phantomWalletReportHandler: Handler = async (_runtime, _message, _state, options, callback) => {
+	const opts = options as Record<string, unknown> | undefined;
+	const chainParam = (pickString(opts, ["chain"]) ?? "sol").toLowerCase();
+	const chain = chainParam === "eth" || chainParam === "base" || chainParam === "bsc" ? chainParam : "sol";
+	const period = pickString(opts, ["period"]) === "30d" ? "30d" : "7d";
+	const overrideWallet = pickString(opts, ["wallet", "walletAddress", "address"]);
+
+	let wallet = overrideWallet ?? "";
+	if (!wallet) {
+		try {
+			const status = (await invokeFirstViewRequest("phantomViewGetWalletStatus", {})) as {
+				connected: boolean;
+				solanaAddress: string | null;
+				ethereumAddress: string | null;
+			};
+			if (!status.connected) {
+				const m = "Phantom is not connected — open Detour → Settings → Phantom wallet and click Connect, or pass an explicit wallet param.";
+				await emit(callback, m, "PHANTOM_WALLET_REPORT");
+				return fail(m);
+			}
+			wallet = (chain === "sol" ? status.solanaAddress : status.ethereumAddress) ?? "";
+			if (!wallet) {
+				const m = `Phantom has no ${chain === "sol" ? "Solana" : "EVM"} address connected. Reconnect via Settings → Phantom wallet with that address type.`;
+				await emit(callback, m, "PHANTOM_WALLET_REPORT");
+				return fail(m);
+			}
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			await emit(callback, msg, "PHANTOM_WALLET_REPORT");
+			return fail(msg);
+		}
+	}
+
+	const cfg = loadGmgnConfig();
+	if (!cfg.configured) {
+		const m = `Wallet detected (${wallet}, chain=${chain}) but GMGN analytics are disabled: ${cfg.reason}`;
+		await emit(callback, m, "PHANTOM_WALLET_REPORT");
+		return ok(m);
+	}
+
+	try {
+		const [holdings, stats, activity] = await Promise.all([
+			gmgnRequest({
+				method: "GET",
+				subPath: "/v1/user/wallet_holdings",
+				query: { chain, wallet_address: wallet, limit: 20, order_by: "usd_value", direction: "desc" },
+			}).catch((e) => ({ __error: e instanceof Error ? e.message : String(e) })),
+			gmgnRequest({
+				method: "GET",
+				subPath: "/v1/user/wallet_stats",
+				query: { chain, wallet_address: [wallet], period },
+			}).catch((e) => ({ __error: e instanceof Error ? e.message : String(e) })),
+			gmgnRequest({
+				method: "GET",
+				subPath: "/v1/user/wallet_activity",
+				query: { chain, wallet_address: wallet, limit: 20 },
+			}).catch((e) => ({ __error: e instanceof Error ? e.message : String(e) })),
+		]);
+		const text = JSON.stringify({ wallet, chain, period, holdings, stats, activity }, null, 2);
+		await emit(callback, text, "PHANTOM_WALLET_REPORT");
+		return ok(text);
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		await emit(callback, msg, "PHANTOM_WALLET_REPORT");
+		return fail(msg);
+	}
+};
+
 const alwaysValid: Action["validate"] = async () => true;
 
 const phantomGetStatus: Action = {
@@ -137,6 +232,24 @@ const phantomSolanaSignAndSend: Action = {
 	handler: phantomSolanaHandler,
 };
 
+const phantomWalletReport: Action = {
+	name: "PHANTOM_WALLET_REPORT",
+	similes: ["MY_WALLET_STATS", "WALLET_REPORT", "MY_PORTFOLIO"],
+	description:
+		"Pull the user's wallet portfolio + PnL + recent activity for their connected Phantom wallet via GMGN. Auto-resolves the Solana (or EVM) address from the open Phantom session. Returns raw GMGN holdings + stats + activity payloads for the agent to summarize. Params: chain? (sol|eth|base|bsc, default sol), period? (7d|30d, default 7d), wallet? (override). Requires GMGN_API_KEY.",
+	validate: alwaysValid,
+	handler: phantomWalletReportHandler,
+};
+
+const phantomSolanaSignMessage: Action = {
+	name: "PHANTOM_SOLANA_SIGN_MESSAGE",
+	similes: ["SIGN_MESSAGE_PHANTOM", "PHANTOM_SIGN_MESSAGE"],
+	description:
+		"Sign an arbitrary message with the user's Phantom Solana key (proof of wallet ownership). Params: message (utf-8 text) or messageBase64. Returns base64 signature + Solana public key.",
+	validate: alwaysValid,
+	handler: phantomSignMessageHandler,
+};
+
 const phantomEvmSend: Action = {
 	name: "PHANTOM_EVM_SEND_TRANSACTION",
 	similes: ["PHANTOM_ETH_SEND", "EVM_SEND_PHANTOM"],
@@ -149,5 +262,5 @@ const phantomEvmSend: Action = {
 export const phantomWalletToolsPlugin: Plugin = {
 	name: "@detour/plugin-phantom-wallet-tools",
 	description: "Phantom Connect embedded wallet — status, Solana sign-and-send, EVM send",
-	actions: [phantomGetStatus, phantomSolanaSignAndSend, phantomEvmSend],
+	actions: [phantomGetStatus, phantomWalletReport, phantomSolanaSignAndSend, phantomSolanaSignMessage, phantomEvmSend],
 };

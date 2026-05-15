@@ -160,7 +160,32 @@ function summarise(m: Memory, tableName: string): PensieveMemorySummary {
 }
 
 export class PensieveMemoryService {
+	/**
+	 * Optional companion hook. When wired, `search` first calls the
+	 * companion to expand the raw user query into 1-3 retrieval queries,
+	 * runs each, merges + deduplicates results. Returns null = "couldn't
+	 * help; run the original query unchanged."
+	 *
+	 * Hook is `null` by default — Detour works fine with single-query
+	 * embedding search. The companion just makes recall sharper.
+	 */
+	private memoryQueryHook:
+		| ((userText: string) => Promise<string[] | null>)
+		| null = null;
+
 	constructor(private readonly resolveRuntime: () => IAgentRuntime | null) {}
+
+	/**
+	 * Wire a companion-backed query-expansion hook. Wrapper around the
+	 * companion's `memoryQuery` job. Optional — when unset, `search`
+	 * runs the user's literal text through the embedding model (legacy
+	 * behavior).
+	 */
+	setMemoryQueryHook(
+		hook: (userText: string) => Promise<string[] | null>,
+	): void {
+		this.memoryQueryHook = hook;
+	}
 
 	private async resolveWriteRoom(inputRoomId: string | undefined, runtime: MemoryWriteRuntime): Promise<string | null> {
 		if (inputRoomId) {
@@ -402,8 +427,60 @@ export class PensieveMemoryService {
 	/**
 	 * Vector search when an embedding model is registered; otherwise substring
 	 * fallback over .list(). Searches across all known tables and merges.
+	 *
+	 * When the companion's memoryQuery hook is wired, expands the user's
+	 * raw text into 1-3 retrieval queries first, runs each, merges +
+	 * dedupes the results. Hook failures (null) silently fall through
+	 * to the legacy single-query path.
 	 */
 	async search(text: string, limit = 30): Promise<PensieveMemorySummary[]> {
+		const runtime = this.resolveRuntime();
+		if (!runtime || !text.trim()) return [];
+
+		// Companion query expansion. Multiple short focused queries beat
+		// one long messy user prompt for embedding-based recall.
+		if (this.memoryQueryHook) {
+			try {
+				const expanded = await this.memoryQueryHook(text);
+				if (Array.isArray(expanded) && expanded.length > 1) {
+					// Run each expanded query, merge results (dedup by id).
+					const perQueryLimit = Math.max(
+						5,
+						Math.ceil(limit / expanded.length),
+					);
+					const seen = new Set<string>();
+					const merged: PensieveMemorySummary[] = [];
+					for (const q of expanded) {
+						const hits = await this.searchSingle(q, perQueryLimit);
+						for (const h of hits) {
+							if (seen.has(h.id)) continue;
+							seen.add(h.id);
+							merged.push(h);
+							if (merged.length >= limit) break;
+						}
+						if (merged.length >= limit) break;
+					}
+					if (merged.length > 0) return merged;
+					// If every expanded query came back empty, fall through to
+					// the original text — some queries just can't be improved.
+				}
+			} catch {
+				// Hook errors must never block recall; legacy path runs.
+			}
+		}
+
+		return this.searchSingle(text, limit);
+	}
+
+	/**
+	 * Single-text embedding search. Pulled out of search() so the
+	 * companion expansion path can call it once per expanded query
+	 * without re-running its own hook (would infinite-loop).
+	 */
+	private async searchSingle(
+		text: string,
+		limit = 30,
+	): Promise<PensieveMemorySummary[]> {
 		const runtime = this.resolveRuntime();
 		if (!runtime || !text.trim()) return [];
 
@@ -449,7 +526,16 @@ export class PensieveMemoryService {
 		return this.list({ q: text, limit });
 	}
 
-	async update(id: UUID, patch: { contentText?: string; tags?: string[]; path?: string }): Promise<boolean> {
+	async update(
+		id: UUID,
+		patch: {
+			contentText?: string;
+			tags?: string[];
+			path?: string;
+			type?: string;
+			metadata?: Record<string, unknown>;
+		},
+	): Promise<boolean> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return false;
 		const update = (runtime as unknown as {
@@ -462,15 +548,35 @@ export class PensieveMemoryService {
 		if (typeof patch.contentText === "string") {
 			next.content = { ...existing.content, text: patch.contentText } as Content;
 		}
+		if (typeof patch.type === "string" && patch.type.length > 0) {
+			// `type` is not a first-class field on the public Memory interface
+			// (it lives on metadata.type in the proto base) but the runtime's
+			// updateMemory accepts the loose shape and routes it appropriately.
+			// Cast through Record so TS doesn't structurally reject the write.
+			(next as Record<string, unknown>).type = patch.type;
+		}
 		const md = ((existing.metadata ?? {}) as Record<string, unknown>);
+		// Caller-supplied metadata wins over existing keys but anything not
+		// overridden is preserved. Explicit `undefined` values are treated
+		// as REMOVALS — the caller can scrub keys (e.g. archive markers
+		// during restore) by setting them to undefined.
 		const nextMd: Record<string, unknown> = { ...md };
-		let touchedMd = false;
+		if (patch.metadata) {
+			for (const [key, value] of Object.entries(patch.metadata)) {
+				if (value === undefined) {
+					delete nextMd[key];
+				} else {
+					nextMd[key] = value;
+				}
+			}
+		}
+		let touchedMd = patch.metadata !== undefined;
 		if (Array.isArray(patch.tags)) {
 			nextMd.tags = patch.tags;
 			touchedMd = true;
 		}
 		if (typeof patch.path === "string") {
-			nextMd.path = normalisePath(patch.path, existing.type);
+			nextMd.path = normalisePath(patch.path, patch.type ?? existing.type);
 			touchedMd = true;
 		}
 		if (touchedMd) next.metadata = nextMd as MemoryMetadata;

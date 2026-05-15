@@ -31,6 +31,7 @@ import { createHash } from "node:crypto";
 import {
 	ModelType,
 	logger,
+	parseToonKeyValue,
 	type IAgentRuntime,
 	type Task,
 	type TaskMetadata,
@@ -49,6 +50,13 @@ import {
 export const DETOUR_DREAM_TASK_NAME = "DETOUR_DREAM";
 export const DREAM_MEMORY_TYPE = "detour-dream";
 export const DREAM_PENDING_MEMORY_TYPE = "detour-dream-pending";
+/**
+ * Hermes Curator pattern: "Never auto-deletes — the worst outcome is
+ * archival … which is recoverable." When a dream plan proposes a deletion,
+ * we move the memory to this type instead of actually removing it.
+ * `dreamsRestore` (UI button) can promote it back to a regular description.
+ */
+export const DREAM_ARCHIVED_MEMORY_TYPE = "detour-dream-archived";
 const TASK_TAGS = ["queue", "repeat", "autonomy", "dream"];
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60_000;
 const DEFAULT_TRAJECTORY_BATCH = 40;
@@ -204,13 +212,35 @@ function renderMemoriesForPrompt(rows: PensieveMemorySummary[]): string {
 
 function parseDreamPlan(raw: unknown): DreamPlan | null {
 	if (typeof raw !== "string") return null;
-	const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+	// Codex routes through the TOON compiler so its output may be TOON,
+	// not JSON, even when we asked for JSON. Try TOON first (most common
+	// shape after the planner's pipeline), then JSON5/JSON as fallback.
+	// Without this multi-format parse, every dream tick fails with
+	// skipReason="parse-failed" and the agent's memory store never
+	// consolidates.
+	const fencedMatch = raw.match(/```(?:json|toon)?\s*([\s\S]*?)```/i);
 	const body = (fencedMatch?.[1] ?? raw).trim();
-	let json: unknown;
-	try {
-		json = JSON.parse(body);
-	} catch {
-		return null;
+	let json: unknown = null;
+	const toonAttempt = parseToonKeyValue(body);
+	if (toonAttempt && isRecord(toonAttempt)) {
+		json = toonAttempt;
+	} else {
+		try {
+			json = JSON.parse(body);
+		} catch {
+			// Last-ditch: extract first {...} substring (model often wraps
+			// the JSON in prose) and try again.
+			const obj = body.match(/\{[\s\S]*\}/);
+			if (obj) {
+				try {
+					json = JSON.parse(obj[0]);
+				} catch {
+					return null;
+				}
+			} else {
+				return null;
+			}
+		}
 	}
 	if (!isRecord(json)) return null;
 	const out: DreamPlan = {
@@ -662,10 +692,64 @@ export class DreamService {
 				return;
 			}
 			case "deletion": {
-				await this.deps.memories.remove(change.id as UUID);
+				// Hermes Curator safeguard: archive instead of delete. We
+				// re-tag the memory with `detour-dream-archived` so it stops
+				// surfacing in retrieval but stays recoverable via the
+				// `restore()` method. The user said "trim memory" — Hermes'
+				// 30d-stale / 90d-archived lifecycle is the right pressure;
+				// outright deletion would be unrecoverable.
+				const detail = await this.deps.memories.get(change.id as UUID);
+				if (!detail) return; // already gone
+				const previousMetadata = isRecord(detail.metadata) ? detail.metadata : {};
+				await this.deps.memories.update(change.id as UUID, {
+					type: DREAM_ARCHIVED_MEMORY_TYPE,
+					metadata: {
+						archived: true,
+						archivedReason: change.reason ?? "dream-deletion",
+						archivedAt: Date.now(),
+						previousType: detail.type,
+						// Stash the full pre-archive metadata so `restore`
+						// can put the entry back exactly as it was without
+						// the archived-* markers leaking through.
+						preArchiveMetadata: previousMetadata,
+					},
+				});
 				return;
 			}
 		}
+	}
+
+	/**
+	 * Restore an archived memory back to its previous type. Mirrors
+	 * Hermes' `curator restore <n>` command. Returns true when a memory
+	 * was restored, false when the id wasn't an archived entry.
+	 */
+	async restore(memoryId: string): Promise<boolean> {
+		const detail = await this.deps.memories.get(memoryId as UUID);
+		if (!detail || detail.type !== DREAM_ARCHIVED_MEMORY_TYPE) return false;
+		const meta = isRecord(detail.metadata) ? detail.metadata : {};
+		const previousType =
+			typeof meta.previousType === "string" ? meta.previousType : "description";
+		const stashed = isRecord(meta.preArchiveMetadata)
+			? (meta.preArchiveMetadata as Record<string, unknown>)
+			: null;
+		// Replace metadata wholesale with the pre-archive snapshot — the
+		// memory-service merges patch.metadata with existing, so passing
+		// the cleaned snapshot AND explicit-undefined for the archive keys
+		// gives a clean restore without leftover archive markers.
+		const restoredMeta: Record<string, unknown> = stashed
+			? { ...stashed }
+			: {};
+		restoredMeta.archived = undefined;
+		restoredMeta.archivedReason = undefined;
+		restoredMeta.archivedAt = undefined;
+		restoredMeta.previousType = undefined;
+		restoredMeta.preArchiveMetadata = undefined;
+		await this.deps.memories.update(memoryId as UUID, {
+			type: previousType,
+			metadata: restoredMeta,
+		});
+		return true;
 	}
 
 	private emptyPlan(): DreamPlan {

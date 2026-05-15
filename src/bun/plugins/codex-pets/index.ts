@@ -22,6 +22,14 @@ export type PetSummary = {
 	directory: string;
 	petJsonPath: string;
 	spritesheetPath: string;
+	/**
+	 * True when this pet was loaded from the bundled `views/pets/<id>/`
+	 * directory (shipped with the app), false when loaded from the
+	 * user's `~/.codex/pets/<id>/`. Determines which URL scheme the
+	 * RPC handler emits — `views://` for bundled, `file://` for user
+	 * (file:// only works in webviews that explicitly allow it).
+	 */
+	bundled?: boolean;
 };
 
 export type PetListResult = {
@@ -51,7 +59,14 @@ const SAFE_MARGIN_X = 18;
 const SAFE_MARGIN_Y = 16;
 const CHROMA_KEY = { hex: "#FF00FF", rgb: [255, 0, 255], name: "magenta", selection: "fallback" };
 
-const ROWS: readonly PetRow[] = [
+/**
+ * Canonical animation-row layout for every Codex pet spritesheet.
+ * Mirrored from the agent prompt that asks the upstream model to lay
+ * out frames in a fixed grid (9 rows × up-to-8 cols, 192×208 cells).
+ * Exported so the gallery / inspector can render labelled previews
+ * for each row without duplicating the table.
+ */
+export const PET_ANIMATION_ROWS: readonly PetRow[] = [
 	{ state: "idle", row: 0, frames: 6, purpose: "neutral breathing/blinking loop" },
 	{ state: "running-right", row: 1, frames: 8, purpose: "rightward locomotion loop" },
 	{ state: "running-left", row: 2, frames: 8, purpose: "leftward locomotion loop" },
@@ -62,6 +77,8 @@ const ROWS: readonly PetRow[] = [
 	{ state: "running", row: 7, frames: 6, purpose: "generic in-place running loop" },
 	{ state: "review", row: 8, frames: 6, purpose: "focused inspecting or review loop" },
 ];
+
+const ROWS: readonly PetRow[] = PET_ANIMATION_ROWS;
 
 const DIGITAL_PET_STYLE =
 	"Codex digital pet sprite style: pixel-art-adjacent low-resolution mascot sprite, compact chibi proportions, chunky whole-body silhouette, thick dark 1-2 px outline, visible stepped/pixel edges, limited palette, flat cel shading with at most one small highlight and one shadow step, simple readable face, tiny limbs, and no detail that disappears at 192x208. Avoid polished illustration, painterly rendering, anime key art, 3D render, vector app-icon polish, glossy lighting, soft gradients, realistic fur or material texture, anti-aliased high-detail edges, and complex tiny accessories.";
@@ -114,6 +131,49 @@ function codexHome(): string {
 	return value ? resolve(value) : CODEX_HOME_DEFAULT;
 }
 
+/**
+ * Resolve the bundled pets directory inside Detour. In dev this points
+ * at the repo's `build-assets/pets/`; in the packaged .app it points
+ * at `Resources/app/views/pets/`. Returns null when neither exists
+ * (legacy install or pets not yet bundled).
+ *
+ * Why bundle pets at all: WKWebView blocks `file://` references from
+ * a `views://` origin (the pet window loads at `views://pet/index.html`),
+ * so the spritesheet must live INSIDE the views/ tree to be loadable.
+ * The user's ~/.codex/pets/ directory stays as a secondary source —
+ * bundled pets win on duplicate ids so the app always has a working
+ * default even if CODEX_HOME is empty.
+ */
+function bundledPetsRoot(): string | null {
+	const here = dirname(new URL(import.meta.url).pathname);
+	const candidates = [
+		// Dev source: src/bun/plugins/codex-pets/index.ts → repo/build-assets/pets
+		join(here, "..", "..", "..", "..", "build-assets", "pets"),
+		// Bundled .app: launcher lives in Contents/MacOS, app/ sibling
+		// holds the bundled views tree. The electrobun.config.ts copy
+		// rule maps "build-assets/pets" → "views/main/pets" (NOT
+		// "views/pets"), so the destination has to keep the same
+		// `main/` prefix or the pet panel + pet window both fall back
+		// to file:// URLs from ~/.codex/pets and render blank in
+		// WKWebView.
+		process.execPath
+			? join(
+				dirname(process.execPath),
+				"..",
+				"Resources",
+				"app",
+				"views",
+				"main",
+				"pets",
+			)
+			: "",
+	].filter(Boolean);
+	for (const path of candidates) {
+		if (path && existsSync(path)) return path;
+	}
+	return null;
+}
+
 function isJsonObject(value: Json): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -152,18 +212,43 @@ function readPet(dir: string): PetSummary {
 }
 
 export function listCodexPets(): PetListResult {
-	const petsRoot = join(codexHome(), "pets");
-	if (!existsSync(petsRoot)) return { pets: [], errors: [] };
 	const pets: PetSummary[] = [];
 	const errors: string[] = [];
-	for (const entry of readdirSync(petsRoot, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const dir = join(petsRoot, entry.name);
-		if (!existsSync(join(dir, "pet.json"))) continue;
-		try {
-			pets.push(readPet(dir));
-		} catch (error) {
-			errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+	const seenIds = new Set<string>();
+	// Bundled pets first — they ship with the app, live under the views/
+	// tree so WKWebView can load their spritesheets, and win on duplicate
+	// id over ~/.codex/pets entries.
+	const bundleRoot = bundledPetsRoot();
+	if (bundleRoot) {
+		for (const entry of readdirSync(bundleRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const dir = join(bundleRoot, entry.name);
+			if (!existsSync(join(dir, "pet.json"))) continue;
+			try {
+				const pet = readPet(dir);
+				(pet as PetSummary & { bundled?: boolean }).bundled = true;
+				pets.push(pet);
+				seenIds.add(pet.id);
+			} catch (error) {
+				errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	}
+	// User's CODEX_HOME pets — fallback / additions. Skipped when the
+	// same id is already bundled, so the bundled (views://) version
+	// keeps its working URL.
+	const userPetsRoot = join(codexHome(), "pets");
+	if (existsSync(userPetsRoot)) {
+		for (const entry of readdirSync(userPetsRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			if (seenIds.has(entry.name)) continue;
+			const dir = join(userPetsRoot, entry.name);
+			if (!existsSync(join(dir, "pet.json"))) continue;
+			try {
+				pets.push(readPet(dir));
+			} catch (error) {
+				errors.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		}
 	}
 	pets.sort((a, b) => a.displayName.localeCompare(b.displayName));

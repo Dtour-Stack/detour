@@ -300,6 +300,8 @@ export class TrajectoriesService extends Service {
 			isEnabled: TrajectoriesService["isEnabled"];
 			listTrajectories: TrajectoriesService["listTrajectories"];
 			getTrajectoryDetail: TrajectoriesService["getTrajectoryDetail"];
+			getTrajectoryIdForStep: TrajectoriesService["getTrajectoryIdForStep"];
+			getTrajectoryIdForStepAsync: TrajectoriesService["getTrajectoryIdForStepAsync"];
 		};
 
 		service.startTrajectory = this.startTrajectory.bind(this);
@@ -314,6 +316,9 @@ export class TrajectoriesService extends Service {
 		service.isEnabled = this.isEnabled.bind(this);
 		service.listTrajectories = this.listTrajectories.bind(this);
 		service.getTrajectoryDetail = this.getTrajectoryDetail.bind(this);
+		service.getTrajectoryIdForStep = this.getTrajectoryIdForStep.bind(this);
+		service.getTrajectoryIdForStepAsync =
+			this.getTrajectoryIdForStepAsync.bind(this);
 		(service as unknown as Record<string, unknown>).flushWriteQueue =
 			this.flushWriteQueue.bind(this);
 	}
@@ -790,6 +795,31 @@ export class TrajectoriesService extends Service {
 		const row = byId.rows[0];
 		const id = row ? asString(pickCell(row, "id")) : null;
 		return id;
+	}
+
+	/**
+	 * Public step→trajectory resolver. Falls back to async DB lookup when the
+	 * in-memory map is cold. Returns null if no trajectory owns the step.
+	 *
+	 * Used by `trajectory-utils.withChildTrajectoryStep` when the parent
+	 * context lost its trajectoryId — e.g. the message-handler set
+	 * `meta.trajectoryStepId` but `meta.trajectoryId` got dropped. Without
+	 * this, completeActionTrajectoryStep silently no-ops and action records
+	 * stay as the "pending" placeholder created by createPendingAction.
+	 */
+	getTrajectoryIdForStep(stepId: string): string | null {
+		if (!stepId) return null;
+		return this.stepToTrajectory.get(stepId) ?? null;
+	}
+
+	/**
+	 * Async version that also consults the DB when the in-memory cache is
+	 * empty. Use this from paths that can await; the sync version is
+	 * provided for hot paths inside synchronous handlers.
+	 */
+	async getTrajectoryIdForStepAsync(stepId: string): Promise<string | null> {
+		if (!stepId) return null;
+		return await this.resolveTrajectoryId(stepId);
 	}
 
 	private async getCurrentStepIdFromDb(

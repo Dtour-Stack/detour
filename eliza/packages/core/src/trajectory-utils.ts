@@ -114,6 +114,17 @@ type TrajectoryLoggerLike = {
 	 * directly on @elizaos/agent.
 	 */
 	annotateStep?: (params: TrajectoryAnnotateParams) => Promise<void> | void;
+	/**
+	 * Optional. Resolve a step ID back to its owning trajectory. Used by
+	 * `withChildTrajectoryStep` when the parent context lost its
+	 * `trajectoryId` but still has a `trajectoryStepId` — without this,
+	 * action completion silently no-ops and step.action records stay as
+	 * the "pending" placeholder.
+	 */
+	getTrajectoryIdForStep?: (stepId: string) => string | null;
+	getTrajectoryIdForStepAsync?: (
+		stepId: string,
+	) => Promise<string | null> | string | null;
 };
 
 type StandaloneTrajectoryOptions = {
@@ -637,11 +648,6 @@ async function withChildTrajectoryStep<T>(
 	if (!(typeof parentStepId === "string" && parentStepId.trim() !== "")) {
 		return await fn();
 	}
-	const trajectoryId =
-		typeof parentCtx?.trajectoryId === "string" &&
-		parentCtx.trajectoryId.trim() !== ""
-			? parentCtx.trajectoryId.trim()
-			: undefined;
 
 	const trajectoryLogger = resolveTrajectoryLogger(runtime);
 	if (
@@ -650,6 +656,51 @@ async function withChildTrajectoryStep<T>(
 			!trajectoryLogger.isEnabled())
 	) {
 		return await fn();
+	}
+
+	// trajectoryId can drop off the AsyncLocalStorage context for several
+	// reasons: the MESSAGE_RECEIVED handler set stepId before startTrajectory
+	// returned, the handler bailed at resolveFromRuntime() before setting the
+	// id, or a nested withStandaloneTrajectory only carried the stepId. When
+	// that happens, completeActionTrajectoryStep silently no-ops below and
+	// every action stays as the createPendingAction stub. Recover the
+	// trajectoryId from the logger before proceeding — the service tracks
+	// step → trajectory in stepToTrajectory map (and falls back to a DB
+	// lookup when the map is cold).
+	let trajectoryId =
+		typeof parentCtx?.trajectoryId === "string" &&
+		parentCtx.trajectoryId.trim() !== ""
+			? parentCtx.trajectoryId.trim()
+			: undefined;
+	if (!trajectoryId) {
+		const syncResolver = trajectoryLogger.getTrajectoryIdForStep;
+		if (typeof syncResolver === "function") {
+			try {
+				const resolved = syncResolver(parentStepId);
+				if (typeof resolved === "string" && resolved.trim() !== "") {
+					trajectoryId = resolved.trim();
+				}
+			} catch {
+				// Recovery is best-effort.
+			}
+		}
+		if (!trajectoryId) {
+			const asyncResolver = trajectoryLogger.getTrajectoryIdForStepAsync;
+			if (typeof asyncResolver === "function") {
+				try {
+					const resolved = await asyncResolver(parentStepId);
+					if (typeof resolved === "string" && resolved.trim() !== "") {
+						trajectoryId = resolved.trim();
+					}
+				} catch {
+					// Recovery is best-effort.
+				}
+			}
+		}
+		if (trajectoryId && parentCtx && !parentCtx.trajectoryId) {
+			// Backfill the live context so siblings benefit from the lookup.
+			(parentCtx as { trajectoryId?: string }).trajectoryId = trajectoryId;
+		}
 	}
 
 	let childStepId = generateChildStepId(options.stepIdPrefix);

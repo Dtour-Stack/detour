@@ -46,6 +46,14 @@ export type PhantomWebviewRequests = {
 		params: { serializedTransactionBase64: string };
 		response: { signature: string };
 	};
+	phantomViewSolanaSignTransaction: {
+		params: { serializedTransactionBase64: string };
+		response: { signedTransactionBase64: string };
+	};
+	phantomViewSolanaSignMessage: {
+		params: { messageBase64: string };
+		response: { signatureBase64: string; publicKey: string };
+	};
 	phantomViewEvmSendTransaction: {
 		params: {
 			to: `0x${string}`;

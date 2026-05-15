@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AddressType, ConnectButton, useDisconnect, usePhantom } from "@phantom/react-sdk";
 import { rpc } from "../rpc";
 import { useDetourPhantomStatus } from "../wallet/DetourPhantomRoot";
+import { WalletStatsPanel } from "../wallet/WalletStatsPanel";
 
 type PortalCfg = {
 	appId: string | null;
@@ -23,6 +24,13 @@ async function copyText(label: string, text: string, onDone: (msg: string | null
 
 function shortAddress(value: string): string {
 	return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-6)}` : value;
+}
+
+function ConnectedWalletStats() {
+	const { addresses } = usePhantom();
+	const solana = addresses.find((a) => a.addressType === AddressType.solana)?.address ?? null;
+	const ethereum = addresses.find((a) => a.addressType === AddressType.ethereum)?.address ?? null;
+	return <WalletStatsPanel defaultSolana={solana} defaultEvm={ethereum} />;
 }
 
 function PhantomWalletConnectionCard() {
@@ -128,7 +136,10 @@ export function PhantomWalletTab() {
 			)}
 
 			{phantomStatus.ready ? (
-				<PhantomWalletConnectionCard />
+				<>
+					<PhantomWalletConnectionCard />
+					<ConnectedWalletStats />
+				</>
 			) : (
 				<section className="card" style={{ marginBottom: 12 }}>
 					<div className="provider-header">

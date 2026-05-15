@@ -66,6 +66,16 @@ export default {
 			"build-assets/pglite/fuzzystrmatch.tar.gz": "fuzzystrmatch.tar.gz",
 			// llama.cpp prebuilt server + dylibs.
 			"build-assets/llama": "bun/llama",
+			// Bundled Codex pets — pet.json + spritesheet.webp per pet.
+			// Lands under `views/main/pets/<id>/...` so the pet window
+			// (loaded at `views://main/pet.html`) can load the spritesheet
+			// from the SAME ORIGIN via `views://main/pets/<id>/spritesheet.webp`.
+			// WKWebView blocks both file:// loads from a views:// origin
+			// AND cross-path resource loads inside the views:// tree, so
+			// the pets MUST live inside `views/main/` not at the top-level
+			// `views/` directory. Referencing the user's ~/.codex/pets/
+			// path directly produced a blank pet window for both reasons.
+			"build-assets/pets": "views/main/pets",
 			// Character knowledge bundled with the app, surfaced via
 			// resolveBundledIndex() / KnowledgeService.
 			"src/bun/core/knowledge/detour-squirrel": "knowledge/detour-squirrel",
@@ -99,13 +109,26 @@ export default {
 			"src/bun/carrot-sdk/index.ts": "src/bun/carrot-sdk/index.ts",
 		},
 		mac: {
-			bundleCEF: false,
+			// CEF (Chromium Embedded Framework) bundled + used as the
+			// default renderer for every BrowserWindow. Required for
+			// Phantom Connect's OAuth flow: Phantom's server-side flow
+			// forks on User-Agent, and WKWebView's stripped UA
+			// (AppleWebKit/605.1.15, no `Safari/` suffix) gets routed
+			// to an extension-specific path that 400s on /login/start
+			// after consent. CEF ships with a real Chrome UA, which
+			// keeps Phantom on the standard web flow. Adds ~100MB to
+			// the bundle. See src/bun/core/rpc/handlers/phantom.ts for
+			// the redirect resolver this works with.
+			bundleCEF: true,
+			defaultRenderer: "cef",
 		},
 		linux: {
-			bundleCEF: false,
+			bundleCEF: true,
+			defaultRenderer: "cef",
 		},
 		win: {
-			bundleCEF: false,
+			bundleCEF: true,
+			defaultRenderer: "cef",
 		},
 	},
 	// release.baseUrl is required for the auto-updater to fetch the

@@ -19,6 +19,8 @@ import type { ConfigService } from "../config-service";
 import type { CronService } from "../cron-service";
 import type { InboxService } from "../inbox";
 import type { LlamaServerService } from "../llama/server-service";
+import type { LocalChatService } from "../llama/chat-service";
+import type { CompanionService } from "../llama/companion-service";
 import type { OwnerBindService } from "../owner-bind";
 import type { PensieveService } from "../pensieve";
 import type { PortlessService } from "../portless";
@@ -55,6 +57,8 @@ export type RpcDeps = {
 	gateway: ChannelGatewayService;
 	inbox: InboxService;
 	llama: LlamaServerService;
+	localChat: LocalChatService;
+	companion: CompanionService;
 	cron: CronService;
 	ownerBind: OwnerBindService;
 	portless: PortlessService;

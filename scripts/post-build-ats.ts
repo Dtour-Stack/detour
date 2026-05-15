@@ -65,3 +65,9 @@ if (closingDictIdx === -1) {
 const patched = original.slice(0, closingDictIdx) + atsBlock + original.slice(closingDictIdx);
 writeFileSync(plistPath, patched, "utf8");
 console.log(`[post-build-ats] injected ATS localhost exception into ${plistPath}`);
+
+// Chained: ensure the runtime-loaded `coding-agent-adapters` package
+// (used by pty-manager's worker for CLI adapter registration) and its
+// pino dep tree make it into the .app. Runs in-process so the single
+// `postBuild` hook covers both concerns. See post-build-pty-adapters.ts.
+await import("./post-build-pty-adapters");

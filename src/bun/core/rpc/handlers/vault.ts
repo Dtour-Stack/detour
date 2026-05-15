@@ -252,6 +252,11 @@ export function vaultRequests(deps: RpcDeps) {
 			await manager.set(params.key, params.value, {
 				sensitive: params.sensitive ?? true,
 			});
+			// Mirror env-style entries (GMGN_API_KEY, etc.) into process.env
+			// so plugins reading env see the change without a restart. Rebuild
+			// the runtime when it hits so provider plugins re-init.
+			const applied = await deps.config.onVaultEntryChanged(params.key, params.value);
+			if (applied) await deps.runtime.rebuild().catch(() => {});
 			return { ok: true };
 		},
 
@@ -260,6 +265,8 @@ export function vaultRequests(deps: RpcDeps) {
 		): Promise<{ ok: true }> => {
 			const manager = await deps.vault.manager();
 			await manager.remove(params.key);
+			const applied = await deps.config.onVaultEntryChanged(params.key, null);
+			if (applied) await deps.runtime.rebuild().catch(() => {});
 			return { ok: true };
 		},
 

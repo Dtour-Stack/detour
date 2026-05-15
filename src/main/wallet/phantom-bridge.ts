@@ -7,6 +7,8 @@ export type PhantomBridgeApi = {
 		ethereumAddress: string | null;
 	}>;
 	solanaSignAndSend: (tx: VersionedTransaction) => Promise<{ signature: string }>;
+	solanaSignTransaction: (tx: VersionedTransaction) => Promise<{ signedTransactionBase64: string }>;
+	solanaSignMessage: (message: Uint8Array) => Promise<{ signatureBase64: string; publicKey: string }>;
 	evmSendTransaction: (params: {
 		to: `0x${string}`;
 		value?: string;

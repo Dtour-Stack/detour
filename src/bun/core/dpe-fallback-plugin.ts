@@ -38,15 +38,33 @@ type WrappedRuntime = IAgentRuntime & {
 	[WRAPPED]?: true;
 };
 type ProviderRecoveryTarget = {
-	provider: "openrouter" | "elizacloud" | "anthropic" | "openai";
-	envKey: "OPENROUTER_API_KEY" | "ELIZAOS_CLOUD_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY";
+	provider: "openrouter" | "elizacloud" | "anthropic" | "openai" | "local-chat";
+	envKey:
+		| "OPENROUTER_API_KEY"
+		| "ELIZAOS_CLOUD_API_KEY"
+		| "ANTHROPIC_API_KEY"
+		| "OPENAI_API_KEY"
+		| "DETOUR_LOCAL_CHAT_URL";
 };
 
+// Order matters: when a structured-output parse fails on the active
+// provider, the runtime walks this list and tries the first one whose
+// env key is set. Capable / TOON-friendly providers go FIRST so we don't
+// hand a TOON schema to a weak free-tier model that can't reliably
+// emit it. Anthropic Claude is the canonical structured-output model
+// the elizaOS prompt templates are tuned for; ElizaCloud routes through
+// Claude/GPT/Gemini paid tiers; Anthropic-via-OpenRouter is the same
+// model on a different transport; OpenRouter free-tier and Detour's
+// own local chat go last — both are weaker on TOON schemas but they
+// keep Detour responsive when every cloud option is unavailable or
+// rate-capped. Local-chat is the LAST resort so Detour can survive a
+// full network outage with its own on-device Qwen3 model.
 const PROVIDER_RECOVERY_TARGETS: ProviderRecoveryTarget[] = [
-	{ provider: "openrouter", envKey: "OPENROUTER_API_KEY" },
-	{ provider: "elizacloud", envKey: "ELIZAOS_CLOUD_API_KEY" },
 	{ provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
+	{ provider: "elizacloud", envKey: "ELIZAOS_CLOUD_API_KEY" },
 	{ provider: "openai", envKey: "OPENAI_API_KEY" },
+	{ provider: "openrouter", envKey: "OPENROUTER_API_KEY" },
+	{ provider: "local-chat", envKey: "DETOUR_LOCAL_CHAT_URL" },
 ];
 
 function isReplyLikeSchema(args: DynamicPromptArgs): boolean {
@@ -260,10 +278,29 @@ function configuredProviderRecoveryTargets(runtime: IAgentRuntime, args: Dynamic
 	const activeProvider = typeof args.options?.model === "string" ? args.options.model : "";
 	return PROVIDER_RECOVERY_TARGETS.filter((target) => {
 		if (target.provider === activeProvider) return false;
+		// API-key path: env var or runtime setting populated.
 		const setting = runtime.getSetting?.(target.envKey);
 		if (typeof setting === "string" && setting.length > 0) return true;
 		const env = process.env[target.envKey];
-		return typeof env === "string" && env.length > 0;
+		if (typeof env === "string" && env.length > 0) return true;
+		// OAuth-pairing path: Detour's most common Anthropic setup is the
+		// Claude subscription OAuth — no ANTHROPIC_API_KEY is set, but the
+		// anthropic plugin is loaded and registers a TEXT_LARGE handler
+		// against `provider="anthropic"`. Same shape for openai-codex.
+		// Skipping these because the env var isn't set means a Codex-active
+		// agent silently falls through to OpenRouter free instead of the
+		// perfectly-good Claude OAuth sitting right next to it.
+		const models = (runtime as unknown as {
+			models?: Map<string, Array<{ provider?: string }>>;
+		}).models;
+		if (models) {
+			for (const handlers of models.values()) {
+				if (Array.isArray(handlers) && handlers.some((h) => h.provider === target.provider)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	});
 }
 
@@ -510,22 +547,145 @@ function quotaCappedReply(cap: QuotaCap): DynamicPromptResult {
 	};
 }
 
+/**
+ * Companion compress + personaPrePass hook. Wired by core/index.ts at
+ * boot. When wired AND the companion is running, the planner wrapper:
+ *
+ *   1. Calls personaPrePass on the user's latest message → appends a
+ *      one-line intent frame to the planner's state (additional context,
+ *      never replaces the user's text).
+ *   2. Calls compress on the recent-messages block when it exceeds
+ *      4 KB — replaces with a tighter summary, saves planner prompt cost.
+ *
+ * Hook is null by default; null returns from the companion silently
+ * fall through to the legacy planner path. No load-bearing dependency.
+ */
+type CompanionPlannerHook = {
+	personaPrePass?: (agentName: string, userText: string) => Promise<string | null>;
+	compress?: (history: string, targetTokens?: number) => Promise<string | null>;
+	triage?: (
+		userText: string,
+	) => Promise<"chat" | "tool" | "search" | "complex" | "skip" | null>;
+};
+
+let companionPlannerHook: CompanionPlannerHook | null = null;
+
+/**
+ * Wire the companion's planner-side jobs. Idempotent; calling twice
+ * just replaces the hook. Pass `null` to unwire.
+ */
+export function setCompanionPlannerHook(hook: CompanionPlannerHook | null): void {
+	companionPlannerHook = hook;
+}
+
+/**
+ * Read the last user message text from the planner args' state.
+ * `state.values.recentMessages` is the canonical eliza-formatted
+ * conversation block; we extract the LAST `[entityId] User: <text>`
+ * line as the freshest user turn. Returns "" when unavailable.
+ */
+function extractLastUserText(args: DynamicPromptArgs): string {
+	const recent = args.state?.values?.recentMessages;
+	if (typeof recent !== "string" || recent.length === 0) return "";
+	const lines = recent.split("\n");
+	// Walk backwards looking for a "User:" entry (eliza format) and grab the text after the colon.
+	for (let i = lines.length - 1; i >= 0; i -= 1) {
+		const line = lines[i] ?? "";
+		const userMatch = line.match(/User:\s*(.+)$/);
+		if (userMatch?.[1]) return userMatch[1].trim();
+	}
+	return "";
+}
+
+const COMPRESS_THRESHOLD_CHARS = 4_000;
+
+/**
+ * Pre-planner companion pass. Runs personaPrePass + compress in
+ * parallel; returns a modified args object with augmentations applied.
+ * Strictly additive — original user text + actions schema are
+ * untouched. Failures (companion off, null return) leave args
+ * unchanged.
+ */
+async function applyCompanionPrePlannerPass(
+	args: DynamicPromptArgs,
+	agentName: string,
+): Promise<DynamicPromptArgs> {
+	if (!companionPlannerHook) return args;
+	const userText = extractLastUserText(args);
+	const recent = args.state?.values?.recentMessages;
+	const shouldCompress =
+		typeof recent === "string" && recent.length > COMPRESS_THRESHOLD_CHARS;
+
+	const [frame, compressed] = await Promise.all([
+		companionPlannerHook.personaPrePass && userText
+			? companionPlannerHook.personaPrePass(agentName, userText).catch(() => null)
+			: Promise.resolve(null),
+		shouldCompress && companionPlannerHook.compress
+			? companionPlannerHook.compress(recent as string, 250).catch(() => null)
+			: Promise.resolve(null),
+	]);
+
+	if (!frame && !compressed) return args;
+
+	const prevState = args.state;
+	const nextValues: Record<string, unknown> = { ...(prevState?.values ?? {}) };
+	if (frame) {
+		// Stash the companion's framing in a dedicated value so the
+		// composer / prompt template can reference it. Provider-aware
+		// templates can pick it up via `{{detourCompanionFrame}}`.
+		nextValues.detourCompanionFrame = frame;
+	}
+	if (compressed) {
+		// Replace recent-messages with the summary. Keep a copy of the
+		// original for trajectory capture; trajectories want the full
+		// turn even if the planner saw the compressed version.
+		nextValues.recentMessagesOriginal = recent;
+		nextValues.recentMessages = `[compressed summary] ${compressed}`;
+	}
+
+	// State requires non-optional `values` and `data` per @elizaos/core.
+	// When `args.state` is undefined (rare — DPE callers almost always
+	// supply one but the type is optional) substitute empty containers
+	// so the returned shape matches `State`. `data` and `text` arrive
+	// from upstream untouched; we only mutate `values`.
+	type StateShape = NonNullable<DynamicPromptArgs["state"]>;
+	const nextState: StateShape = {
+		...(prevState ?? ({ values: {}, data: {}, text: "" } as StateShape)),
+		values: nextValues as StateShape["values"],
+		data: prevState?.data ?? ({} as StateShape["data"]),
+	};
+	return { ...args, state: nextState };
+}
+
 export function installDpeFallbackPatch(runtime: IAgentRuntime): void {
 	const wrapped = runtime as WrappedRuntime;
 	if (wrapped[WRAPPED]) return;
 	const original = runtime.dynamicPromptExecFromState.bind(runtime);
+	const agentName = runtime.character?.name ?? "agent";
 	wrapped.dynamicPromptExecFromState = async (
 		args: DynamicPromptArgs,
 	): Promise<DynamicPromptResult> => {
-		const structuredArgs = normalizeReplyLikeSchema(args);
+		// Companion pre-pass: augment state with persona-framing + compressed
+		// history. Strictly additive; failures fall through.
+		const argsAfterCompanion = await applyCompanionPrePlannerPass(args, agentName);
+		const structuredArgs = normalizeReplyLikeSchema(argsAfterCompanion);
 		const canFallback = canUsePlainReply(structuredArgs);
 		const shouldCompactRetry = canUseCompactRetry(structuredArgs);
 		// Quota-cap short-circuit: if the active credential is already capped,
 		// every retry tier (structured → compact → plain-text) will 429 on the
 		// same exhausted upstream. Skip them and ship the cap notice directly
 		// so the user actually hears about it instead of getting silence.
+		//
+		// EXCEPTION: when Detour's own local-chat service is running
+		// (DETOUR_LOCAL_CHAT_URL set), let the planner fall through so it
+		// can route to local-chat as the recovery target. Detour shipping
+		// its own on-device model means a cloud-cap shouldn't take the
+		// agent fully offline — the local model picks up the turn instead.
 		const activeCap = getProviderQuotaService().getActiveCap();
-		if (activeCap && canFallback) {
+		const localChatAvailable =
+			typeof process.env.DETOUR_LOCAL_CHAT_URL === "string" &&
+			process.env.DETOUR_LOCAL_CHAT_URL.trim().length > 0;
+		if (activeCap && canFallback && !localChatAvailable) {
 			runtime.logger.warn(
 				{
 					src: "detour:dpe-fallback",
@@ -533,9 +693,19 @@ export function installDpeFallbackPatch(runtime: IAgentRuntime): void {
 					accountLabel: activeCap.accountLabel,
 					resetsAt: new Date(activeCap.resetsAtMs).toISOString(),
 				},
-				"Short-circuiting planner — active provider is quota-capped",
+				"Short-circuiting planner — active provider is quota-capped and no local fallback configured",
 			);
 			return quotaCappedReply(activeCap);
+		}
+		if (activeCap && localChatAvailable) {
+			runtime.logger.info(
+				{
+					src: "detour:dpe-fallback",
+					providerId: activeCap.providerId,
+					localChatUrl: process.env.DETOUR_LOCAL_CHAT_URL,
+				},
+				"Active provider capped — routing through Detour's local-chat fallback",
+			);
 		}
 		let failureReason = "structured-null";
 		let compactAttempted = false;

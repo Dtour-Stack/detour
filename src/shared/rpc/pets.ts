@@ -13,7 +13,32 @@ import type {
 	CodexPetActivity,
 	CodexPetAnimationState,
 	CodexPetSpawnResponse,
+	CodexPetSummary,
 } from "../index";
+
+/**
+ * Sprite-atlas row coverage so the gallery can render every animation
+ * the pet's spritesheet supports (idle / waving / jumping / running /
+ * etc.). Each entry maps a named animation state to its row in the
+ * atlas + frame count + a stable purpose label so the UI can render
+ * a labelled animated preview per row.
+ */
+export type CodexPetAnimationRow = {
+	state: CodexPetAnimationState;
+	row: number;
+	frames: number;
+	purpose: string;
+};
+
+export type CodexPetCatalogEntry = CodexPetSummary & {
+	bundled: boolean;
+	animations: CodexPetAnimationRow[];
+};
+
+export type CodexPetsListResponse = {
+	pets: CodexPetCatalogEntry[];
+	errors: string[];
+};
 
 export type PetsRequests = {
 	petActive: {
@@ -29,6 +54,16 @@ export type PetsRequests = {
 	petActivity: {
 		params: Record<string, never>;
 		response: CodexPetActivity;
+	};
+	/**
+	 * Full catalog of installed pets — both bundled (shipped with the
+	 * .app) and user-supplied (~/.codex/pets/). Used by the gallery's
+	 * "Pets" tab so the user can browse / inspect every pet on disk,
+	 * not just the currently-spawned one.
+	 */
+	petsList: {
+		params: Record<string, never>;
+		response: CodexPetsListResponse;
 	};
 };
 

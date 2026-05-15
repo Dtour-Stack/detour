@@ -74,7 +74,27 @@ function makeFakeMemoryService(): {
 				type: row.type,
 			};
 		},
-		async update() { return true; },
+		async update(id: string, patch: { type?: string; metadata?: Record<string, unknown>; contentText?: string; tags?: string[]; path?: string }) {
+			const row = store.get(id);
+			if (!row) return false;
+			if (patch.contentText !== undefined) row.text = patch.contentText;
+			if (Array.isArray(patch.tags)) row.tags = patch.tags;
+			if (typeof patch.path === "string") row.path = patch.path;
+			if (typeof patch.type === "string") row.type = patch.type;
+			if (patch.metadata) {
+				// Mirror production memory-service: explicit undefined = remove key.
+				const next: Record<string, unknown> = { ...row.metadata };
+				for (const [k, v] of Object.entries(patch.metadata)) {
+					if (v === undefined) {
+						delete next[k];
+					} else {
+						next[k] = v;
+					}
+				}
+				row.metadata = next;
+			}
+			return true;
+		},
 		async remove(id: string) {
 			return store.delete(id);
 		},
@@ -247,5 +267,99 @@ describe("DreamService", () => {
 		// No new addition memories were committed
 		const applied = [...store.values()].filter((m) => m.tags.includes("dream-applied")).length;
 		expect(applied).toBe(0);
+	});
+
+	test("apply of a deletion ARCHIVES the memory instead of deleting it (Hermes safeguard)", async () => {
+		const { store, service: memoryService } = makeFakeMemoryService();
+		// Pre-seed a memory the dream will propose deleting.
+		const seed = await memoryService.create({
+			text: "Stale fact the dream wants to drop",
+			path: "/preferences",
+			type: "description",
+			tags: ["preference"],
+		});
+		expect(seed?.id).toBeDefined();
+		const trajectories = makeFakeTrajectoryService();
+		const dream = new DreamService({
+			runtimeService: makeFakeRuntimeService(
+				JSON.stringify({
+					additions: [],
+					merges: [],
+					replacements: [],
+					deletions: [{ id: seed?.id, reason: "contradicted by newer note" }],
+				}),
+			),
+			memories: memoryService,
+			trajectories,
+		});
+		const run = await dream.runNow();
+		expect(run.planId).toBeDefined();
+		const result = await dream.apply(run.planId!);
+		expect(result.applied).toBe(1);
+		expect(result.failed).toBe(0);
+		// Memory still exists but moved to archived
+		const still = store.get(seed!.id);
+		expect(still).toBeDefined();
+		expect(still?.type).toBe("detour-dream-archived");
+		expect(still?.metadata.archived).toBe(true);
+		expect(still?.metadata.previousType).toBe("description");
+	});
+
+	test("restore promotes an archived memory back to its previous type", async () => {
+		const { store, service: memoryService } = makeFakeMemoryService();
+		const seed = await memoryService.create({
+			text: "Restorable fact",
+			path: "/preferences",
+			type: "description",
+			tags: ["preference"],
+		});
+		const trajectories = makeFakeTrajectoryService();
+		const dream = new DreamService({
+			runtimeService: makeFakeRuntimeService(
+				JSON.stringify({
+					additions: [],
+					merges: [],
+					replacements: [],
+					deletions: [{ id: seed?.id, reason: "later proves wrong" }],
+				}),
+			),
+			memories: memoryService,
+			trajectories,
+		});
+		const run = await dream.runNow();
+		await dream.apply(run.planId!);
+		expect(store.get(seed!.id)?.type).toBe("detour-dream-archived");
+		const restored = await dream.restore(seed!.id);
+		expect(restored).toBe(true);
+		const after = store.get(seed!.id);
+		expect(after?.type).toBe("description");
+		expect(after?.metadata.archived).toBeUndefined();
+	});
+
+	test("parses TOON output (codex's TOON compiler conversion)", async () => {
+		const { service: memoryService } = makeFakeMemoryService();
+		const trajectories = makeFakeTrajectoryService();
+		// The codex-chatgpt TOON compiler converts JSON output to TOON
+		// before the dream parser ever sees it. parseDreamPlan now accepts
+		// both formats; this regression test locks that in.
+		const toonOutput = [
+			"additions[1]:",
+			"  - text: \"User prefers concise terminal-style replies\"",
+			"    reason: \"recurring across multiple sessions\"",
+			"merges[0]:",
+			"replacements[0]:",
+			"deletions[0]:",
+			"notes: \"one durable preference\"",
+		].join("\n");
+		const dream = new DreamService({
+			runtimeService: makeFakeRuntimeService(toonOutput),
+			memories: memoryService,
+			trajectories,
+		});
+		const result = await dream.runNow();
+		// TOON parse should succeed; either we get a plan or we get a
+		// non-parse-failed skip reason. The critical assertion is "didn't
+		// fail with parse-failed."
+		expect(result.skipReason).not.toBe("parse-failed");
 	});
 });

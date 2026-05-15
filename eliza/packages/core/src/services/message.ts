@@ -6220,6 +6220,52 @@ Return TOON only with the continuation in the text field, starting immediately a
 					{ src: "service:message" },
 					"dynamicPromptExecFromState returned null",
 				);
+				// Direct-action rescue: if the user's message is an explicit
+				// action request the lightweight router can recognise
+				// (currently: image generation), force-dispatch that action
+				// instead of falling through to the prose-only grounded
+				// fallback. Without this, the agent emits a "firing up the
+				// image now" reply with no actual GENERATE_IMAGE dispatch —
+				// the action never runs and the user gets text where they
+				// asked for a picture.
+				const directRescue = findDirectOwnedActionSuggestion(
+					runtime,
+					getUserMessageText(message),
+				);
+				if (directRescue) {
+					const rescueContent: Content = {
+						thought: `Direct action rescue: planner returned null but request explicitly maps to ${directRescue.actionName}.`,
+						actions: [directRescue.actionName],
+						providers: [],
+						text: "",
+						simple: false,
+					};
+					applyDirectImageGenerationPlan(runtime, message, rescueContent);
+					const rescueMessages: Memory[] = [
+						{
+							id: responseId,
+							entityId: runtime.agentId,
+							agentId: runtime.agentId,
+							content: rescueContent,
+							roomId: message.roomId,
+							createdAt: Date.now(),
+						},
+					];
+					runtime.logger.info(
+						{
+							src: "service:message",
+							rescueAction: directRescue.actionName,
+							reasons: directRescue.reasons,
+						},
+						"Direct-action rescue dispatched after planner null",
+					);
+					return {
+						responseContent: rescueContent,
+						responseMessages: rescueMessages,
+						state,
+						mode: "actions",
+					};
+				}
 				const groundedFallback = await this.tryGroundedFallbackReply(
 					runtime,
 					message,

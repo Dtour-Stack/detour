@@ -24,6 +24,7 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // plugin handles real embeddings when the user has an OPENAI_EMBEDDING_API_KEY;
 // otherwise embedding-stub keeps the runtime alive with zero vectors.
 import { embeddingOpenAIPlugin } from "../plugins/embedding-openai/index";
+import { localChatPlugin } from "../plugins/local-chat/index";
 import { decodeCodexJwt } from "../plugins/codex-chatgpt/index";
 import { codexHatchAction, codexPetAction, codexPetsPlugin } from "../plugins/codex-pets/index";
 import {
@@ -55,6 +56,7 @@ import { portlessToolsPlugin } from "../plugins/portless-tools/index";
 import { agentSkillsPlugin } from "../plugins/agent-skills/index";
 import { agentPublicLogPlugin } from "../plugins/agent-public-log/index";
 import { phantomWalletToolsPlugin } from "../plugins/phantom-wallet-tools/index";
+import { gmgnToolsPlugin } from "../plugins/gmgn-tools/index";
 import { audioGenerationPlugin, audioSettingKeys } from "../plugins/audio-generation/index";
 import { mediaGenerationPlugin, mediaGenerationSettingKeys } from "../plugins/media-generation/index";
 import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
@@ -105,6 +107,7 @@ try {
 	agentOrchestratorPlugin = null;
 }
 import { broadcaster } from "./rpc/registry";
+import { createWorkerStatusRelay } from "./worker-status-relay";
 import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { discordContextPlugin } from "./discord-context-provider";
@@ -696,11 +699,24 @@ export class RuntimeService {
 		// in the chat banner. It is not a silent walk.
 		state = await this.rotatePastCapsIfNeeded(state);
 		const activeCap = getProviderQuotaService().getActiveCap();
-		if (activeCap) {
+		// Detour's local-chat service (Qwen3 running on-device) is a valid
+		// uncapped fallback. When it's running, don't bail with the cap
+		// error — let deliverMessage proceed; dpe-fallback's recovery
+		// chain will route the turn through local-chat. This is what
+		// makes Detour survive a cloud-provider cap on its own infra.
+		const localChatAvailable =
+			typeof process.env.DETOUR_LOCAL_CHAT_URL === "string" &&
+			process.env.DETOUR_LOCAL_CHAT_URL.trim().length > 0;
+		if (activeCap && !localChatAvailable) {
 			const resetText = new Date(activeCap.resetsAtMs).toLocaleString();
 			throw new Error(
 				`${activeCap.accountLabel} cap reached (resets ${resetText}) and no uncapped fallback is configured. ` +
 				`Switch active provider in Settings → Providers, add a fallback to the order, or wait for the cap to reset.`,
+			);
+		}
+		if (activeCap && localChatAvailable) {
+			console.log(
+				`[runtime] active provider capped (${activeCap.accountLabel}) — routing through Detour's local-chat (${process.env.DETOUR_LOCAL_CHAT_URL})`,
 			);
 		}
 		const slashEarly = nativeSlashCommand(text);
@@ -1082,9 +1098,37 @@ export class RuntimeService {
 				void routeOrFallback(text, source, routing);
 			});
 
+			// Status relay — surfaces a handful of high-signal session
+			// events (spawn, tool start, completion, failure, login prompt)
+			// as `workerStatusUpdate` messages dressed with the spawned
+			// worker's name ("Hungover Squirrel is using bash"). Tool
+			// events are rate-limited per (sessionId, tool) to avoid
+			// chat-spam during heavy edit runs. See worker-status-relay.ts.
+			const ptyServiceForStatus = runtime.getService("PTY_SERVICE") as
+				| { getSessionInfo?: (id: string) => { name?: string } | undefined }
+				| undefined;
+			const workerStatusRelay = createWorkerStatusRelay({
+				lookupWorkerName: (id) => ptyServiceForStatus?.getSessionInfo?.(id)?.name,
+			});
+
 			coordinator.setWsBroadcast?.((event) => {
 				const { type: eventType, ...rest } = event;
-				broadcaster.broadcast("ptySessionEvent", { eventType, ...rest });
+				// Enrich the existing low-level event with the worker name so
+				// any consumer (chat UI, activity panel, tooling) gets the
+				// readable handle for free.
+				const sessionId = (rest as { sessionId?: string }).sessionId;
+				const workerName = sessionId
+					? ptyServiceForStatus?.getSessionInfo?.(sessionId)?.name
+					: undefined;
+				broadcaster.broadcast("ptySessionEvent", { eventType, ...rest, workerName });
+				// Surface a chat-friendly status ping for moments worth
+				// narrating. Returns null for noisy/internal events.
+				const status = typeof eventType === "string"
+					? workerStatusRelay.relay({ type: eventType, ...(rest as Record<string, unknown>) })
+					: null;
+				if (status) {
+					broadcaster.broadcast("workerStatusUpdate", status);
+				}
 			});
 
 			coordinator.setSwarmCompleteCallback?.(async (payload) => {
@@ -1356,6 +1400,7 @@ export class RuntimeService {
 			sqlPlugin,
 			...llmPlugins,
 			embeddingOpenAIPlugin,
+			localChatPlugin,
 			embeddingStubPlugin,
 			vaultToolsPlugin,
 			pensieveToolsPlugin,
@@ -1377,6 +1422,7 @@ export class RuntimeService {
 			agentSkillsPlugin,
 			agentPublicLogPlugin,
 			phantomWalletToolsPlugin,
+			gmgnToolsPlugin,
 			audioGenerationPlugin,
 			mediaGenerationPlugin,
 			desktopControlPlugin,

@@ -219,12 +219,25 @@ export const trajectoriesPlugin: Plugin = {
 				}
 				const meta = message.metadata as Record<string, unknown>;
 
-				const logger = TrajectoriesService.resolveFromRuntime(runtime);
+				// Race tolerance: the real SQL-backed TrajectoriesService starts
+				// asynchronously (DB init). On cold boot the first MESSAGE_RECEIVED
+				// can fire before resolveFromRuntime sees the real service — only
+				// the no-op stub — so we'd bail and the message gets handled with
+				// no trajectory context. waitForService polls briefly so we don't
+				// lose the first turn.
+				const logger =
+					TrajectoriesService.resolveFromRuntime(runtime) ??
+					(await TrajectoriesService.waitForService(runtime, 3_000));
 				if (!logger) return;
 
-				// Start trajectory
-				let trajectoryStepId: string = crypto.randomUUID();
-				meta.trajectoryStepId = trajectoryStepId;
+				// Start trajectory. Set the step id ONLY after startTrajectory
+				// succeeds — leaving an orphan `meta.trajectoryStepId` with no
+				// `meta.trajectoryId` propagates a broken context into the message
+				// handler, and every downstream withActionStep/withProviderStep
+				// silently fails to complete (the createPendingAction stub never
+				// gets overwritten, so step.action stays as "pending").
+				let trajectoryStepId: string | null = null;
+				let normalizedTrajectoryId: string | null = null;
 
 				try {
 					const trajectoryMetadata = await buildTrajectoryMetadata(
@@ -237,7 +250,7 @@ export const trajectoriesPlugin: Plugin = {
 						metadata: trajectoryMetadata,
 					});
 
-					const normalizedTrajectoryId =
+					normalizedTrajectoryId =
 						typeof trajectoryId === "string" && trajectoryId.trim().length > 0
 							? trajectoryId
 							: null;
@@ -252,13 +265,11 @@ export const trajectoriesPlugin: Plugin = {
 							openPositions: 0,
 						});
 
-						const normalizedStepId =
+						trajectoryStepId =
 							typeof runtimeStepId === "string" &&
 							runtimeStepId.trim().length > 0
 								? runtimeStepId
-								: trajectoryStepId;
-
-						trajectoryStepId = normalizedStepId;
+								: crypto.randomUUID();
 						meta.trajectoryStepId = trajectoryStepId;
 						pendingTrajectoryEndTargetByStepId.set(
 							trajectoryStepId,
@@ -268,13 +279,20 @@ export const trajectoriesPlugin: Plugin = {
 							await logger.flushWriteQueue(normalizedTrajectoryId);
 						}
 					} else {
-						// Fallback if startTrajectory returns empty/null
-						// This path uses the stepId as the trajectoryId which matches legacy behavior
-						// provided the logger supports it, but here we are using the new service.
-						// If new service returns null, something is wrong, but we proceed best effort.
+						// startTrajectory returned empty/null. Don't leave a stepId
+						// dangling — the message handler will pick it up, set up a
+						// broken trajectory context, and every downstream step
+						// will silently fail to complete.
+						runtime.logger?.warn(
+							{
+								src: "trajectories",
+								roomId: message.roomId,
+							},
+							"startTrajectory returned no id — skipping trajectory context",
+						);
 					}
 
-					if (message.id) {
+					if (trajectoryStepId && message.id) {
 						const replyId = createUniqueUuid(runtime, message.id);
 						pendingTrajectoryStepByReplyId.set(replyId, trajectoryStepId);
 						pendingTrajectoryStepByMessageId.set(message.id, trajectoryStepId);
@@ -284,6 +302,13 @@ export const trajectoriesPlugin: Plugin = {
 						);
 					}
 				} catch (err) {
+					// If startTrajectory failed mid-flight, scrub the partial
+					// metadata so the message handler sees a clean state (no
+					// trajectoryStepId, no trajectoryId) and treats this turn as
+					// unlogged rather than as a phantom trajectory whose
+					// completeStep calls silently no-op.
+					delete (meta as Record<string, unknown>).trajectoryStepId;
+					delete (meta as Record<string, unknown>).trajectoryId;
 					runtime.logger?.warn(
 						{
 							err,

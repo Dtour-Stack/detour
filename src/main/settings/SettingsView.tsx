@@ -16,10 +16,11 @@ import { CloudAppsTab } from "./CloudAppsTab";
 import { CloudContainersTab } from "./CloudContainersTab";
 import { PhantomWalletTab } from "./PhantomWalletTab";
 import { AudioTab } from "./AudioTab";
+import { SkillsTab } from "./SkillsTab";
 
 type Section = "configuration" | "vault" | "cloud";
 
-type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | "character" | "agent" | "os" | "window" | "phantom";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | "character" | "agent" | "skills" | "os" | "window" | "phantom";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 type CloudTab = "elizacloud" | "apps" | "containers";
 
@@ -31,6 +32,7 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "audio", label: "Audio" },
 	{ id: "character", label: "Agent Character" },
 	{ id: "agent", label: "Agent Permissions" },
+	{ id: "skills", label: "Skills" },
 	{ id: "phantom", label: "Phantom wallet" },
 	{ id: "os", label: "OS Permissions" },
 	{ id: "window", label: "Window" },
@@ -64,6 +66,8 @@ function ConfigContent({ tab }: { tab: ConfigTab }) {
 			return <AgentCharacterTab />;
 		case "agent":
 			return <AgentPermissionsTab />;
+		case "skills":
+			return <SkillsTab />;
 		case "phantom":
 			return <PhantomWalletTab />;
 		case "os":

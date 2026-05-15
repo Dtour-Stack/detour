@@ -40,6 +40,8 @@ import { mediaRequests } from "./handlers/media";
 import { goalsRequests } from "./handlers/goals";
 import { dreamsRequests } from "./handlers/dreams";
 import { promptSlotsRequests } from "./handlers/prompt-slots";
+import { skillsRequests } from "./handlers/skills";
+import { walletStatsRequests } from "./handlers/wallet-stats";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
 type SendFn = (name: string, payload: unknown) => void;
@@ -115,6 +117,8 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...goalsRequests(deps),
 			...dreamsRequests(deps),
 			...promptSlotsRequests(deps),
+			...skillsRequests(deps),
+			...walletStatsRequests(deps),
 		},
 		// View→bun fire-and-forget messages (the webview side of the
 		// schema). logWebview routes console/error forwarding into
