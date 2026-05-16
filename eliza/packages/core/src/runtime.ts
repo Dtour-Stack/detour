@@ -6554,14 +6554,16 @@ ${section_end}`;
 
 		const finalFailureMessage = `dynamicPromptExecFromState failed after ${maxRetries} retries [${modelSchemaKey}]`;
 		const finalFailureSummary = `${metric.successfulAttempts}/${metric.totalAttempts} successful`;
-		if (
-			lastStructuredFailure?.kind === "model_error" &&
-			isTransientModelError(lastStructuredFailure.parseError)
-		) {
-			this.logger.warn(finalFailureMessage, finalFailureSummary);
-		} else {
-			this.logger.error(finalFailureMessage, finalFailureSummary);
-		}
+		// WARN, not ERROR. This function returns `null` on retry-exhaustion;
+		// the caller is responsible for handling that. If a caller can't
+		// recover, IT logs the user-facing error (with context the runtime
+		// doesn't have). Logging ERROR here causes double-counting in error
+		// dashboards and falsely flags schema-validation hiccups (which the
+		// dpe-fallback chain in Detour and similar fallback paths in other
+		// app integrations always rescue) as fatal. Network/rate-limit
+		// failures were already downgraded to WARN above; this generalizes
+		// the same severity to all retry-exhaustion outcomes.
+		this.logger.warn(finalFailureMessage, finalFailureSummary);
 
 		if (optimizationHooks && traceModelId && tracePromptKey) {
 			try {

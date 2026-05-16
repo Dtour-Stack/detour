@@ -6,6 +6,7 @@ import type { RuntimeService } from "../runtime";
 import type { ActivityService } from "../activity";
 import { broadcaster } from "../rpc/registry";
 import { evalRoutes } from "./eval-routes";
+import { getUrlSchemeDispatcher } from "../../features/url-scheme/index";
 import type {
 	BrowserCommand,
 	BrowserCommandInput,
@@ -211,6 +212,8 @@ export class ApiServer {
 			agentHfSync?: import("../agent-hf-sync-service").AgentHfSyncService;
 			localChat?: import("../llama/chat-service").LocalChatService;
 			companion?: import("../llama/companion-service").CompanionService;
+			pensieve?: import("../pensieve").PensieveService;
+			config?: import("../config-service").ConfigService;
 		},
 		/**
 		 * Build the tray snapshot consumed by the Swift tray companion.
@@ -481,6 +484,32 @@ export class ApiServer {
 				);
 			}
 		},
+		// URL-scheme dispatch — in-process equivalent of the open-url event
+		// listener. Swiftun's tray + AppleScript code POSTs `detour://…`
+		// URLs here so they always land in THIS bun process, even while
+		// LaunchServices still has a stale `ai.detour.app` (Electrobun)
+		// registration competing for the scheme. External callers
+		// (Shortcuts.app, raw `open detour://…`) keep going through the
+		// OS-level URL handler. 127.0.0.1 only — same trust model as
+		// /api/local-ai/* and /api/tray-state.
+		async (ctx) => {
+			const { req, path, json, error } = ctx;
+			if (req.method !== "POST" || path !== "/api/url-scheme/dispatch") return null;
+			let body: { url?: string } = {};
+			try {
+				body = (await req.json()) as typeof body;
+			} catch {
+				return error("invalid JSON body", 400);
+			}
+			const url = typeof body.url === "string" ? body.url.trim() : "";
+			if (!url || !url.startsWith("detour:")) {
+				return error("body.url must be a detour:// URL", 400);
+			}
+			const dispatch = getUrlSchemeDispatcher();
+			if (!dispatch) return error("url-scheme feature not initialised", 503);
+			const ok = dispatch(url);
+			return json({ ok });
+		},
 		// Debug: invoke an eliza action by name directly through the built
 		// runtime, bypassing the LLM action selector. Used to validate the
 		// carrot bridge end-to-end (and any other plugin's actions) without
@@ -558,6 +587,12 @@ export class ApiServer {
 						: {}),
 					...(this.selfImprovement?.companion
 						? { companion: this.selfImprovement.companion }
+						: {}),
+					...(this.selfImprovement?.pensieve
+						? { pensieve: this.selfImprovement.pensieve }
+						: {}),
+					...(this.selfImprovement?.config
+						? { config: this.selfImprovement.config }
 						: {}),
 				},
 				{ json, error },

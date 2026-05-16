@@ -59,6 +59,11 @@ import { phantomWalletToolsPlugin } from "../plugins/phantom-wallet-tools/index"
 import { gmgnToolsPlugin } from "../plugins/gmgn-tools/index";
 import { audioGenerationPlugin, audioSettingKeys } from "../plugins/audio-generation/index";
 import { mediaGenerationPlugin, mediaGenerationSettingKeys } from "../plugins/media-generation/index";
+import { localMlxImagePlugin } from "../plugins/local-mlx-image/index";
+import { localMlxSttPlugin } from "../plugins/local-mlx-stt/index";
+import { localMlxTtsPlugin } from "../plugins/local-mlx-tts/index";
+import { localMlxVisionPlugin } from "../plugins/local-mlx-vision/index";
+import { modelRouterPlugin } from "../plugins/model-router/index";
 import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
 import { macAutomatePlugin } from "../plugins/mac-automate/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
@@ -113,6 +118,7 @@ import { makeOwnerBindPlugin } from "./owner-bind";
 import { discordMentionAliasPlugin, installDiscordMentionAliasPatch, installDiscordMessageManagerGuard } from "./discord-mention-alias-plugin";
 import { discordContextPlugin } from "./discord-context-provider";
 import { dpeFallbackPlugin, installDpeFallbackPatch } from "./dpe-fallback-plugin";
+import { installFreeformPlannerPatch } from "./freeform-planner";
 import { getProviderQuotaService } from "./provider-quota-service";
 import { installAnthropicAccountPool } from "./anthropic-account-pool";
 import { runDiscordCatchUp } from "./discord-catchup";
@@ -1004,15 +1010,16 @@ export class RuntimeService {
 		try {
 			await runtime.initialize();
 			installDiscordMentionAliasPatch(runtime);
+			// Install in this exact order: freeform planner FIRST, then
+			// dpe-fallback. Freeform intercepts reply-like schemas and
+			// runs a plain-prompt planner; if it returns null, dpe-
+			// fallback's compact retry + plain-text reply chain takes
+			// over. Reversed order = dpe-fallback never sees the call.
+			installFreeformPlannerPatch(runtime);
 			installDpeFallbackPatch(runtime);
-			if (options.channels) {
-				await this.waitForOwnerBind(runtime);
-				await this.registerChannelPlugins(runtime, channelResolved.plugins);
-				installDiscordMessageManagerGuard(runtime);
-				this.wirePairingCommands(runtime);
-			}
 			await this.provisionRuntime(runtime);
 			if (options.channels) {
+				// Boot-critical chat connection — chat path needs this.
 				this.startTaskServiceTimer(runtime);
 				await runtime.ensureConnection({
 					entityId: USER_ID,
@@ -1023,7 +1030,27 @@ export class RuntimeService {
 					channelId: "chat",
 					type: ChannelType.DM,
 				});
-				this.scheduleDiscordCatchUp(runtime);
+				// Lazy: every external-channel wiring runs in the
+				// background after warm. The agent answers chat turns
+				// immediately; Discord / Telegram / iMessage attach
+				// 200-2000ms later without blocking startup.
+				//
+				// Order matters here too: owner-bind must complete
+				// before channel plugins register (they consult the
+				// bound owner during init), so we await sequentially
+				// but in a detached Task so cold-start isn't gated.
+				void (async () => {
+					try {
+						await this.waitForOwnerBind(runtime);
+						await this.registerChannelPlugins(runtime, channelResolved.plugins);
+						installDiscordMessageManagerGuard(runtime);
+						this.wirePairingCommands(runtime);
+						this.scheduleDiscordCatchUp(runtime);
+						console.log(`[runtime] channel plugins attached (lazy): ${channelResolved.plugins.map((p) => p.name).join(", ") || "(none)"}`);
+					} catch (err) {
+						console.warn("[runtime] lazy channel plugin attach failed:", err instanceof Error ? err.message : err);
+					}
+				})();
 			}
 
 			this.wireOrchestratorBridges(runtime);
@@ -1426,6 +1453,11 @@ export class RuntimeService {
 			gmgnToolsPlugin,
 			audioGenerationPlugin,
 			mediaGenerationPlugin,
+			modelRouterPlugin,    // priority 1000 — enforces user routing pref across all types
+			localMlxImagePlugin,
+			localMlxSttPlugin,
+			localMlxTtsPlugin,
+			localMlxVisionPlugin,
 			desktopControlPlugin,
 			macAutomatePlugin,
 			...(agentOrchestratorPlugin ? [agentOrchestratorPlugin] : []),
@@ -1671,6 +1703,12 @@ export class RuntimeService {
 					delete process.env.CODEX_OAUTH_TOKEN;
 					delete process.env.CODEX_CHATGPT_ACCOUNT_ID;
 				}
+				if (providerId === "anthropic") {
+					// Primary apikey path: ensure the plugin treats this key as
+					// an x-api-key (not OAuth Bearer).
+					process.env.ANTHROPIC_AUTH_MODE = "apikey";
+					delete process.env.ANTHROPIC_OAUTH_TOKEN;
+				}
 			},
 		};
 	}
@@ -1829,8 +1867,23 @@ export class RuntimeService {
 								throw err;
 							}
 						}
-						process.env.ANTHROPIC_API_KEY = access;
-						console.log(`[runtime] using anthropic-subscription account "${account.label}" (id=${account.id})`);
+						// Flip the plugin into OAuth mode. Critical: without this
+						// `ANTHROPIC_AUTH_MODE`, the plugin defaults to "apikey" and
+						// sends our `sk-ant-oat01-*` OAuth token as `x-api-key`,
+						// which Anthropic rejects with 401. With "oauth", the
+						// plugin uses Bearer + the account-pool fetch wrapper.
+						process.env.ANTHROPIC_AUTH_MODE = "oauth";
+						// Keep ANTHROPIC_API_KEY out of the way — the plugin's
+						// `getApiKeyOrPlaceholder` returns "oauth-placeholder"
+						// in oauth mode; we don't want a stale apikey-mode value
+						// from a previous run leaking in.
+						delete process.env.ANTHROPIC_API_KEY;
+						process.env.ANTHROPIC_ACCOUNT_ID = account.id;
+						// Voice the access token through too so any direct env
+						// reader (legacy code paths, sub-agent spawns) still
+						// gets a working token while the plugin uses Bearer.
+						process.env.ANTHROPIC_OAUTH_TOKEN = access;
+						console.log(`[runtime] using anthropic-subscription account "${account.label}" (id=${account.id}); auth_mode=oauth`);
 					},
 				});
 			}
@@ -1851,7 +1904,12 @@ export class RuntimeService {
 					providerId: "anthropic",
 					runtimeProvider: "anthropic",
 					prepare: () => {
+						// Flip back to apikey mode in case a prior attempt left
+						// `ANTHROPIC_AUTH_MODE=oauth` in the env.
+						process.env.ANTHROPIC_AUTH_MODE = "apikey";
+						delete process.env.ANTHROPIC_OAUTH_TOKEN;
 						process.env.ANTHROPIC_API_KEY = key;
+						process.env.ANTHROPIC_ACCOUNT_ID = account.id;
 						console.log(`[runtime] using anthropic-api account "${account.label}" (id=${account.id})`);
 					},
 				});

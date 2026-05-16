@@ -93,3 +93,12 @@ await import("./post-build-settings-bridge");
 // React shell for editing flows we haven't ported yet.
 await import("./post-build-activity-bridge");
 await import("./post-build-pensieve-bridge");
+
+// Compile + embed the remaining surface companions. Today these are
+// thin WKWebView shells pointing at Bun-served React HTML; the
+// SwiftUI interior gets ported incrementally without touching the
+// outer process model.
+await import("./post-build-chat-bridge");
+await import("./post-build-browser-bridge");
+await import("./post-build-gallery-bridge");
+await import("./post-build-workspace-bridge");

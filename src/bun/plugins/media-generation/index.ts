@@ -1,9 +1,11 @@
 import {
 	ContentType,
+	ModelType,
 	type Action,
 	type ActionResult,
 	type HandlerCallback,
 	type IAgentRuntime,
+	type ImageGenerationResult,
 	type Memory,
 	type Plugin,
 	type Provider,
@@ -12,6 +14,7 @@ import {
 } from "@elizaos/core";
 import { randomUUID } from "node:crypto";
 import { saveGeneratedMediaBytes, saveGeneratedMediaUrl } from "../../core/generated-media";
+import { localMlxImageEnabled } from "../local-mlx-image";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const ELIZACLOUD_BASE = "https://www.elizacloud.ai/api/v1";
@@ -414,6 +417,9 @@ async function videoHandler(
 	try {
 		const params = paramsFrom(message, options);
 		const prompt = promptFrom(message, params);
+		// Local video is not supported (removed — MLX-Swift ports don't
+		// exist and the SDXL-stitch experiment was unworkable on 16GB
+		// machines). Cloud is the only video path.
 		const selected = provider ?? defaultVideoProvider(runtime, params);
 		if (selected === "openrouter") {
 			const result = await submitOpenRouterVideo(runtime, params, prompt, callback);
@@ -445,6 +451,43 @@ async function elizaCloudImageHandler(
 	try {
 		const params = paramsFrom(message, options);
 		const prompt = promptFrom(message, params);
+		// When local MLX image gen is active, route through useModel so
+		// the priority resolver picks the local-mlx-image handler
+		// (registered with priority 100). The cloud path below stays as
+		// fallback if local generation throws or is not enabled.
+		if (localMlxImageEnabled(runtime)) {
+			try {
+				const localImages = await runtime.useModel(ModelType.IMAGE, {
+					prompt,
+					size: firstString(params, ["size", "aspectRatio", "aspect_ratio"]) as string | undefined,
+					count: firstNumber(params, ["numImages", "count", "n"]) as number | undefined,
+				}) as ImageGenerationResult[];
+				if (localImages && localImages.length > 0) {
+					const text = localImages.length === 1 ? "Generated image (local MLX)." : `Generated ${localImages.length} images (local MLX).`;
+					await callback?.({
+						text,
+						source: "local-mlx",
+						actions: ["GENERATE_IMAGE"],
+						attachments: localImages.map((image) => ({
+							id: `generated-image-${randomUUID()}`,
+							url: image.url,
+							title: "Local MLX generated image",
+							source: "local-mlx",
+							description: prompt,
+							contentType: ContentType.IMAGE,
+						})),
+					}, "GENERATE_IMAGE");
+					return ok(text, {
+						provider: "local-mlx",
+						images: localImages,
+						imageUrl: localImages[0]?.url,
+					});
+				}
+			} catch (localErr) {
+				const reason = localErr instanceof Error ? localErr.message : String(localErr);
+				await emit(callback, `Local MLX image gen failed (${reason}); falling back to ElizaCloud.`);
+			}
+		}
 		const result = await generateElizaCloudImages(runtime, params, prompt);
 		const text = result.media.length === 1 ? "Generated image." : `Generated ${result.media.length} images.`;
 		await callback?.({
@@ -537,15 +580,18 @@ export const mediaGenerationStatusProvider: Provider = {
 	get: async (runtime: IAgentRuntime, _message: Memory, _state: State): Promise<ProviderResult> => {
 		const elizaCloudConfigured = Boolean(setting(runtime, "ELIZAOS_CLOUD_API_KEY"));
 		const openRouterConfigured = Boolean(setting(runtime, "OPENROUTER_API_KEY"));
+		const localMlxImage = localMlxImageEnabled(runtime);
 		return {
 			text: [
 				"# Media generation status",
+				`Local MLX image: ${localMlxImage ? "ACTIVE (priority 100 — wins over cloud)" : "disabled"}.`,
+				`Video: cloud only (Veo via OpenRouter, Veo3 via ElizaCloud). No local video path.`,
 				`ElizaCloud: ${elizaCloudConfigured ? "configured" : "missing ELIZAOS_CLOUD_API_KEY"}; image + video generation available when configured.`,
 				`OpenRouter: ${openRouterConfigured ? "configured" : "missing OPENROUTER_API_KEY"}; image generation plus async video generation available when configured.`,
 				"Gallery: every generated image, video, and audio file is stored under ~/.detour/generated-media and visible in the Detour Gallery.",
 				"Actions: GENERATE_IMAGE, GENERATE_VIDEO, OPENROUTER_GENERATE_VIDEO, ELIZACLOUD_GENERATE_VIDEO.",
 			].join("\n"),
-			values: { elizaCloudConfigured, openRouterConfigured },
+			values: { elizaCloudConfigured, openRouterConfigured, localMlxImage },
 		};
 	},
 };

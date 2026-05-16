@@ -157,21 +157,35 @@ export async function loadContacts(): Promise<ContactsMap> {
     return map;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    if (/not authorized|1743/.test(reason)) {
-      logger.warn(
-        "[imessage] Contacts access not yet authorized. macOS will prompt " +
-          "the user on the next run. Inbound messages will use raw handles " +
-          "(phone numbers / emails) until Contacts access is granted."
-      );
+    // INFO not WARN, dedup'd. Contacts is optional — the plugin documents
+    // its raw-handle fallback. A persistent WARN on every poll is noise
+    // when the user has chosen not to grant Automation. Surface the same
+    // diagnostic once per process via the module-scope dedup set.
+    const failureKind = /not authorized|1743/.test(reason) ? "not_authorized" : "other";
+    if (!loggedContactsLoadFailures.has(failureKind)) {
+      loggedContactsLoadFailures.add(failureKind);
+      if (failureKind === "not_authorized") {
+        logger.info(
+          "[imessage] Contacts not yet authorized; inbound messages will " +
+            "use raw handles (phone/email). Grant Automation → Contacts in " +
+            "macOS System Settings to enable name resolution."
+        );
+      } else {
+        logger.info(
+          `[imessage] Contacts.app read unavailable (${reason}); using raw handles. Further identical failures log at debug.`
+        );
+      }
     } else {
-      logger.warn(
-        `[imessage] Failed to load Contacts.app data: ${reason}. ` +
-          "Inbound messages will use raw handles instead of names."
-      );
+      logger.debug(`[imessage] Contacts.app still unavailable: ${reason}`);
     }
     return new Map();
   }
 }
+
+// Module-scope dedup: log the Contacts.app load failure once per process,
+// downgrade subsequent attempts to debug. Mirrors the chat.db pattern.
+const loggedContactsLoadFailures = new Set<string>();
+const loggedListAllContactsFailures = new Set<string>();
 
 // ============================================================================
 // Full-contact read + CRUD
@@ -394,9 +408,16 @@ export async function listAllContacts(): Promise<FullContact[]> {
     const stdout = await runContactsScript(FULL_CONTACTS_DUMP_SCRIPT);
     return parseFullContactsOutput(stdout);
   } catch (error) {
-    logger.warn(
-      `[imessage] listAllContacts failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    // Same dedup pattern as loadContacts — first failure as INFO with
+    // hint, subsequent as DEBUG. The function gracefully returns [].
+    const reason = error instanceof Error ? error.message : String(error);
+    const failureKind = /not authorized|1743/.test(reason) ? "not_authorized" : "other";
+    if (!loggedListAllContactsFailures.has(failureKind)) {
+      loggedListAllContactsFailures.add(failureKind);
+      logger.info(`[imessage] listAllContacts unavailable (${failureKind}: ${reason}); returning empty list.`);
+    } else {
+      logger.debug(`[imessage] listAllContacts still unavailable: ${reason}`);
+    }
     return [];
   }
 }

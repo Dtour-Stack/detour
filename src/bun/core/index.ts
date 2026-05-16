@@ -476,6 +476,48 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		const localChatSnap = localChat.status();
 		const companionSnap = companion.status();
 		const memorySnap = arbiter.inspect();
+		// Local MLX image/video — best-effort. The MLX socket may not
+		// be reachable (Swift not running, or hardware not Apple Silicon).
+		// We use connectTimeoutMs=0 so non-Apple-Silicon Macs (or pre-Swift
+		// boot) fast-fail instead of stalling the 4s tray broadcaster.
+		const { mlxRpc } = await import("./mlx-rpc-client");
+		const FAST = 0;
+		const localMlxImage = await (async () => {
+			try {
+				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.image.presets", {}, 2000, FAST)).presets;
+				return { available: true, presets };
+			} catch {
+				return { available: false, presets: [] };
+			}
+		})();
+		// Local video removed — no MLX port, no preset list to fetch.
+		const localMlxStt = await (async () => {
+			try {
+				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.stt.presets", {}, 2000, FAST)).presets;
+				return { available: true, presets };
+			} catch {
+				return { available: false, presets: [] };
+			}
+		})();
+		const localMlxTts = await (async () => {
+			try {
+				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.tts.presets", {}, 2000, FAST)).presets;
+				return { available: true, presets };
+			} catch {
+				return { available: false, presets: [] };
+			}
+		})();
+		const localMlxVision = await (async () => {
+			try {
+				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.vision.presets", {}, 2000, FAST)).presets;
+				return { available: true, presets };
+			} catch {
+				return { available: false, presets: [] };
+			}
+		})();
+		const mlxHealth = await (async () => {
+			try { return await mlxRpc.call("mlx.health", {}, 2000, FAST); } catch { return null; }
+		})();
 		const providers = await vault.listProviders().catch(() => [] as Awaited<ReturnType<typeof vault.listProviders>>);
 		const activeProviderId = providers.find((p) => p.active)?.id ?? null;
 		const trajectoriesResult = await activity.trajectories
@@ -555,6 +597,65 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 				budgetGB: memorySnap.budgetGB,
 				usedGB: memorySnap.usedGB,
 			},
+			localMlxImage: {
+				enabled: process.env.LOCAL_MLX_IMAGE_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_IMAGE_ENABLED === "1",
+				available: localMlxImage.available,
+				preset: process.env.LOCAL_MLX_IMAGE_PRESET ?? null,
+				presets: localMlxImage.presets,
+			},
+			localMlxVideo: {
+				enabled: false,
+				available: false,
+				preset: null,
+				presets: [],
+			},
+			localMlxStt: {
+				enabled: process.env.LOCAL_MLX_STT_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_STT_ENABLED === "1",
+				available: localMlxStt.available,
+				preset: process.env.LOCAL_MLX_STT_PRESET ?? null,
+				presets: localMlxStt.presets,
+			},
+			localMlxTts: {
+				enabled: process.env.LOCAL_MLX_TTS_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_TTS_ENABLED === "1",
+				available: localMlxTts.available,
+				preset: process.env.LOCAL_MLX_TTS_PRESET ?? null,
+				presets: localMlxTts.presets,
+			},
+			localMlxVision: {
+				enabled: process.env.LOCAL_MLX_VISION_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_VISION_ENABLED === "1",
+				available: localMlxVision.available,
+				preset: process.env.LOCAL_MLX_VISION_PRESET ?? null,
+				presets: localMlxVision.presets,
+			},
+			mlxHealth,
+			modelRouting: await (async () => {
+				const { ROUTING_CATALOG, ROUTED_TYPE_LABELS, getProviderFor } = await import("./model-routing");
+				const cloudConfigured = new Set<string>(
+					providers.filter((p) => p.hasKey || (p.oauthAccountCount ?? 0) > 0).map((p) => p.id)
+				);
+				const localAvailable = new Set<string>([
+					...(localMlxImage.available ? ["local-mlx-image"] : []),
+					...(localMlxStt.available ? ["local-mlx-stt"] : []),
+					...(localMlxTts.available ? ["local-mlx-tts"] : []),
+					...(localMlxVision.available ? ["local-mlx-vision"] : []),
+				]);
+				return ROUTING_CATALOG.map((entry) => {
+					const explicit = getProviderFor(null, entry.type);
+					return {
+						type: entry.type,
+						label: ROUTED_TYPE_LABELS[entry.type],
+						selected: explicit ?? "",
+						options: entry.options.map((opt) => ({
+							id: opt.id,
+							label: opt.label,
+							kind: opt.kind,
+							available: opt.kind === "local"
+								? localAvailable.has(opt.id)
+								: cloudConfigured.has(opt.id),
+						})),
+					};
+				});
+			})(),
 			recentTrajectories: trajectoriesResult.trajectories.slice(0, 5).map((t) => ({
 				id: t.id,
 				...(t.source !== undefined ? { source: t.source } : {}),
@@ -568,12 +669,26 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const api = new ApiServer(
 		runtime,
 		activity,
-		{ dream, improvement, agentHfSync, localChat, companion },
+		{ dream, improvement, agentHfSync, localChat, companion, pensieve, config },
 		buildTraySnapshot,
 	);
 	const { port } = await api.start(opts.port ?? 2138);
 
 	console.log(`[core] api listening on http://127.0.0.1:${port}`);
+
+	// 2026 perf: typed RPC over Unix domain socket. Coexists with the
+	// HTTP server above during migration. Per-call latency ~80µs vs
+	// ~1ms for the HTTP loopback. Swift launcher uses this; legacy
+	// HTTP callers (external curl, eval drivers) keep working unchanged.
+	const { startRpcSocket, buildAgentMethods, startTrayBroadcaster } = await import("./rpc-socket");
+	const rpcMethods = buildAgentMethods({
+		runtime, activity, pensieve, config, vault, inbox,
+		trayStateBuilder: buildTraySnapshot,
+	});
+	const rpcSocket = startRpcSocket(rpcMethods);
+	// Push-based tray-state: bun polls every 4s, diffs, only emits
+	// when the snapshot changes. Clients drop their HTTP polling.
+	const stopTrayBroadcaster = startTrayBroadcaster(buildTraySnapshot);
 
 	// Per-project static-file preview server registry. Hands out
 	// stable `<slug>.localhost:<portlessPort>` URLs for static + carrot
@@ -619,6 +734,8 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			activity.stop();
 			pensieve.stop();
 			cron.stop();
+			stopTrayBroadcaster();
+			rpcSocket.stop();
 			api.stop();
 			llama.stop();
 			carrotManager.stopAll();

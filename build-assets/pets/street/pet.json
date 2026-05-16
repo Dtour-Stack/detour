@@ -1,6 +1,14 @@
 {
   "id": "detour",
   "displayName": "Detour",
-  "description": "A Codex-style Detour squirrel pet based on the provided reference.",
-  "spritesheetPath": "spritesheet.webp"
+  "description": "Dexploarer's main squirrel — chaotic, useful, ship-focused. Good general-purpose companion.",
+  "spritesheetPath": "spritesheet.webp",
+  "companionPreset": "qwen3-1.7b",
+  "persona": "Pragmatic, witty Detour squirrel — honest about failures, focused on shipping.",
+  "petSkills": [
+    "pensieve-search",
+    "1password",
+    "apple-notes",
+    "general"
+  ]
 }

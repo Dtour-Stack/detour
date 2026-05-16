@@ -392,6 +392,7 @@ interface BunStatement {
 }
 
 interface ChatDbDiagnosticsLogger {
+  info(message: string): void;
   warn(message: string): void;
   debug(message: string): void;
 }
@@ -531,12 +532,15 @@ export async function openChatDb(
     const failureKey = `${dbPath}\0${reason}`;
     if (!loggedChatDbOpenFailures.has(failureKey)) {
       loggedChatDbOpenFailures.add(failureKey);
-      diagnosticsLogger.warn(
-        `[imessage] Failed to open chat.db at ${dbPath}: ${reason}. ` +
-          "Ensure the path is correct and the host process has Full Disk Access " +
-          "(macOS → System Settings → Privacy & Security → Full Disk Access). " +
-          `Open it directly with ${MACOS_FULL_DISK_ACCESS_SETTINGS_URL}. ` +
-          "Plugin will continue in send-only mode. Further identical startup failures will log at debug."
+      // INFO not WARN: send-only mode is the documented graceful-degradation
+      // path. The user may have intentionally not granted FDA (chat.db is
+      // optional — outbound iMessage works regardless). A WARN/ERROR makes
+      // it look like a regression in a routine "permission not granted" case.
+      diagnosticsLogger.info(
+        `[imessage] chat.db unreadable at ${dbPath}: ${reason}. ` +
+          "Inbound iMessage polling disabled; outbound send still works. " +
+          "To enable inbound: grant Full Disk Access in macOS System Settings " +
+          `(${MACOS_FULL_DISK_ACCESS_SETTINGS_URL}).`
       );
     } else {
       diagnosticsLogger.debug(

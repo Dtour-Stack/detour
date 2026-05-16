@@ -94,6 +94,10 @@ const BUNDLED_COMPANIONS: Record<string, string> = {
 	settings: "DetourSettings.app",
 	activity: "DetourActivity.app",
 	pensieve: "DetourPensieve.app",
+	chat: "DetourChat.app",
+	browser: "DetourBrowser.app",
+	gallery: "DetourGallery.app",
+	workspace: "DetourWorkspace.app",
 };
 
 function findBundledCompanion(target: string): string | null {
@@ -185,38 +189,59 @@ function asBool(value: string | null | undefined): boolean {
 	return ["1", "true", "yes", "on"].includes(lower);
 }
 
+/**
+ * Global dispatcher registered at feature init. The API server's
+ * `POST /api/url-scheme/dispatch` route reads this so the Swift tray
+ * + AppleScript can dispatch detour:// URLs straight into the running
+ * bun without bouncing through LaunchServices (which may resolve the
+ * scheme to a stale Electrobun bundle while we're mid-cutover).
+ *
+ * Self-dispatched URLs (Swiftun → Swiftun's bun) avoid the dual-
+ * registration race entirely. External callers (Shortcuts.app, raw
+ * `open detour://…` from terminal) still come in via the OS-level
+ * URL handler.
+ */
+type UrlSchemeDispatcher = (rawUrl: string) => boolean;
+const DISPATCHER_KEY = Symbol.for("detour.url-scheme.dispatch");
+type DispatcherHost = { [DISPATCHER_KEY]?: UrlSchemeDispatcher };
+
+export function getUrlSchemeDispatcher(): UrlSchemeDispatcher | null {
+	const host = globalThis as unknown as DispatcherHost;
+	return host[DISPATCHER_KEY] ?? null;
+}
+
 export const urlSchemeFeature: Feature = {
 	id: "url-scheme",
 	init(deps) {
-		// Register the embedded AppleScript bridge with LaunchServices
-		// so `tell application id "ai.detour.bridge" to ...` works
-		// without manual setup. Idempotent — re-runs on every Detour
-		// launch but only does I/O on first install / bundle move.
 		try {
 			registerBridgeWithLaunchServices();
 		} catch (err) {
 			console.warn("[url-scheme] bridge registration failed:", err);
 		}
-		Electrobun.events.on("open-url", (e: { data: { url: string } }) => {
-			const raw = e?.data?.url ?? "";
-			if (!raw.startsWith("detour:")) return;
+		const dispatch: UrlSchemeDispatcher = (raw: string): boolean => {
+			if (!raw.startsWith("detour:")) return false;
 			const url = parseUrl(raw);
 			if (!url) {
 				console.warn(`[url-scheme] could not parse: ${raw}`);
-				return;
+				return false;
 			}
-			// URL.host carries the route name (`detour://chat?...`),
-			// not the path. `detour://pensieve/search?q=x` would split
-			// host=pensieve + pathname=/search.
 			const route = (url.host || "").toLowerCase();
 			const sub = url.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
 			const params = url.searchParams;
-			console.log(`[url-scheme] route=${route} sub=${sub} params=${params}`);
 			try {
 				handleRoute(route, sub, params, deps);
+				return true;
 			} catch (err) {
 				console.warn("[url-scheme] handler failed:", err);
+				return false;
 			}
+		};
+		(globalThis as unknown as DispatcherHost)[DISPATCHER_KEY] = dispatch;
+		Electrobun.events.on("open-url", (e: { data: { url: string } }) => {
+			const raw = e?.data?.url ?? "";
+			if (!raw.startsWith("detour:")) return;
+			console.log(`[url-scheme] external open-url: ${raw}`);
+			dispatch(raw);
 		});
 	},
 };
