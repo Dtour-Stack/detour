@@ -375,7 +375,7 @@ async function applyCompanionPrePlannerPass(
 	if (!frame && !compressed) return args;
 
 	const prevState = args.state;
-	const nextValues: Record<string, unknown> = { ...(prevState?.values ?? {}) };
+	const nextValues: Record<string, unknown> = { ...prevState?.values };
 	if (frame) nextValues.detourCompanionFrame = frame;
 	if (compressed) {
 		nextValues.recentMessagesOriginal = recent;

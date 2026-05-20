@@ -732,72 +732,60 @@ export async function openChatDb(
     chat_style: number | null;
   };
 
-  function materializeMessages(rows: RawMessageRow[]): ChatDbMessage[] {
-    const out: ChatDbMessage[] = [];
-    let undecodable = 0;
+  function messageText(row: RawMessageRow): { text: string; undecodable: boolean } {
+    if (row.text && row.text.length > 0) return { text: row.text, undecodable: false };
+    if (!row.attributed_body) return { text: "", undecodable: false };
+    const decoded = decodeAttributedBody(row.attributed_body);
+    return decoded == null
+      ? { text: "", undecodable: true }
+      : { text: decoded, undecodable: false };
+  }
 
-    for (const row of rows) {
-      // Resolve the visible text: prefer the plain `text` column, fall
-      // back to decoding `attributedBody`, then empty string.
-      let text = "";
-      if (row.text && row.text.length > 0) {
-        text = row.text;
-      } else if (row.attributed_body) {
-        const decoded = decodeAttributedBody(row.attributed_body);
-        if (decoded != null) {
-          text = decoded;
-        } else {
-          undecodable++;
-        }
-      }
+  function messageKind(row: RawMessageRow): { kind: ChatDbMessage["kind"]; reaction: ChatDbReaction | null } {
+    const assocType = row.associated_message_type ?? 0;
+    if (assocType >= 2000 && assocType < 4000) {
+      return { kind: "reaction", reaction: parseReaction(row) };
+    }
+    if (row.item_type != null && row.item_type !== 0) {
+      return { kind: "system", reaction: null };
+    }
+    return { kind: "text", reaction: null };
+  }
 
-      // Classify the row. Reactions get their own kind + a parsed
-      // reaction payload; system messages (group add/remove/rename)
-      // surface as `"system"` so the caller can log or ignore.
-      const assocType = row.associated_message_type ?? 0;
-      let kind: ChatDbMessage["kind"] = "text";
-      let reaction: ChatDbReaction | null = null;
-      if (assocType >= 2000 && assocType < 4000) {
-        kind = "reaction";
-        reaction = parseReaction(row);
-      } else if (row.item_type != null && row.item_type !== 0) {
-        kind = "system";
-      }
+  function messageAttachments(row: RawMessageRow): ChatDbAttachment[] {
+    if (row.cache_has_attachments !== 1) return [];
+    try {
+      const attRows = attachmentsStmt.all(row.row_id) as Array<{
+        guid: string;
+        transfer_name: string | null;
+        filename: string | null;
+        mime_type: string | null;
+        uti: string | null;
+        total_bytes: number | null;
+        is_sticker: number | null;
+      }>;
+      return attRows.map((a) => ({
+        guid: a.guid,
+        filename: a.transfer_name ?? a.filename ?? null,
+        uti: a.uti,
+        mimeType: a.mime_type,
+        totalBytes: a.total_bytes,
+        isSticker: a.is_sticker === 1,
+      }));
+    } catch (error) {
+      logger.debug(
+        `[imessage] attachment query failed for rowid=${row.row_id}: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return [];
+    }
+  }
 
-      // Attachments — only fetched when the cache bit indicates any.
-      let attachments: ChatDbAttachment[] = [];
-      if (row.cache_has_attachments === 1) {
-        try {
-          const attRows = attachmentsStmt.all(row.row_id) as Array<{
-            guid: string;
-            transfer_name: string | null;
-            filename: string | null;
-            mime_type: string | null;
-            uti: string | null;
-            total_bytes: number | null;
-            is_sticker: number | null;
-          }>;
-          attachments = attRows.map((a) => ({
-            guid: a.guid,
-            filename: a.transfer_name ?? a.filename ?? null,
-            uti: a.uti,
-            mimeType: a.mime_type,
-            totalBytes: a.total_bytes,
-            isSticker: a.is_sticker === 1,
-          }));
-        } catch (error) {
-          logger.debug(
-            `[imessage] attachment query failed for rowid=${row.row_id}: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-
-      // Service resolution: prefer the message row's own service field,
-      // fall back to the handle's service (stable across messages from
-      // the same sender), else unknown.
-      const service = row.message_service ?? row.handle_service ?? null;
-
-      out.push({
+  function materializeMessage(row: RawMessageRow): { message: ChatDbMessage; undecodable: boolean } {
+    const { text, undecodable } = messageText(row);
+    const { kind, reaction } = messageKind(row);
+    return {
+      undecodable,
+      message: {
         rowId: row.row_id,
         guid: row.guid,
         text,
@@ -808,7 +796,7 @@ export async function openChatDb(
         displayName: row.display_name,
         timestamp: appleDateToJsMs(row.apple_date),
         isFromMe: row.is_from_me === 1,
-        service,
+        service: row.message_service ?? row.handle_service ?? null,
         isSent: row.is_sent === 1,
         isDelivered: row.is_delivered === 1,
         isRead: row.is_read === 1,
@@ -817,10 +805,19 @@ export async function openChatDb(
         dateRetracted: appleDateToJsMs(row.apple_date_retracted ?? 0),
         replyToGuid: row.reply_to_guid,
         reaction,
-        attachments,
-      });
-    }
+        attachments: messageAttachments(row),
+      },
+    };
+  }
 
+  function materializeMessages(rows: RawMessageRow[]): ChatDbMessage[] {
+    const out: ChatDbMessage[] = [];
+    let undecodable = 0;
+    for (const row of rows) {
+      const result = materializeMessage(row);
+      if (result.undecodable) undecodable++;
+      out.push(result.message);
+    }
     if (undecodable > 0) {
       logger.debug(
         `[imessage] chat.db poll: ${undecodable} row(s) had attributedBody that could not be decoded; their text is empty`

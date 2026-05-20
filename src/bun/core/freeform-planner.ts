@@ -214,59 +214,57 @@ export function parseFreeformResponse(raw: string, validActionNames: Set<string>
 	let text = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 	text = text.replace(/^```[a-z]*\s*/i, "").replace(/\s*```$/i, "");
 	const actionsMatch = text.match(/^\s*ACTIONS:\s*(.+?)(?:\r?\n|$)/im);
-	// PARAMS captures a JSON object, possibly spanning multiple lines.
-	// We greedy-match until the next labeled line or end of input.
 	const paramsMatch = text.match(/^\s*PARAMS:\s*([\s\S]+?)(?=^\s*(?:ACTIONS|REPLY|THOUGHT):|\s*$)/im);
 	const replyMatch = text.match(/^\s*REPLY:\s*([\s\S]+?)(?=^\s*(?:ACTIONS|PARAMS|THOUGHT):|\s*$)/im);
 	const thoughtMatch = text.match(/^\s*THOUGHT:\s*(.+?)(?:\r?\n|$)/im);
 
-	let actions: string[] = [];
-	if (actionsMatch?.[1]) {
-		actions = actionsMatch[1]
-			.split(/[,;]/)
-			.map((s) => s.trim().toUpperCase().replace(/^["'`]+|["'`]+$/g, ""))
-			.filter((s) => s.length > 0 && validActionNames.has(s));
-	}
-	if (actions.length === 0) actions = ["REPLY"];
-
-	let reply = replyMatch?.[1]?.trim() ?? "";
-	if (!reply) {
-		const lines = text.split("\n");
-		const replyLines = lines.filter((l) => !/^\s*(ACTIONS|PARAMS|THOUGHT):/i.test(l));
-		reply = replyLines.join("\n").trim();
-	}
-	reply = reply.replace(/^["'`]+|["'`]+$/g, "").trim();
-
+	const actions = parsePlannerActions(actionsMatch?.[1], validActionNames);
+	const reply = parsePlannerReply(text, replyMatch?.[1]);
 	const thought = thoughtMatch?.[1]?.trim() ?? "Free-form planner";
-
-	// Parse PARAMS JSON. Tolerant: trims, strips trailing commas, and
-	// upper-cases keys to match action name normalization downstream.
-	let params: Record<string, Record<string, unknown>> = {};
-	const paramsRaw = paramsMatch?.[1]?.trim() ?? "";
-	if (paramsRaw && paramsRaw !== "{}") {
-		// Some models emit ```json wrappers even after we asked them not to.
-		const cleaned = paramsRaw
-			.replace(/^```(?:json)?\s*/i, "")
-			.replace(/\s*```$/i, "")
-			.replace(/,\s*([}\]])/g, "$1"); // trailing commas
-		try {
-			const parsed = JSON.parse(cleaned);
-			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-				for (const [k, v] of Object.entries(parsed)) {
-					if (v && typeof v === "object" && !Array.isArray(v)) {
-						params[k.toUpperCase()] = v as Record<string, unknown>;
-					}
-				}
-			}
-		} catch {
-			// Best-effort: fall back to empty params; the action handler
-			// will fail validation if its params are required, which is
-			// better than blocking dispatch entirely.
-		}
-	}
+	const params = parsePlannerParams(paramsMatch?.[1]);
 
 	if (!reply && actions.length === 0) return null;
 	return { actions, reply, thought, params };
+}
+
+function parsePlannerActions(raw: string | undefined, validActionNames: Set<string>): string[] {
+	const actions = raw
+		? raw
+				.split(/[,;]/)
+				.map((s) => s.trim().toUpperCase().replace(/^["'`]+|["'`]+$/g, ""))
+				.filter((s) => s.length > 0 && validActionNames.has(s))
+		: [];
+	return actions.length > 0 ? actions : ["REPLY"];
+}
+
+function parsePlannerReply(text: string, raw: string | undefined): string {
+	const reply = raw?.trim() || text
+		.split("\n")
+		.filter((line) => !/^\s*(ACTIONS|PARAMS|THOUGHT):/i.test(line))
+		.join("\n")
+		.trim();
+	return reply.replace(/^["'`]+|["'`]+$/g, "").trim();
+}
+
+function parsePlannerParams(raw: string | undefined): Record<string, Record<string, unknown>> {
+	const params: Record<string, Record<string, unknown>> = {};
+	const paramsRaw = raw?.trim() ?? "";
+	if (!paramsRaw || paramsRaw === "{}") return params;
+	const cleaned = paramsRaw
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```$/i, "")
+		.replace(/,\s*([}\]])/g, "$1");
+	try {
+		const parsed = JSON.parse(cleaned);
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			for (const [k, v] of Object.entries(parsed)) {
+				if (v && typeof v === "object" && !Array.isArray(v)) {
+					params[k.toUpperCase()] = v as Record<string, unknown>;
+				}
+			}
+		}
+	} catch {}
+	return params;
 }
 
 /// Pull `actionResults` from the planner state. Set by eliza's

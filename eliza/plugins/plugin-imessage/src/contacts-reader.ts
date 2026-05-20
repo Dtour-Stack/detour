@@ -500,55 +500,9 @@ export interface ContactPatch {
 
 export async function updateContact(personId: string, patch: ContactPatch): Promise<boolean> {
   const id = escapeAppleScriptString(personId);
-  const fragments: string[] = [];
-
-  if (patch.firstName !== undefined) {
-    fragments.push(`set first name of thePerson to "${escapeAppleScriptString(patch.firstName)}"`);
-  }
-  if (patch.lastName !== undefined) {
-    fragments.push(`set last name of thePerson to "${escapeAppleScriptString(patch.lastName)}"`);
-  }
-
-  for (const phone of patch.addPhones ?? []) {
-    if (!phone.value) continue;
-    fragments.push(
-      `tell thePerson to make new phone at end of phones with properties {value:"${escapeAppleScriptString(phone.value)}", label:"${escapeAppleScriptString(phone.label ?? "mobile")}"}`
-    );
-  }
-  for (const phoneValue of patch.removePhones ?? []) {
-    if (!phoneValue) continue;
-    fragments.push(`
-    tell thePerson
-      repeat with ph in phones
-        if (value of ph) is "${escapeAppleScriptString(phoneValue)}" then
-          delete ph
-          exit repeat
-        end if
-      end repeat
-    end tell`);
-  }
-
-  for (const email of patch.addEmails ?? []) {
-    if (!email.value) continue;
-    fragments.push(
-      `tell thePerson to make new email at end of emails with properties {value:"${escapeAppleScriptString(email.value)}", label:"${escapeAppleScriptString(email.label ?? "home")}"}`
-    );
-  }
-  for (const emailValue of patch.removeEmails ?? []) {
-    if (!emailValue) continue;
-    fragments.push(`
-    tell thePerson
-      repeat with em in emails
-        if (value of em) is "${escapeAppleScriptString(emailValue)}" then
-          delete em
-          exit repeat
-        end if
-      end repeat
-    end tell`);
-  }
+  const fragments = contactPatchFragments(patch);
 
   if (fragments.length === 0) {
-    // Nothing to do — treat as a successful no-op.
     return true;
   }
 
@@ -572,6 +526,61 @@ end tell
     );
     return false;
   }
+}
+
+function contactPatchFragments(patch: ContactPatch): string[] {
+  return [
+    ...namePatchFragments(patch),
+    ...phonePatchFragments(patch),
+    ...emailPatchFragments(patch),
+  ];
+}
+
+function namePatchFragments(patch: ContactPatch): string[] {
+  const fragments: string[] = [];
+  if (patch.firstName !== undefined) {
+    fragments.push(`set first name of thePerson to "${escapeAppleScriptString(patch.firstName)}"`);
+  }
+  if (patch.lastName !== undefined) {
+    fragments.push(`set last name of thePerson to "${escapeAppleScriptString(patch.lastName)}"`);
+  }
+  return fragments;
+}
+
+function phonePatchFragments(patch: ContactPatch): string[] {
+  const fragments = (patch.addPhones ?? [])
+    .filter((phone) => phone.value)
+    .map((phone) =>
+      `tell thePerson to make new phone at end of phones with properties {value:"${escapeAppleScriptString(phone.value)}", label:"${escapeAppleScriptString(phone.label ?? "mobile")}"}`
+    );
+  for (const phoneValue of patch.removePhones ?? []) {
+    if (phoneValue) fragments.push(removePropertyFragment("phones", "ph", phoneValue));
+  }
+  return fragments;
+}
+
+function emailPatchFragments(patch: ContactPatch): string[] {
+  const fragments = (patch.addEmails ?? [])
+    .filter((email) => email.value)
+    .map((email) =>
+      `tell thePerson to make new email at end of emails with properties {value:"${escapeAppleScriptString(email.value)}", label:"${escapeAppleScriptString(email.label ?? "home")}"}`
+    );
+  for (const emailValue of patch.removeEmails ?? []) {
+    if (emailValue) fragments.push(removePropertyFragment("emails", "em", emailValue));
+  }
+  return fragments;
+}
+
+function removePropertyFragment(collection: "phones" | "emails", variableName: "ph" | "em", value: string): string {
+  return `
+    tell thePerson
+      repeat with ${variableName} in ${collection}
+        if (value of ${variableName}) is "${escapeAppleScriptString(value)}" then
+          delete ${variableName}
+          exit repeat
+        end if
+      end repeat
+    end tell`;
 }
 
 /**

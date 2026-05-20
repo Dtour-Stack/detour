@@ -213,8 +213,25 @@ const evalRouteHandlers: EvalRouteHandler[] = [
 	handleCompanionEvalRoutes,
 ];
 
+async function firstRoute(ctx: EvalRequestContext, handlers: readonly EvalRouteHandler[]): Promise<Response | null> {
+	for (const handler of handlers) {
+		const response = await handler(ctx);
+		if (response) return response;
+	}
+	return null;
+}
+
 async function handleCoreEvalRoutes(ctx: EvalRequestContext): Promise<Response | null> {
-	const { deps, req, url, path, json, error } = ctx;
+	return firstRoute(ctx, [
+		handleHealthRoute,
+		handleSendRoute,
+		handleTrajectoryRoute,
+		handleTrajectoriesRoute,
+	]);
+}
+
+async function handleHealthRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json } = ctx;
 
 	if (req.method === "GET" && path === "/api/eval/health") {
 		const peek = deps.runtime.peek();
@@ -222,10 +239,15 @@ async function handleCoreEvalRoutes(ctx: EvalRequestContext): Promise<Response |
 			ok: true,
 			runtimeBuilt: peek !== null,
 			activeProvider: deps.runtime.getCurrentProvider(),
-			agentName:
-				typeof peek?.character?.name === "string" ? peek.character.name : null,
+			agentName: typeof peek?.character?.name === "string" ? peek.character.name : null,
 		});
 	}
+
+	return null;
+}
+
+async function handleSendRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/send") {
 		let body: SendBody = {};
@@ -258,6 +280,12 @@ async function handleCoreEvalRoutes(ctx: EvalRequestContext): Promise<Response |
 		}
 	}
 
+	return null;
+}
+
+async function handleTrajectoryRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+
 	if (req.method === "GET" && path.startsWith("/api/eval/trajectory/")) {
 		const tail = path.slice("/api/eval/trajectory/".length);
 		const [id, sub] = tail.split("/");
@@ -268,6 +296,12 @@ async function handleCoreEvalRoutes(ctx: EvalRequestContext): Promise<Response |
 		if (!sub) return json({ ok: true, detail });
 		return error("unknown trajectory subresource", 404);
 	}
+
+	return null;
+}
+
+async function handleTrajectoriesRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, url, path, json } = ctx;
 
 	if (req.method === "GET" && path === "/api/eval/trajectories") {
 		const limit = asNumber(url.searchParams.get("limit"), 20);
@@ -420,19 +454,48 @@ async function handleActionEvalRoutes(ctx: EvalRequestContext): Promise<Response
 }
 
 async function handleRuntimeSettingsRoutes(ctx: EvalRequestContext): Promise<Response | null> {
-	const { deps, req, path, json, error } = ctx;
+	return firstRoute(ctx, [
+		handleSettingsWriteRoute,
+		handleActivePetRoute,
+		handlePlannerTierGetRoute,
+		handlePlannerTierPostRoute,
+		handleModelsGetRoute,
+		handleModelsPostRoute,
+	]);
+}
+
+async function handleSettingsWriteRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { req, path } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/settings") {
 		return handleSettingsWrite(ctx);
 	}
 
+	return null;
+}
+
+async function handleActivePetRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { req, path } = ctx;
+
 	if (req.method === "POST" && path === "/api/eval/active-pet") {
 		return handleActivePet(ctx);
 	}
 
+	return null;
+}
+
+async function handlePlannerTierGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { req, path, json } = ctx;
+
 	if (req.method === "GET" && path === "/api/eval/planner-tier") {
 		return json({ ok: true, tier: process.env.DETOUR_PLANNER_TIER ?? "" });
 	}
+
+	return null;
+}
+
+async function handlePlannerTierPostRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/planner-tier") {
 		let body: { tier?: string } = {};
@@ -445,11 +508,23 @@ async function handleRuntimeSettingsRoutes(ctx: EvalRequestContext): Promise<Res
 		return json({ ok: true, tier: process.env.DETOUR_PLANNER_TIER ?? "" });
 	}
 
+	return null;
+}
+
+async function handleModelsGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+
 	if (req.method === "GET" && path === "/api/eval/models") {
 		if (!deps.config) return error("config service not wired", 503);
 		const models = await deps.config.getModels();
 		return json({ ok: true, models });
 	}
+
+	return null;
+}
+
+async function handleModelsPostRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/models") {
 		if (!deps.config) return error("config service not wired", 503);
@@ -527,6 +602,14 @@ async function handleActivePet(ctx: EvalRequestContext): Promise<Response> {
 }
 
 async function handleCharacterEvalRoutes(ctx: EvalRequestContext): Promise<Response | null> {
+	return firstRoute(ctx, [
+		handleCharacterGetRoute,
+		handleCharacterPostRoute,
+		handleCharacterGenerateRoute,
+	]);
+}
+
+async function handleCharacterGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
 	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "GET" && path === "/api/eval/character") {
@@ -535,6 +618,12 @@ async function handleCharacterEvalRoutes(ctx: EvalRequestContext): Promise<Respo
 		return json({ ok: true, character });
 	}
 
+	return null;
+}
+
+async function handleCharacterPostRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+
 	if (req.method === "POST" && path === "/api/eval/character") {
 		if (!deps.config) return error("config service not wired", 503);
 		let body: unknown;
@@ -542,6 +631,12 @@ async function handleCharacterEvalRoutes(ctx: EvalRequestContext): Promise<Respo
 		const character = await deps.config.setCharacter(body as never);
 		return json({ ok: true, character });
 	}
+
+	return null;
+}
+
+async function handleCharacterGenerateRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method !== "POST" || path !== "/api/eval/character/generate") return null;
 
@@ -648,6 +743,15 @@ async function handleLogsAndEventsRoutes(ctx: EvalRequestContext): Promise<Respo
 }
 
 async function handleDreamEvalRoutes(ctx: EvalRequestContext): Promise<Response | null> {
+	return firstRoute(ctx, [
+		handleDreamsGetRoute,
+		handleDreamRunRoute,
+		handleDreamApplyRoute,
+		handleDreamRejectRoute,
+	]);
+}
+
+async function handleDreamsGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
 	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "GET" && path === "/api/eval/dreams") {
@@ -655,6 +759,12 @@ async function handleDreamEvalRoutes(ctx: EvalRequestContext): Promise<Response 
 		const snapshot = await deps.dream.snapshot();
 		return json({ ok: true, ...snapshot });
 	}
+
+	return null;
+}
+
+async function handleDreamRunRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/dreams/run") {
 		if (!deps.dream) return error("dream service not wired", 503);
@@ -670,6 +780,12 @@ async function handleDreamEvalRoutes(ctx: EvalRequestContext): Promise<Response 
 		});
 	}
 
+	return null;
+}
+
+async function handleDreamApplyRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+
 	if (req.method === "POST" && path.startsWith("/api/eval/dreams/apply/")) {
 		if (!deps.dream) return error("dream service not wired", 503);
 		const id = path.slice("/api/eval/dreams/apply/".length);
@@ -677,6 +793,12 @@ async function handleDreamEvalRoutes(ctx: EvalRequestContext): Promise<Response 
 		const result = await deps.dream.apply(id);
 		return json({ ok: true, ...result });
 	}
+
+	return null;
+}
+
+async function handleDreamRejectRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path.startsWith("/api/eval/dreams/reject/")) {
 		if (!deps.dream) return error("dream service not wired", 503);
@@ -690,6 +812,14 @@ async function handleDreamEvalRoutes(ctx: EvalRequestContext): Promise<Response 
 }
 
 async function handleHfSyncEvalRoutes(ctx: EvalRequestContext): Promise<Response | null> {
+	return firstRoute(ctx, [
+		handleHfSyncGetRoute,
+		handleHfSyncRunRoute,
+		handleHfSyncCheckRoute,
+	]);
+}
+
+async function handleHfSyncGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
 	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "GET" && path === "/api/eval/hf-sync") {
@@ -697,6 +827,12 @@ async function handleHfSyncEvalRoutes(ctx: EvalRequestContext): Promise<Response
 		const status = await deps.agentHfSync.status();
 		return json({ ok: true, ...status });
 	}
+
+	return null;
+}
+
+async function handleHfSyncRunRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/hf-sync/run") {
 		if (!deps.agentHfSync) return error("hf-sync service not wired", 503);
@@ -721,6 +857,12 @@ async function handleHfSyncEvalRoutes(ctx: EvalRequestContext): Promise<Response
 		}
 	}
 
+	return null;
+}
+
+async function handleHfSyncCheckRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+
 	if (req.method === "POST" && path === "/api/eval/hf-sync/check") {
 		if (!deps.agentHfSync) return error("hf-sync service not wired", 503);
 		try {
@@ -735,12 +877,26 @@ async function handleHfSyncEvalRoutes(ctx: EvalRequestContext): Promise<Response
 }
 
 async function handleLocalChatEvalRoutes(ctx: EvalRequestContext): Promise<Response | null> {
+	return firstRoute(ctx, [
+		handleLocalChatGetRoute,
+		handleLocalChatStartRoute,
+		handleLocalChatStopRoute,
+	]);
+}
+
+async function handleLocalChatGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
 	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "GET" && path === "/api/eval/local-chat") {
 		if (!deps.localChat) return error("local-chat service not wired", 503);
 		return json({ ok: true, ...deps.localChat.status() });
 	}
+
+	return null;
+}
+
+async function handleLocalChatStartRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/local-chat/start") {
 		if (!deps.localChat) return error("local-chat service not wired", 503);
@@ -765,6 +921,12 @@ async function handleLocalChatEvalRoutes(ctx: EvalRequestContext): Promise<Respo
 			return error(err instanceof Error ? err.message : String(err), 500);
 		}
 	}
+
+	return null;
+}
+
+async function handleLocalChatStopRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
 
 	if (req.method === "POST" && path === "/api/eval/local-chat/stop") {
 		if (!deps.localChat) return error("local-chat service not wired", 503);

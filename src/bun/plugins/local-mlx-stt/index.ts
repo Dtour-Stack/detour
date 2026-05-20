@@ -48,47 +48,47 @@ export function localMlxSttEnabled(runtime: IAgentRuntime): boolean {
 /// Best-effort coerce TranscriptionParams' audioUrl into base64.
 /// eliza's TRANSCRIPTION model takes `{ audioUrl: string }` or `Buffer`
 /// or `string` (raw base64). We normalise to base64 here.
-async function loadAudioBase64(input: TranscriptionParams | Buffer | string): Promise<{ base64: string; mime?: string }> {
-	if (Buffer.isBuffer(input)) {
-		return { base64: input.toString("base64"), mime: "audio/wav" };
-	}
-	if (typeof input === "string") {
-		// Could be a data URL, a path, or raw base64.
-		if (input.startsWith("data:")) {
-			const m = input.match(/^data:([^;]+);base64,(.+)$/);
-			if (!m) throw new Error("invalid data URL");
-			return { base64: m[2], mime: m[1] };
-		}
-		if (input.startsWith("file://") || input.startsWith("/")) {
-			const path = input.startsWith("file://") ? input.slice(7) : input;
-			const file = Bun.file(path);
-			const buf = Buffer.from(await file.arrayBuffer());
-			return { base64: buf.toString("base64"), mime: file.type || undefined };
-		}
-		// Assume raw base64.
-		return { base64: input };
-	}
-	const url = input.audioUrl;
-	if (!url) throw new Error("TranscriptionParams.audioUrl missing");
-	if (url.startsWith("data:")) {
-		const m = url.match(/^data:([^;]+);base64,(.+)$/);
-		if (!m) throw new Error("invalid data URL");
-		return { base64: m[2], mime: m[1] };
-	}
-	if (url.startsWith("file://") || url.startsWith("/")) {
-		const path = url.startsWith("file://") ? url.slice(7) : url;
-		const file = Bun.file(path);
-		const buf = Buffer.from(await file.arrayBuffer());
-		return { base64: buf.toString("base64"), mime: file.type || undefined };
-	}
+async function audioFileBase64(input: string): Promise<{ base64: string; mime?: string }> {
+	const path = input.startsWith("file://") ? input.slice(7) : input;
+	const file = Bun.file(path);
+	const buf = Buffer.from(await file.arrayBuffer());
+	return { base64: buf.toString("base64"), mime: file.type || undefined };
+}
+
+function dataUrlAudioBase64(input: string): { base64: string; mime?: string } {
+	const m = input.match(/^data:([^;]+);base64,(.+)$/);
+	if (!m) throw new Error("invalid data URL");
+	return { base64: m[2], mime: m[1] };
+}
+
+async function stringAudioBase64(input: string): Promise<{ base64: string; mime?: string }> {
+	if (input.startsWith("data:")) return dataUrlAudioBase64(input);
+	if (input.startsWith("file://") || input.startsWith("/")) return audioFileBase64(input);
+	return { base64: input };
+}
+
+async function urlAudioBase64(url: string): Promise<{ base64: string; mime?: string }> {
+	if (url.startsWith("data:")) return dataUrlAudioBase64(url);
+	if (url.startsWith("file://") || url.startsWith("/")) return audioFileBase64(url);
 	if (/^https?:/i.test(url)) {
 		const resp = await fetch(url);
 		if (!resp.ok) throw new Error(`fetch audio HTTP ${resp.status}`);
 		const buf = Buffer.from(await resp.arrayBuffer());
 		return { base64: buf.toString("base64"), mime: resp.headers.get("content-type") ?? undefined };
 	}
-	// Assume already base64.
 	return { base64: url };
+}
+
+async function loadAudioBase64(input: TranscriptionParams | Buffer | string): Promise<{ base64: string; mime?: string }> {
+	if (Buffer.isBuffer(input)) {
+		return { base64: input.toString("base64"), mime: "audio/wav" };
+	}
+	if (typeof input === "string") {
+		return stringAudioBase64(input);
+	}
+	const url = input.audioUrl;
+	if (!url) throw new Error("TranscriptionParams.audioUrl missing");
+	return urlAudioBase64(url);
 }
 
 async function handleTranscription(

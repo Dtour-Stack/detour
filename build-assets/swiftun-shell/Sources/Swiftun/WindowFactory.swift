@@ -28,6 +28,7 @@ final class WindowFactory: NSObject {
     static let shared = WindowFactory()
 
     private var windows: [String: NSWindow] = [:]
+    private var closeObservers: [String: NSObjectProtocol] = [:]
 
     /// Open (or focus) a named surface. Returns true if recognized.
     @discardableResult
@@ -137,11 +138,7 @@ final class WindowFactory: NSObject {
             ))
         }
         win.isReleasedWhenClosed = false
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: win, queue: .main,
-        ) { [weak self] _ in
-            Task { @MainActor in self?.windows.removeValue(forKey: "pet") }
-        }
+        observeClose(for: win, key: "pet")
         win.makeKeyAndOrderFront(nil)
         windows["pet"] = win
     }
@@ -221,11 +218,7 @@ final class WindowFactory: NSObject {
         // Forget the cached window when the user closes it so the next
         // open call builds a fresh one — avoids holding onto stale
         // hosting controllers across show/hide cycles.
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: win, queue: .main,
-        ) { [weak self] _ in
-            Task { @MainActor in self?.windows.removeValue(forKey: key) }
-        }
+        observeClose(for: win, key: key)
         win.makeKeyAndOrderFront(nil)
         windows[key] = win
         NSApp.activate(ignoringOtherApps: true)
@@ -287,13 +280,28 @@ final class WindowFactory: NSObject {
         wv.load(URLRequest(url: url))
         win.isReleasedWhenClosed = false
         win.setFrameAutosaveName("Detour\(key.capitalized)Window")
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: win, queue: .main,
-        ) { [weak self] _ in
-            Task { @MainActor in self?.windows.removeValue(forKey: key) }
-        }
+        observeClose(for: win, key: key)
         win.makeKeyAndOrderFront(nil)
         windows[key] = win
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func observeClose(for window: NSWindow, key: String) {
+        if let oldObserver = closeObservers.removeValue(forKey: key) {
+            NotificationCenter.default.removeObserver(oldObserver)
+        }
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main,
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.windows.removeValue(forKey: key)
+                if let observer = self?.closeObservers.removeValue(forKey: key) {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+            }
+        }
+        closeObservers[key] = observer
     }
 }

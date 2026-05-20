@@ -86,12 +86,12 @@ struct ChatMessage: Identifiable, Equatable {
 /// when wired up — for now they show a coming-soon empty state +
 /// route the user to the Pensieve channel feed for the source data.
 enum ChatChannel: String, CaseIterable, Identifiable, Hashable {
-    case inbox      = "inbox"
-    case detour     = "detour"
-    case discord    = "discord"
-    case telegram   = "telegram"
-    case imessage   = "imessage"
-    case x          = "x"
+    case inbox
+    case detour
+    case discord
+    case telegram
+    case imessage
+    case x
 
     var id: String { rawValue }
     var displayName: String {

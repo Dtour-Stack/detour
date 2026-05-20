@@ -116,6 +116,11 @@ type BrowserControlGlobal = {
 };
 
 type DebugEmbeddingBody = { text?: string; storeAs?: string };
+type LocalAiTier = "chat" | "companion";
+type LocalAiAction = "start" | "stop";
+type LocalAiBody = { preset?: string };
+type DebugActionBody = { name?: string; options?: Record<string, unknown> };
+type RuntimeDebugAction = { name: string; handler: (...a: unknown[]) => unknown };
 type DebugEmbeddingRuntime = {
 	useModel?: (type: string, params: { text: string }) => Promise<unknown>;
 	getModel?: (type: string) => unknown;
@@ -127,6 +132,55 @@ type DebugEmbeddingRuntime = {
 };
 type DebugEmbeddingWriteResult = { ok: boolean; memoryId?: string; error?: string };
 type DebugEmbeddingModelResult = { vector: number[]; modelErr: string | null; durationMs: number };
+
+function isLocalAiTier(tier: string | undefined): tier is LocalAiTier {
+	return tier === "chat" || tier === "companion";
+}
+
+function isLocalAiAction(action: string | undefined): action is LocalAiAction {
+	return action === "start" || action === "stop";
+}
+
+async function readLocalAiBody(req: Request): Promise<LocalAiBody | null> {
+	try {
+		const raw = await req.text();
+		return raw.length > 0 ? JSON.parse(raw) as LocalAiBody : {};
+	} catch {
+		return null;
+	}
+}
+
+function localAiStartConfig(body: LocalAiBody): { preset?: string } {
+	return typeof body.preset === "string" && body.preset.length > 0
+		? { preset: body.preset }
+		: {};
+}
+
+async function readDebugActionBody(req: Request): Promise<DebugActionBody | null> {
+	try {
+		return await req.json() as DebugActionBody;
+	} catch {
+		return null;
+	}
+}
+
+function findRuntimeAction(live: unknown, name: string): RuntimeDebugAction | undefined {
+	const liveActions = (live as { actions?: RuntimeDebugAction[] }).actions ?? [];
+	return liveActions.find((action) => action.name === name);
+}
+
+function debugMemory(): Memory {
+	return {
+		id: "00000000-0000-0000-0000-000000000000" as UUID,
+		entityId: "00000000-0000-0000-0000-000000000001" as UUID,
+		roomId: "00000000-0000-0000-0000-000000000002" as UUID,
+		content: { text: "" },
+	};
+}
+
+function debugState(): { values: Record<string, unknown>; data: Record<string, unknown>; text: string } {
+	return { values: {}, data: {}, text: "" };
+}
 
 function embeddingVector(value: unknown): number[] {
 	return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number") : [];
@@ -311,6 +365,75 @@ export class ApiServer {
 		return complete;
 	}
 
+	private async handleLocalAiControl(ctx: ApiRequestContext): Promise<Response | null> {
+		const { req, path, json, error } = ctx;
+		if (req.method !== "POST") return null;
+		if (!path.startsWith("/api/local-ai/")) return null;
+		const [tier, action] = path.slice("/api/local-ai/".length).split("/");
+		if (!isLocalAiTier(tier) || !isLocalAiAction(action)) return error("unknown local-ai route", 404);
+		const svc = tier === "chat"
+			? this.selfImprovement?.localChat
+			: this.selfImprovement?.companion;
+		if (!svc) return error(`${tier} service not wired`, 503);
+		const body = await readLocalAiBody(req);
+		if (!body) return error("invalid JSON body", 400);
+		try {
+			if (action === "stop") {
+				svc.stop();
+				return json({ ok: true, action: "stop", tier });
+			}
+			const result = await svc.start(localAiStartConfig(body));
+			if (!result) {
+				const reason = svc.getLastArbiterRefusal();
+				return json(
+					{ ok: false, action: "start", tier, reason: reason ?? "start returned null (see logs)" },
+					409,
+				);
+			}
+			return json({
+				ok: true,
+				action: "start",
+				tier,
+				url: result.url,
+				modelPath: result.modelPath,
+			});
+		} catch (err) {
+			return error(
+				err instanceof Error ? err.message : `${tier} ${action} failed`,
+				500,
+			);
+		}
+	}
+
+	private async handleDebugAction(ctx: ApiRequestContext): Promise<Response | null> {
+		const { req, path, json, error } = ctx;
+		if (req.method !== "POST" || path !== "/api/debug/action") return null;
+		const isDevBundle = typeof process.execPath === "string" && process.execPath.includes("Detour-dev.app/");
+		const allowOverride = process.env.DETOUR_ALLOW_DEBUG_API === "1";
+		if (!isDevBundle && !allowOverride) return error("debug API disabled in this build", 404);
+		const body = await readDebugActionBody(req);
+		if (!body) return error("invalid JSON body", 400);
+		if (!body.name) return error("missing 'name'", 400);
+		const state = await this.runtime.getOrBuild();
+		if (!state) return error("runtime not built — no LLM provider configured", 503);
+		const live = this.runtime.peek();
+		if (!live) return error("runtime not live", 503);
+		const action = findRuntimeAction(live, body.name);
+		if (!action) return error(`action '${body.name}' not registered on runtime`, 404);
+		const emits: { text: string; action: string }[] = [];
+		const callback = async (p: { text: string; action: string }) => {
+			emits.push({ text: p.text, action: p.action });
+			return [];
+		};
+		const t0 = Date.now();
+		try {
+			const result = await action.handler(live, debugMemory(), debugState(), body.options ?? {}, callback);
+			return json({ ok: true, action: body.name, durationMs: Date.now() - t0, emits, result });
+		} catch (err) {
+			return error(`action handler threw: ${err instanceof Error ? err.message : String(err)}`, 500);
+		}
+	}
+
 	private async debugEmbedding(ctx: ApiRequestContext): Promise<Response> {
 		const body = (await ctx.req.json().catch(() => ({}))) as DebugEmbeddingBody;
 		const text = body.text ?? "hello world";
@@ -431,63 +554,7 @@ export class ApiServer {
 		// 127.0.0.1 only — we never bind to 0.0.0.0 (see start() at the
 		// bottom of this file). No auth on these because the tray runs
 		// as the same user as Detour itself.
-		async (ctx) => {
-			const { req, path, json, error } = ctx;
-			if (req.method !== "POST") return null;
-			if (!path.startsWith("/api/local-ai/")) return null;
-			const tail = path.slice("/api/local-ai/".length);
-			const [tier, action] = tail.split("/");
-			if (
-				(tier !== "chat" && tier !== "companion") ||
-				(action !== "start" && action !== "stop")
-			) {
-				return error("unknown local-ai route", 404);
-			}
-			const svc = tier === "chat"
-				? this.selfImprovement?.localChat
-				: this.selfImprovement?.companion;
-			if (!svc) return error(`${tier} service not wired`, 503);
-			let body: { preset?: string } = {};
-			try {
-				const raw = await req.text();
-				if (raw.length > 0) body = JSON.parse(raw) as typeof body;
-			} catch {
-				return error("invalid JSON body", 400);
-			}
-			try {
-				if (action === "stop") {
-					svc.stop();
-					return json({ ok: true, action: "stop", tier });
-				}
-				// Start — kicks off model download on first run for a
-				// preset whose file isn't on disk yet. Surfaces the
-				// arbiter refusal (RAM budget) via getLastArbiterRefusal.
-				const cfg: { preset?: string } = {};
-				if (typeof body.preset === "string" && body.preset.length > 0) {
-					cfg.preset = body.preset;
-				}
-				const result = await svc.start(cfg);
-				if (!result) {
-					const reason = svc.getLastArbiterRefusal();
-					return json(
-						{ ok: false, action: "start", tier, reason: reason ?? "start returned null (see logs)" },
-						409,
-					);
-				}
-				return json({
-					ok: true,
-					action: "start",
-					tier,
-					url: result.url,
-					modelPath: result.modelPath,
-				});
-			} catch (err) {
-				return error(
-					err instanceof Error ? err.message : `${tier} ${action} failed`,
-					500,
-				);
-			}
-		},
+			(ctx) => this.handleLocalAiControl(ctx),
 		// URL-scheme dispatch — in-process equivalent of the open-url event
 		// listener. Swiftun's tray + AppleScript code POSTs `detour://…`
 		// URLs here so they always land in THIS bun process, even while
@@ -524,39 +591,7 @@ export class ApiServer {
 		// can reach 127.0.0.1:2138. We keep it gated to dev .app builds
 		// (mirrors view-url.ts's dev-mode detection) so it never appears
 		// in canary/stable artifacts. Override with DETOUR_ALLOW_DEBUG_API=1.
-		async (ctx) => {
-			const { req, path, json, error } = ctx;
-			if (req.method !== "POST" || path !== "/api/debug/action") return null;
-			const isDevBundle = typeof process.execPath === "string" && process.execPath.includes("Detour-dev.app/");
-			const allowOverride = process.env.DETOUR_ALLOW_DEBUG_API === "1";
-			if (!isDevBundle && !allowOverride) return error("debug API disabled in this build", 404);
-			let body: { name?: string; options?: Record<string, unknown> } = {};
-			try { body = (await req.json()) as typeof body; } catch { return error("invalid JSON body", 400); }
-			if (!body.name) return error("missing 'name'", 400);
-			const state = await this.runtime.getOrBuild();
-			if (!state) return error("runtime not built — no LLM provider configured", 503);
-			const live = this.runtime.peek();
-			if (!live) return error("runtime not live", 503);
-			const liveActions = (live as unknown as { actions?: Array<{ name: string; handler: (...a: unknown[]) => unknown }> }).actions ?? [];
-			const action = liveActions.find((a) => a.name === body.name);
-			if (!action) return error(`action '${body.name}' not registered on runtime`, 404);
-			const emits: { text: string; action: string }[] = [];
-			const callback = async (p: { text: string; action: string }) => { emits.push({ text: p.text, action: p.action }); return []; };
-			const fakeMemory = {
-				id: "00000000-0000-0000-0000-000000000000",
-				entityId: "00000000-0000-0000-0000-000000000001",
-				roomId: "00000000-0000-0000-0000-000000000002",
-				content: { text: "" },
-			};
-			const fakeState = { values: {}, data: {}, text: "" };
-			const t0 = Date.now();
-			try {
-				const result = await action.handler(live, fakeMemory, fakeState, body.options ?? {}, callback);
-				return json({ ok: true, action: body.name, durationMs: Date.now() - t0, emits, result });
-			} catch (err) {
-				return error(`action handler threw: ${err instanceof Error ? err.message : String(err)}`, 500);
-			}
-		},
+			(ctx) => this.handleDebugAction(ctx),
 		// Debug: probe embedding pipeline end-to-end. Used by the LocalAI
 		// settings tab which pings via raw fetch — keeping it on HTTP since
 		// the diagnostic intentionally bypasses RPC plumbing to detect

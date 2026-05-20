@@ -91,7 +91,7 @@ function paramsFrom(message: Memory, options?: Record<string, unknown>): MediaPa
 	const parameters = options?.parameters && typeof options.parameters === "object" && !Array.isArray(options.parameters)
 		? options.parameters as Record<string, unknown>
 		: {};
-	return { ...content, ...(options ?? {}), ...parameters };
+	return { ...content, ...options, ...parameters };
 }
 
 function firstString(params: MediaParams, keys: readonly string[]): string | undefined {

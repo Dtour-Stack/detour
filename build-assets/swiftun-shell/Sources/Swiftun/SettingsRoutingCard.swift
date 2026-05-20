@@ -95,12 +95,12 @@ final class RoutingViewModel: ObservableObject {
 /// supports every tier — empty model ids are tolerated by the planner
 /// (it falls back to provider default).
 enum RoutingSource: String, CaseIterable, Identifiable, Hashable {
-    case local = "local"
-    case openrouter = "openrouter"
-    case anthropic = "anthropic"
-    case elizacloud = "elizacloud"
-    case openai = "openai"
-    case codex = "codex"
+    case local
+    case openrouter
+    case anthropic
+    case elizacloud
+    case openai
+    case codex
     var id: String { rawValue }
     var label: String {
         switch self {

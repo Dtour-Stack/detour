@@ -333,211 +333,174 @@ final class TrayController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // Pull the Appearance → Tray toggles so this rebuild honors
-        // them. UserDefaults values default to true (toggles ship "on").
         let defaults = UserDefaults.standard
         let showHeader = defaults.object(forKey: "detour.tray.showProviderDot") as? Bool ?? true
         let showLocalAI = defaults.object(forKey: "detour.tray.showLocalAI") as? Bool ?? true
         let showRecent = defaults.object(forKey: "detour.tray.showRecent") as? Bool ?? true
 
-        if showHeader {
-            let providerName = snapshot.flatMap { snap in
-                snap.providers.first(where: { $0.id == snap.activeProviderId })?.label
-            }
-            let header = NSMenuItem()
-            let headerView = NSHostingView(rootView: TrayHeaderSwiftUIView(
-                provider: providerName,
-                embedRunning: snapshot?.embed.running ?? false,
-            ))
-            headerView.frame = NSRect(x: 0, y: 0, width: 280, height: 40)
-            headerView.autoresizingMask = [.width]
-            header.view = headerView
-            header.isEnabled = false
-            menu.addItem(header)
+        if showHeader { addHeaderItems(to: menu) }
+        if showLocalAI { addAiItems(to: menu) }
+        addWindowItems(to: menu)
+        if showRecent { addRecentItems(to: menu) }
+        addFooterItems(to: menu)
 
-            if let mem = snapshot?.memory {
-                let memItem = NSMenuItem()
-                let memView = NSHostingView(rootView: TrayMemoryBarSwiftUIView(memory: mem))
-                memView.frame = NSRect(x: 0, y: 0, width: 280, height: 44)
-                memView.autoresizingMask = [.width]
-                memItem.view = memView
-                memItem.isEnabled = false
-                menu.addItem(memItem)
-            }
-            menu.addItem(NSMenuItem.separator())
+        menu.delegate = self
+        statusItem.menu = menu
+    }
+
+    private func addHeaderItems(to menu: NSMenu) {
+        let providerName = snapshot.flatMap { snap in
+            snap.providers.first(where: { $0.id == snap.activeProviderId })?.label
         }
+        let header = NSMenuItem()
+        let headerView = NSHostingView(rootView: TrayHeaderSwiftUIView(
+            provider: providerName,
+            embedRunning: snapshot?.embed.running ?? false,
+        ))
+        headerView.frame = NSRect(x: 0, y: 0, width: 280, height: 40)
+        headerView.autoresizingMask = [.width]
+        header.view = headerView
+        header.isEnabled = false
+        menu.addItem(header)
+        addMemoryHeader(to: menu)
+        menu.addItem(NSMenuItem.separator())
+    }
 
-        // Combined "AI" submenu — cloud providers + local llama tiers
-        // in one place. Gated by the Appearance → Tray → Local AI
-        // toggle so the user can hide it entirely.
-        let providers = snapshot?.providers ?? []
+    private func addMemoryHeader(to menu: NSMenu) {
+        guard let mem = snapshot?.memory else { return }
+        let memItem = NSMenuItem()
+        let memView = NSHostingView(rootView: TrayMemoryBarSwiftUIView(memory: mem))
+        memView.frame = NSRect(x: 0, y: 0, width: 280, height: 44)
+        memView.autoresizingMask = [.width]
+        memItem.view = memView
+        memItem.isEnabled = false
+        menu.addItem(memItem)
+    }
+
+    private func addAiItems(to menu: NSMenu) {
         let aiItem = NSMenuItem(title: "AI", action: nil, keyEquivalent: "")
         let localMenu = NSMenu()
         localMenu.autoenablesItems = false
+        addProviderItems(to: localMenu)
+        addRoutingItems(to: localMenu)
+        addLlamaItems(to: localMenu)
+        addChatItems(to: localMenu)
+        addCompanionItems(to: localMenu)
+        addLocalAiSettingsItem(to: localMenu)
+        aiItem.submenu = localMenu
+        menu.addItem(aiItem)
+        menu.addItem(NSMenuItem.separator())
+    }
 
-        // Every row in the AI submenu is clickable now — headers and
-        // status lines open Settings → Models & Providers (the canonical
-        // place to configure all of this), unconfigured providers open
-        // the same tab so the user can paste their key.
-        if !providers.isEmpty {
-            let providersHeader = NSMenuItem(
-                title: "Cloud chat providers",
-                action: #selector(openProvidersSettings),
-                keyEquivalent: "",
-            )
-            providersHeader.target = self
-            providersHeader.toolTip = "Configure cloud providers"
-            localMenu.addItem(providersHeader)
-            for p in providers {
-                let item = NSMenuItem(title: "  \(p.label)", action: #selector(switchProvider(_:)), keyEquivalent: "")
+    private func addProviderItems(to menu: NSMenu) {
+        let providers = snapshot?.providers ?? []
+        guard !providers.isEmpty else { return }
+        let header = NSMenuItem(title: "Cloud chat providers", action: #selector(openProvidersSettings), keyEquivalent: "")
+        header.target = self
+        header.toolTip = "Configure cloud providers"
+        menu.addItem(header)
+        for provider in providers {
+            let item = NSMenuItem(title: "  \(provider.label)", action: #selector(switchProvider(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = provider.id
+            item.state = provider.active ? .on : .off
+            item.isEnabled = true
+            if !provider.configured {
+                item.toolTip = "Not configured — click to open Settings and add a key"
+            }
+            menu.addItem(item)
+        }
+        menu.addItem(NSMenuItem.separator())
+    }
+
+    private func addRoutingItems(to menu: NSMenu) {
+        guard let routing = snapshot?.modelRouting, !routing.isEmpty else { return }
+        for entry in routing {
+            let header = NSMenuItem(title: entry.label, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for opt in entry.options {
+                let kindTag = opt.kind == "local" ? " · local" : " · cloud"
+                let badge = opt.available ? "" : " (not configured)"
+                let item = NSMenuItem(title: "  \(opt.label)\(kindTag)\(badge)", action: #selector(setRoutingProvider(_:)), keyEquivalent: "")
                 item.target = self
-                item.representedObject = p.id
-                item.state = p.active ? .on : .off
-                // Clickable even when not configured — clicking takes
-                // the user to Settings → Models & Providers so they
-                // can add the API key.
-                item.isEnabled = true
-                if !p.configured {
-                    item.toolTip = "Not configured — click to open Settings and add a key"
-                }
-                localMenu.addItem(item)
+                item.representedObject = "\(entry.type)::\(opt.id)"
+                item.state = (opt.id == entry.selected) ? NSControl.StateValue.on : NSControl.StateValue.off
+                item.toolTip = opt.available ? nil : "Not yet available — click to open Settings"
+                menu.addItem(item)
             }
-            localMenu.addItem(NSMenuItem.separator())
+            menu.addItem(NSMenuItem.separator())
         }
+    }
 
-        // Image / Video / Voice routing — each routed ModelType gets its
-        // own submenu listing local + cloud options so the user can
-        // pick from the tray without opening Settings.
-        if let routing = snapshot?.modelRouting, !routing.isEmpty {
-            for entry in routing {
-                let header = NSMenuItem(
-                    title: entry.label,
-                    action: nil,
-                    keyEquivalent: "",
-                )
-                header.isEnabled = false
-                localMenu.addItem(header)
-                for opt in entry.options {
-                    let kindTag = opt.kind == "local" ? " · local" : " · cloud"
-                    let badge = opt.available ? "" : " (not configured)"
-                    let item = NSMenuItem(
-                        title: "  \(opt.label)\(kindTag)\(badge)",
-                        action: #selector(setRoutingProvider(_:)),
-                        keyEquivalent: "",
-                    )
-                    item.target = self
-                    item.representedObject = "\(entry.type)::\(opt.id)"
-                    item.state = (opt.id == entry.selected) ? NSControl.StateValue.on : NSControl.StateValue.off
-                    item.toolTip = opt.available ? nil : "Not yet available — click to open Settings"
-                    localMenu.addItem(item)
-                }
-                localMenu.addItem(NSMenuItem.separator())
-            }
-        }
-
-        let localHeader = NSMenuItem(
-            title: "Local llama",
-            action: #selector(openProvidersSettings),
-            keyEquivalent: "",
-        )
-        localHeader.target = self
-        localHeader.toolTip = "Configure local llama tiers"
-        localMenu.addItem(localHeader)
-
-        let embedStatus = NSMenuItem(
-            title: "  \(embedLabel())",
-            action: #selector(openProvidersSettings),
-            keyEquivalent: "",
-        )
+    private func addLlamaItems(to menu: NSMenu) {
+        let header = NSMenuItem(title: "Local llama", action: #selector(openProvidersSettings), keyEquivalent: "")
+        header.target = self
+        header.toolTip = "Configure local llama tiers"
+        menu.addItem(header)
+        let embedStatus = NSMenuItem(title: "  \(embedLabel())", action: #selector(openProvidersSettings), keyEquivalent: "")
         embedStatus.target = self
         embedStatus.state = (snapshot?.embed.running ?? false) ? .on : .off
-        localMenu.addItem(embedStatus)
-        localMenu.addItem(NSMenuItem.separator())
+        menu.addItem(embedStatus)
+        menu.addItem(NSMenuItem.separator())
+    }
 
+    private func addChatItems(to menu: NSMenu) {
         let chat = snapshot?.localChat
-        let chatStatusItem = NSMenuItem(
-            title: chatLabel(chat),
-            action: #selector(openProvidersSettings),
-            keyEquivalent: "",
-        )
-        chatStatusItem.target = self
-        chatStatusItem.state = (chat?.running ?? false) ? .on : .off
-        localMenu.addItem(chatStatusItem)
-        if let refusal = chat?.lastArbiterRefusal, !refusal.isEmpty {
-            let refusalItem = NSMenuItem(title: "⚠ RAM: \(truncate(refusal, 60))", action: nil, keyEquivalent: "")
-            refusalItem.isEnabled = false
-            localMenu.addItem(refusalItem)
-        }
-        if let dl = chat?.downloadPercent, dl < 100 {
-            let dlItem = NSMenuItem(title: "↓ downloading \(dl)%", action: nil, keyEquivalent: "")
-            dlItem.isEnabled = false
-            localMenu.addItem(dlItem)
-        }
+        let status = NSMenuItem(title: chatLabel(chat), action: #selector(openProvidersSettings), keyEquivalent: "")
+        status.target = self
+        status.state = (chat?.running ?? false) ? .on : .off
+        menu.addItem(status)
+        addTransientLocalAiItems(to: menu, refusal: chat?.lastArbiterRefusal, downloadPercent: chat?.downloadPercent)
         if chat?.running == true {
-            let stopItem = NSMenuItem(title: "Stop Chat", action: #selector(stopChat), keyEquivalent: "")
-            stopItem.target = self
-            localMenu.addItem(stopItem)
+            addTargetedItem(to: menu, title: "Stop Chat", action: #selector(stopChat))
         } else {
             let startItem = NSMenuItem(title: "Start Chat with…", action: nil, keyEquivalent: "")
             startItem.submenu = buildPresetMenu(presets: chat?.presets ?? [], action: #selector(startChatWithPreset(_:)), memoryBudget: snapshot?.memory)
-            localMenu.addItem(startItem)
+            menu.addItem(startItem)
         }
-        localMenu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
+    }
 
+    private func addCompanionItems(to menu: NSMenu) {
         let comp = snapshot?.companion
-        let compStatusItem = NSMenuItem(
-            title: companionLabel(comp),
-            action: #selector(openProvidersSettings),
-            keyEquivalent: "",
-        )
-        compStatusItem.target = self
-        compStatusItem.state = (comp?.running ?? false) ? .on : .off
-        localMenu.addItem(compStatusItem)
-        if let refusal = comp?.lastArbiterRefusal, !refusal.isEmpty {
-            let refusalItem = NSMenuItem(title: "⚠ RAM: \(truncate(refusal, 60))", action: nil, keyEquivalent: "")
-            refusalItem.isEnabled = false
-            localMenu.addItem(refusalItem)
-        }
-        if let dl = comp?.downloadPercent, dl < 100 {
-            let dlItem = NSMenuItem(title: "↓ downloading \(dl)%", action: nil, keyEquivalent: "")
-            dlItem.isEnabled = false
-            localMenu.addItem(dlItem)
-        }
+        let status = NSMenuItem(title: companionLabel(comp), action: #selector(openProvidersSettings), keyEquivalent: "")
+        status.target = self
+        status.state = (comp?.running ?? false) ? .on : .off
+        menu.addItem(status)
+        addTransientLocalAiItems(to: menu, refusal: comp?.lastArbiterRefusal, downloadPercent: comp?.downloadPercent)
         if comp?.running == true {
-            let stopItem = NSMenuItem(title: "Stop Companion", action: #selector(stopCompanion), keyEquivalent: "")
-            stopItem.target = self
-            localMenu.addItem(stopItem)
+            addTargetedItem(to: menu, title: "Stop Companion", action: #selector(stopCompanion))
         } else {
             let startItem = NSMenuItem(title: "Start Companion with…", action: nil, keyEquivalent: "")
             startItem.submenu = buildPresetMenu(presets: comp?.presets ?? [], action: #selector(startCompanionWithPreset(_:)), memoryBudget: snapshot?.memory)
-            localMenu.addItem(startItem)
+            menu.addItem(startItem)
         }
+    }
 
-        localMenu.addItem(NSMenuItem.separator())
-        let openSettings = NSMenuItem(title: "Configure…", action: #selector(openSettingPath(_:)), keyEquivalent: "")
-        openSettings.target = self
-        openSettings.representedObject = "configuration:local-ai"
-        localMenu.addItem(openSettings)
-
-        aiItem.submenu = localMenu
-        if showLocalAI {
-            menu.addItem(aiItem)
-            menu.addItem(NSMenuItem.separator())
+    private func addTransientLocalAiItems(to menu: NSMenu, refusal: String?, downloadPercent: Int?) {
+        if let refusal, !refusal.isEmpty {
+            let item = NSMenuItem(title: "⚠ RAM: \(truncate(refusal, 60))", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
         }
+        if let downloadPercent, downloadPercent < 100 {
+            let item = NSMenuItem(title: "↓ downloading \(downloadPercent)%", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+    }
 
-        for (target, label, shortcut) in [
-            ("chat", "Open Chat", "c"),
-            ("pensieve", "Open Pensieve", "p"),
-            ("activity", "Open Activity", "a"),
-            ("browser", "Open Browser", "b"),
-            ("gallery", "Open Gallery", "g"),
-            ("workspace", "Open Workspace", "w"),
-            // ⌘⌃P also toggles via the global hotkey (see
-            // GlobalHotKeys.installDefaults()). The tray shortcut here
-            // is ⇧⌘0 for keyboard access when the user is already in
-            // a Detour window.
-            ("pet", "Show Pet", "0"),
-        ] {
+    private func addLocalAiSettingsItem(to menu: NSMenu) {
+        menu.addItem(NSMenuItem.separator())
+        let item = NSMenuItem(title: "Configure…", action: #selector(openSettingPath(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = "configuration:local-ai"
+        menu.addItem(item)
+    }
+
+    private func addWindowItems(to menu: NSMenu) {
+        for (target, label, shortcut) in windowMenuItems() {
             let item = NSMenuItem(title: label, action: #selector(openWindow(_:)), keyEquivalent: shortcut)
             item.target = self
             item.representedObject = target
@@ -548,35 +511,47 @@ final class TrayController: NSObject, NSMenuDelegate {
         settingsItem.target = self
         settingsItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(settingsItem)
+    }
 
+    private func windowMenuItems() -> [(String, String, String)] {
+        [
+            ("chat", "Open Chat", "c"),
+            ("pensieve", "Open Pensieve", "p"),
+            ("activity", "Open Activity", "a"),
+            ("browser", "Open Browser", "b"),
+            ("gallery", "Open Gallery", "g"),
+            ("workspace", "Open Workspace", "w"),
+            ("pet", "Show Pet", "0"),
+        ]
+    }
+
+    private func addRecentItems(to menu: NSMenu) {
         let recent = snapshot?.recentTrajectories ?? []
-        if !recent.isEmpty && showRecent {
-            menu.addItem(NSMenuItem.separator())
-            let recentItem = NSMenuItem(title: "Recent activity", action: nil, keyEquivalent: "")
-            let recentMenu = NSMenu()
-            for t in recent.prefix(5) {
-                let item = NSMenuItem(title: trajectoryTitle(t), action: #selector(openActivity), keyEquivalent: "")
-                item.target = self
-                recentMenu.addItem(item)
-            }
-            recentItem.submenu = recentMenu
-            menu.addItem(recentItem)
-        }
-
+        guard !recent.isEmpty else { return }
         menu.addItem(NSMenuItem.separator())
-        let testNotif = NSMenuItem(title: "Send test notification", action: #selector(testNotification), keyEquivalent: "")
-        testNotif.target = self
-        menu.addItem(testNotif)
-        let aboutItem = NSMenuItem(title: "About Detour", action: #selector(openAbout), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
+        let recentItem = NSMenuItem(title: "Recent activity", action: nil, keyEquivalent: "")
+        let recentMenu = NSMenu()
+        for t in recent.prefix(5) {
+            addTargetedItem(to: recentMenu, title: trajectoryTitle(t), action: #selector(openActivity))
+        }
+        recentItem.submenu = recentMenu
+        menu.addItem(recentItem)
+    }
+
+    private func addFooterItems(to menu: NSMenu) {
+        menu.addItem(NSMenuItem.separator())
+        addTargetedItem(to: menu, title: "Send test notification", action: #selector(testNotification))
+        addTargetedItem(to: menu, title: "About Detour", action: #selector(openAbout))
         let quitItem = NSMenuItem(title: "Quit Detour", action: #selector(quitDetour), keyEquivalent: "q")
         quitItem.target = self
         quitItem.keyEquivalentModifierMask = [.command]
         menu.addItem(quitItem)
+    }
 
-        menu.delegate = self
-        statusItem.menu = menu
+    private func addTargetedItem(to menu: NSMenu, title: String, action: Selector) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
     }
 
     @objc func testNotification() {

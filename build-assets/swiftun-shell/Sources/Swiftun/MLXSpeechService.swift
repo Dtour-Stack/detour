@@ -24,6 +24,12 @@
 import AVFoundation
 import Foundation
 
+final class SpeechBufferSink: @unchecked Sendable {
+    var buffers: [AVAudioPCMBuffer] = []
+    var format: AVAudioFormat? = nil
+    var done = false
+}
+
 @MainActor
 final class MLXSpeechService {
     static let shared = MLXSpeechService()
@@ -118,103 +124,106 @@ final class MLXSpeechService {
     }
 
     private func runAVSpeech(options: SynthesizeOptions) async throws -> SynthesizedAudio {
-        let utterance = AVSpeechUtterance(string: options.text)
-        if let voiceID = options.voice, let voice = AVSpeechSynthesisVoice(identifier: voiceID) {
-            utterance.voice = voice
-        } else {
-            // Default to the system's preferred English voice.
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        }
-        if let rate = options.rate { utterance.rate = rate }
-        if let pitch = options.pitch { utterance.pitchMultiplier = pitch }
-
-        // AVSpeechSynthesizer.write(_:toBufferCallback:) yields AVAudioPCMBuffers.
-        // We accumulate samples, then encode to AIFF via AVAudioFile.
-        // The callback is @Sendable so we route through a locked holder.
+        let utterance = makeUtterance(options: options)
         let synth = AVSpeechSynthesizer()
         let started = Date()
-
-        // Serial queue isolates the @Sendable callback from the @MainActor
-        // read path without using locks that are unavailable in async ctx.
-        // The zero-length buffer is the synth's done signal — NOT
-        // `isSpeaking`, which can be false before the first buffer
-        // arrives (verifier exposed this).
-        final class Sink: @unchecked Sendable {
-            var buffers: [AVAudioPCMBuffer] = []
-            var format: AVAudioFormat? = nil
-            var done = false
-        }
-        let sink = Sink()
+        let sink = SpeechBufferSink()
         let sinkQueue = DispatchQueue(label: "ai.detour.tts.sink")
-
-        let collector: @Sendable (AVAudioBuffer) -> Void = { buf in
-            guard let pcm = buf as? AVAudioPCMBuffer else { return }
-            if pcm.frameLength == 0 {
-                sinkQueue.sync { sink.done = true }
-                return
-            }
-            // Deep-copy before queue handoff (synth may reuse storage).
-            guard let copy = AVAudioPCMBuffer(pcmFormat: pcm.format, frameCapacity: pcm.frameLength) else { return }
-            copy.frameLength = pcm.frameLength
-            let channels = Int(pcm.format.channelCount)
-            let frames = Int(pcm.frameLength)
-            if let src = pcm.floatChannelData, let dst = copy.floatChannelData {
-                for c in 0..<channels { memcpy(dst[c], src[c], frames * MemoryLayout<Float>.size) }
-            } else if let src = pcm.int16ChannelData, let dst = copy.int16ChannelData {
-                for c in 0..<channels { memcpy(dst[c], src[c], frames * MemoryLayout<Int16>.size) }
-            }
-            sinkQueue.sync {
-                if sink.format == nil { sink.format = pcm.format }
-                sink.buffers.append(copy)
-            }
+        synth.write(utterance) { buf in
+            collectSpeechBuffer(buf, sink: sink, queue: sinkQueue)
         }
-
-        synth.write(utterance, toBufferCallback: collector)
-        let deadline = Date().addingTimeInterval(60)
-        while !sinkQueue.sync(execute: { sink.done }) {
-            if Date() > deadline {
-                throw MLXSpeechError.inferenceFailed("synthesizer timed out after 60s")
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        try await waitForSpeechCompletion(sink: sink, queue: sinkQueue)
 
         let (buffers, format) = sinkQueue.sync { (sink.buffers, sink.format) }
         guard let fmt = format, !buffers.isEmpty else {
             throw MLXSpeechError.inferenceFailed("synthesizer produced no audio")
         }
+        let encoded = try writeAiff(buffers: buffers, format: fmt)
+        return SynthesizedAudio(
+            audioData: encoded.data,
+            contentType: "audio/aiff",
+            durationSeconds: encoded.durationSeconds,
+            durationMs: Int(Date().timeIntervalSince(started) * 1000),
+            voice: utterance.voice?.identifier ?? "system",
+            model: "avspeech"
+        )
+    }
 
-        // Compute total frames + write AIFF.
+    private func makeUtterance(options: SynthesizeOptions) -> AVSpeechUtterance {
+        let utterance = AVSpeechUtterance(string: options.text)
+        if let voiceID = options.voice, let voice = AVSpeechSynthesisVoice(identifier: voiceID) {
+            utterance.voice = voice
+        } else {
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        }
+        if let rate = options.rate { utterance.rate = rate }
+        if let pitch = options.pitch { utterance.pitchMultiplier = pitch }
+        return utterance
+    }
+
+    private func waitForSpeechCompletion(sink: SpeechBufferSink, queue: DispatchQueue) async throws {
+        let deadline = Date().addingTimeInterval(60)
+        while !queue.sync(execute: { sink.done }) {
+            if Date() > deadline {
+                throw MLXSpeechError.inferenceFailed("synthesizer timed out after 60s")
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func writeAiff(buffers: [AVAudioPCMBuffer], format: AVAudioFormat) throws -> (data: Data, durationSeconds: Double) {
         let totalFrames = buffers.reduce(AVAudioFrameCount(0)) { $0 + $1.frameLength }
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("detour-tts-\(UUID().uuidString).aiff")
         defer { try? FileManager.default.removeItem(at: outURL) }
-
-        let outFile: AVAudioFile
-        do {
-            outFile = try AVAudioFile(
-                forWriting: outURL,
-                settings: fmt.settings,
-                commonFormat: fmt.commonFormat,
-                interleaved: fmt.isInterleaved
-            )
-        } catch {
-            throw MLXSpeechError.inferenceFailed("AVAudioFile create: \(error.localizedDescription)")
-        }
+        let outFile = try makeAudioFile(url: outURL, format: format)
         for buf in buffers {
             do { try outFile.write(from: buf) } catch {
                 throw MLXSpeechError.inferenceFailed("AVAudioFile write: \(error.localizedDescription)")
             }
         }
-        let durationSeconds = Double(totalFrames) / fmt.sampleRate
-        let data = try Data(contentsOf: outURL)
-        return SynthesizedAudio(
-            audioData: data,
-            contentType: "audio/aiff",
-            durationSeconds: durationSeconds,
-            durationMs: Int(Date().timeIntervalSince(started) * 1000),
-            voice: utterance.voice?.identifier ?? "system",
-            model: "avspeech"
+        return (
+            data: try Data(contentsOf: outURL),
+            durationSeconds: Double(totalFrames) / format.sampleRate
         )
+    }
+
+    private func makeAudioFile(url: URL, format: AVAudioFormat) throws -> AVAudioFile {
+        do {
+            return try AVAudioFile(
+                forWriting: url,
+                settings: format.settings,
+                commonFormat: format.commonFormat,
+                interleaved: format.isInterleaved
+            )
+        } catch {
+            throw MLXSpeechError.inferenceFailed("AVAudioFile create: \(error.localizedDescription)")
+        }
+    }
+}
+
+private func collectSpeechBuffer(_ buf: AVAudioBuffer, sink: SpeechBufferSink, queue: DispatchQueue) {
+    guard let pcm = buf as? AVAudioPCMBuffer else { return }
+    if pcm.frameLength == 0 {
+        queue.sync { sink.done = true }
+        return
+    }
+    guard let copy = AVAudioPCMBuffer(pcmFormat: pcm.format, frameCapacity: pcm.frameLength) else { return }
+    copy.frameLength = pcm.frameLength
+    copySpeechSamples(from: pcm, to: copy)
+    queue.sync {
+        if sink.format == nil { sink.format = pcm.format }
+        sink.buffers.append(copy)
+    }
+}
+
+private func copySpeechSamples(from pcm: AVAudioPCMBuffer, to copy: AVAudioPCMBuffer) {
+    let channels = Int(pcm.format.channelCount)
+    let frames = Int(pcm.frameLength)
+    if let src = pcm.floatChannelData, let dst = copy.floatChannelData {
+        for c in 0..<channels { memcpy(dst[c], src[c], frames * MemoryLayout<Float>.size) }
+    } else if let src = pcm.int16ChannelData, let dst = copy.int16ChannelData {
+        for c in 0..<channels { memcpy(dst[c], src[c], frames * MemoryLayout<Int16>.size) }
     }
 }
 

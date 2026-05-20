@@ -2696,8 +2696,8 @@ export class AgentRuntime implements IAgentRuntime {
 				entityId,
 			);
 			if (params.actionResult) {
-				params.actionResult.data = {
-					...(params.actionResult.data ?? {}),
+					params.actionResult.data = {
+						...params.actionResult.data,
 					actionResultClipboard: {
 						id: item.id,
 						title: item.title,
@@ -3331,7 +3331,7 @@ export class AgentRuntime implements IAgentRuntime {
 							...accumulatedState,
 							values: { ...accumulatedState.values, ...actionResult.values },
 							data: {
-								...(accumulatedState.data || {}),
+								...accumulatedState.data,
 								actionResults: [...existingActionResults, actionResult],
 								actionPlan,
 							},
@@ -4183,25 +4183,25 @@ export class AgentRuntime implements IAgentRuntime {
 				}
 			}
 		}
-		const currentProviderResults: Record<
+			const currentProviderResults: Record<
 			string,
 			{
 				text?: string;
 				values?: Record<string, ProviderValue>;
 				providerName: string;
 			}
-		> = {
-			...((cachedState.data &&
-				(cachedState.data.providers as Record<
-					string,
-					{
-						text?: string;
-						values?: Record<string, ProviderValue>;
-						providerName: string;
-					}
-				>)) ||
-				{}),
-		};
+			> = {
+				...(cachedState.data?.providers as
+					| Record<
+							string,
+							{
+								text?: string;
+								values?: Record<string, ProviderValue>;
+								providerName: string;
+							}
+						>
+					| undefined),
+			};
 		for (const freshResult of providerData) {
 			// Redact secrets from individual provider text results
 			const redactedText = freshResult.text
@@ -4239,9 +4239,9 @@ export class AgentRuntime implements IAgentRuntime {
 			message.roomId,
 			"conversation",
 		);
-		const aggregatedStateValues: Record<string, StateValue> = {
-			...(cachedState.values || {}),
-		};
+			const aggregatedStateValues: Record<string, StateValue> = {
+				...cachedState.values,
+			};
 		for (const provider of providersToGet) {
 			const providerResult = currentProviderResults[provider.name];
 			if (
@@ -4270,8 +4270,8 @@ export class AgentRuntime implements IAgentRuntime {
 				__conversationSeed: conversationSeed,
 				providers: providersText,
 			},
-			data: {
-				...(cachedState.data || {}),
+				data: {
+					...cachedState.data,
 				__conversationSeed: conversationSeed,
 				providerOrder: providersToGet.map((provider) => provider.name),
 				providers: currentProviderResults,
@@ -6765,15 +6765,7 @@ ${section_end}`;
 			return;
 		}
 
-		const isMissingValue = (inner: unknown): boolean => {
-			if (inner === undefined || inner === null) return true;
-			if (typeof inner === "string") return inner.trim().length === 0;
-			if (Array.isArray(inner)) return inner.length === 0;
-			if (typeof inner === "object") return Object.keys(inner).length === 0;
-			return false;
-		};
-
-		if (isMissingValue(value)) {
+		if (this.isMissingSchemaValue(value)) {
 			if (spec.required) {
 				missingPaths.push(path);
 			}
@@ -6782,69 +6774,87 @@ ${section_end}`;
 
 		switch (this.getEffectiveSchemaValueType(spec)) {
 			case "number":
-				if (
-					typeof value !== "number" &&
-					!(
-						typeof value === "string" &&
-						value.trim() !== "" &&
-						!Number.isNaN(Number(value))
-					)
-				) {
-					invalidPaths.push(path);
-				}
+				if (!this.isSchemaNumber(value)) invalidPaths.push(path);
 				return;
 			case "boolean":
-				if (
-					typeof value !== "boolean" &&
-					!(
-						typeof value === "string" &&
-						["true", "false"].includes(value.trim().toLowerCase())
-					)
-				) {
-					invalidPaths.push(path);
-				}
+				if (!this.isSchemaBoolean(value)) invalidPaths.push(path);
 				return;
 			case "object":
-				if (
-					typeof value !== "object" ||
-					value === null ||
-					Array.isArray(value)
-				) {
-					invalidPaths.push(path);
-					return;
-				}
-				for (const property of spec.properties ?? []) {
-					this.validateSchemaValueAtDepth(
-						(value as Record<string, unknown>)[property.field],
-						property,
-						`${path}.${property.field}`,
-						missingPaths,
-						invalidPaths,
-						depth + 1,
-					);
-				}
+				this.validateSchemaObject(value, spec, path, missingPaths, invalidPaths, depth);
 				return;
 			case "array":
-				if (!Array.isArray(value)) {
-					invalidPaths.push(path);
-					return;
-				}
-				if (spec.items) {
-					value.forEach((item, index) => {
-						this.validateSchemaValueAtDepth(
-							item,
-							spec.items as SchemaValueSpec,
-							`${path}[${index}]`,
-							missingPaths,
-							invalidPaths,
-							depth + 1,
-						);
-					});
-				}
+				this.validateSchemaArray(value, spec, path, missingPaths, invalidPaths, depth);
 				return;
 			default:
 				return;
 		}
+	}
+
+	private isMissingSchemaValue(value: unknown): boolean {
+		if (value === undefined || value === null) return true;
+		if (typeof value === "string") return value.trim().length === 0;
+		if (Array.isArray(value)) return value.length === 0;
+		if (typeof value === "object") return Object.keys(value).length === 0;
+		return false;
+	}
+
+	private isSchemaNumber(value: unknown): boolean {
+		if (typeof value === "number") return true;
+		return typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value));
+	}
+
+	private isSchemaBoolean(value: unknown): boolean {
+		if (typeof value === "boolean") return true;
+		return typeof value === "string" && ["true", "false"].includes(value.trim().toLowerCase());
+	}
+
+	private validateSchemaObject(
+		value: unknown,
+		spec: SchemaValueSpec,
+		path: string,
+		missingPaths: string[],
+		invalidPaths: string[],
+		depth: number,
+	): void {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			invalidPaths.push(path);
+			return;
+		}
+		for (const property of spec.properties ?? []) {
+			this.validateSchemaValueAtDepth(
+				(value as Record<string, unknown>)[property.field],
+				property,
+				`${path}.${property.field}`,
+				missingPaths,
+				invalidPaths,
+				depth + 1,
+			);
+		}
+	}
+
+	private validateSchemaArray(
+		value: unknown,
+		spec: SchemaValueSpec,
+		path: string,
+		missingPaths: string[],
+		invalidPaths: string[],
+		depth: number,
+	): void {
+		if (!Array.isArray(value)) {
+			invalidPaths.push(path);
+			return;
+		}
+		if (!spec.items) return;
+		value.forEach((item, index) => {
+			this.validateSchemaValueAtDepth(
+				item,
+				spec.items as SchemaValueSpec,
+				`${path}[${index}]`,
+				missingPaths,
+				invalidPaths,
+				depth + 1,
+			);
+		});
 	}
 
 	private buildValidationOutputInstructions({
@@ -7869,75 +7879,11 @@ ${section_end}`;
 			throw new Error("Agent id is required");
 		}
 
-		// WHY upsert instead of get-check-create: Eliminates race condition where
-		// two concurrent calls could both see agent doesn't exist and both try to
-		// create it. Upsert is atomic (single SQL statement), so the database
-		// guarantees only one succeeds.
-
-		// Fetch existing agent to perform intelligent merge (if it exists)
 		const existingAgent =
 			(await this.adapter.getAgentsByIds([agent.id]))[0] ?? null;
-
-		let agentToUpsert: Partial<Agent>;
-
-		if (existingAgent) {
-			// Merge DB-persisted settings with character configuration
-			// Priority: DB (persisted runtime settings) < character.json (file overrides)
-			const mergedSettings = {
-				...existingAgent.settings, // Keep all DB-persisted settings
-				...agent.settings, // Override only keys present in character.json
-			};
-
-			// Deep merge secrets to preserve runtime-generated secrets
-			const existingSecrets =
-				existingAgent.secrets && typeof existingAgent.secrets === "object"
-					? existingAgent.secrets
-					: {};
-			const existingSettingsSecrets =
-				existingAgent.settings?.secrets &&
-				typeof existingAgent.settings.secrets === "object"
-					? existingAgent.settings.secrets
-					: {};
-			const agentSecrets =
-				agent.secrets && typeof agent.secrets === "object" ? agent.secrets : {};
-			const agentSettingsSecrets =
-				agent.settings?.secrets && typeof agent.settings.secrets === "object"
-					? agent.settings.secrets
-					: {};
-			const mergedSecrets = {
-				...existingSecrets,
-				...existingSettingsSecrets,
-				...agentSecrets,
-				...agentSettingsSecrets,
-			};
-
-			if (Object.keys(mergedSecrets).length > 0) {
-				mergedSettings.secrets = mergedSecrets;
-			}
-
-			agentToUpsert = {
-				...existingAgent, // Keep all DB-persisted data
-				...agent, // Override with character.json values
-				settings: mergedSettings, // Use intelligently merged settings
-				id: agent.id,
-				updatedAt: Date.now(),
-				secrets:
-					Object.keys(mergedSecrets).length > 0 ? mergedSecrets : agent.secrets,
-			};
-		} else {
-			// No existing agent - upsert will insert it
-			agentToUpsert = {
-				...agent,
-				id: agent.id,
-				createdAt: Date.now(),
-				updatedAt: Date.now(),
-			} as Agent;
-		}
-
-		// Atomic upsert - handles both insert and update cases
+		const agentToUpsert = this.buildAgentUpsert(agent, existingAgent);
 		await this.adapter.upsertAgents([agentToUpsert]);
 
-		// Fetch and return the final state
 		const refreshedAgent =
 			(await this.adapter.getAgentsByIds([agent.id]))[0] ?? null;
 
@@ -7950,6 +7896,48 @@ ${section_end}`;
 			existingAgent ? "Agent updated on restart" : "Agent created",
 		);
 		return refreshedAgent;
+	}
+
+	private buildAgentUpsert(agent: Partial<Agent>, existingAgent: Agent | null): Partial<Agent> {
+		if (!existingAgent) {
+			return {
+				...agent,
+				id: agent.id,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			} as Agent;
+		}
+		const mergedSettings = {
+			...existingAgent.settings,
+			...agent.settings,
+		};
+		const mergedSecrets = this.mergeAgentSecrets(existingAgent, agent);
+		if (Object.keys(mergedSecrets).length > 0) {
+			mergedSettings.secrets = mergedSecrets;
+		}
+		return {
+			...existingAgent,
+			...agent,
+			settings: mergedSettings,
+			id: agent.id,
+			updatedAt: Date.now(),
+			secrets: Object.keys(mergedSecrets).length > 0 ? mergedSecrets : agent.secrets,
+		};
+	}
+
+	private mergeAgentSecrets(existingAgent: Agent, agent: Partial<Agent>): Record<string, unknown> {
+		return {
+			...this.objectRecord(existingAgent.secrets),
+			...this.objectRecord(existingAgent.settings?.secrets),
+			...this.objectRecord(agent.secrets),
+			...this.objectRecord(agent.settings?.secrets),
+		};
+	}
+
+	private objectRecord(value: unknown): Record<string, unknown> {
+		return value && typeof value === "object" && !Array.isArray(value)
+			? value as Record<string, unknown>
+			: {};
 	}
 	async getEntityById(entityId: UUID): Promise<Entity | null> {
 		const entities = await this.adapter.getEntitiesByIds([entityId]);

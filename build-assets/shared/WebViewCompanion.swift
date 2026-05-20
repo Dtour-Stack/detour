@@ -36,6 +36,7 @@ final class WebViewCompanionAppDelegate: NSObject, NSApplicationDelegate {
     private let config: WebViewCompanionConfig
     private var window: NSWindow?
     private var webView: WKWebView?
+    private var closeObserver: NSObjectProtocol?
 
     init(config: WebViewCompanionConfig) {
         self.config = config
@@ -104,12 +105,18 @@ final class WebViewCompanionAppDelegate: NSObject, NSApplicationDelegate {
         win.makeKeyAndOrderFront(nil)
         webView = wv
         window = win
-        NotificationCenter.default.addObserver(
+        closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: win,
             queue: .main,
         ) { _ in NSApplication.shared.terminate(nil) }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    deinit {
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+        }
     }
 }
 
