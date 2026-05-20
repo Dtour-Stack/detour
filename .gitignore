@@ -39,6 +39,7 @@ packages/web/public/apple-touch-icon.png
 
 # Eliza local data (vault, audit, auth) — NEVER commit.
 .eliza/
+.agents/
 .xhawk/
 .claude/settings.local.json
 .codex/hooks.json

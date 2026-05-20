@@ -124,7 +124,7 @@ final class MLXInferenceService {
         }
         // Tokenizer load — proves swift-transformers integration is wired.
         let tokenizer = try await loadTokenizer(modelID: options.modelID)
-        let tokenized = try tokenizer.encode(text: prompt)
+        let tokenized = tokenizer.encode(text: prompt)
         NSLog("[MLX] tokenized \(prompt.count) chars → \(tokenized.count) tokens for \(options.modelID)")
         // Forward pass not yet implemented in-tree. We have:
         //   - mlx-swift (tensor ops): ready

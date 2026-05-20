@@ -20,12 +20,7 @@ export type ServiceMethodAllowlist = Readonly<Record<string, ReadonlyArray<strin
  */
 export const SERVICE_METHODS: ServiceMethodAllowlist = {
 	cron: ["listJobs", "getJob", "createJob", "updateJob", "deleteJob"],
-	vault: [
-		// Read-only by default; write methods require explicit additional gate.
-		"hasMasterKey",
-		"listSecretIds",
-		"getSecret",
-	],
+	vault: ["hasMasterKey"],
 	pensieve: [
 		"listMemories",
 		"getMemory",

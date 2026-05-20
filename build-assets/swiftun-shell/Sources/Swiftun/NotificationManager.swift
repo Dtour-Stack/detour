@@ -24,7 +24,7 @@
 
 import AppKit
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = NotificationManager()
@@ -387,7 +387,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, @un
 /// URLSessionDataDelegate that forwards raw chunks back to the manager
 /// for SSE parsing. Lives in its own class because URLSession delegates
 /// can't be MainActor-isolated, and we want a clean hop.
-private final class SSEDelegate: NSObject, URLSessionDataDelegate {
+private final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     weak var parent: NotificationManager?
     init(parent: NotificationManager) {
         self.parent = parent

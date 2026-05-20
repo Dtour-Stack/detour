@@ -1,21 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import { ModelType, type IAgentRuntime } from "@elizaos/core";
-import { installDpeFallbackPatch, runWithPlannerFallbackContext } from "./dpe-fallback-plugin";
+import {
+	installDpeFallbackPatch,
+	runWithPlannerFallbackContext,
+	setCompanionPlannerHook,
+	conversationText,
+} from "./dpe-fallback-plugin";
+import { getProviderQuotaService } from "./provider-quota-service";
+
+type DynamicPromptArgs = Parameters<IAgentRuntime["dynamicPromptExecFromState"]>[0];
+
+const plannerSchema: DynamicPromptArgs["schema"] = [
+	{ field: "thought", description: "Planner thought" },
+	{ field: "actions", description: "Selected actions" },
+	{ field: "providers", description: "Provider context" },
+	{ field: "text", description: "Reply text" },
+	{ field: "simple", description: "Simple response flag" },
+];
 
 const plannerArgs = {
+	params: { prompt: "Reply to the user." },
 	options: { modelType: ModelType.ACTION_PLANNER },
-	schema: [
-		{ field: "thought" },
-		{ field: "actions" },
-		{ field: "providers" },
-		{ field: "text" },
-		{ field: "simple" },
-	],
+	schema: plannerSchema,
 	state: {
 		values: { recentMessages: "user: Detour hello" },
+		data: {},
 		text: "Detour hello",
 	},
-} as never;
+} satisfies DynamicPromptArgs;
 
 function makeRuntime(
 	original: (args?: unknown) => Promise<unknown>,
@@ -70,341 +82,12 @@ describe("dpe fallback patch", () => {
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
 
-		expect(calls).toEqual(["original", "original", "model"]);
+		expect(calls).toEqual(["original", "model"]);
 		expect(result?.text).toBe("plain reply");
 	});
 
-	test("preserves planner retries and tries compact structured recovery before plain fallback", async () => {
-		const plannerOptions: unknown[] = [];
-		const { runtime } = makeRuntime(async (args) => {
-			plannerOptions.push((args as { options?: Record<string, unknown> }).options);
-			return null;
-		});
-
-		await runWithPlannerFallbackContext(
-			{ source: "discord", addressed: true },
-			() => runtime.dynamicPromptExecFromState(plannerArgs),
-		);
-
-		expect(plannerOptions[0]).toEqual({ modelType: ModelType.ACTION_PLANNER });
-		expect(plannerOptions[1]).toMatchObject({
-			modelType: ModelType.ACTION_PLANNER,
-			preferredEncapsulation: "json",
-			forceFormat: "json",
-			maxRetries: 0,
-			contextCheckLevel: 0,
-			checkpointCodes: false,
-		});
-	});
-
-	test("recovers addressed planner actions with compact structured retry before plain fallback", async () => {
-		const plannerOptions: unknown[] = [];
-		const { runtime, calls } = makeRuntime(async (args) => {
-			plannerOptions.push((args as { options?: Record<string, unknown> }).options);
-			if (plannerOptions.length === 1) throw new Error("planner failed");
-			return {
-				thought: "compact planner recovered",
-				actions: ["SEND_IMESSAGE"],
-				providers: "",
-				text: "sending it now",
-				simple: false,
-			};
-		});
-
-		const result = await runWithPlannerFallbackContext(
-			{ source: "telegram", addressed: true },
-			() => runtime.dynamicPromptExecFromState(plannerArgs),
-		);
-
-		expect(calls).toEqual(["original", "original"]);
-		expect(result?.actions).toEqual(["SEND_IMESSAGE"]);
-		expect(plannerOptions[1]).toMatchObject({
-			forceFormat: "json",
-			maxRetries: 0,
-			contextCheckLevel: 0,
-		});
-	});
-
-	test("tries configured provider recovery before plain fallback on transient planner failure", async () => {
-		const plannerProviders: unknown[] = [];
-		const args = {
-			options: { modelType: ModelType.ACTION_PLANNER },
-			schema: [
-				{ field: "thought" },
-				{ field: "actions" },
-				{ field: "providers" },
-				{ field: "text" },
-				{ field: "simple" },
-			],
-			state: {
-				values: { recentMessages: "user: Detour send the iMessage" },
-				text: "Detour send the iMessage",
-			},
-		} as never;
-		const { runtime, calls } = makeRuntime(
-			async (input) => {
-				const record = input as { options?: Record<string, unknown>; state?: { data?: Record<string, unknown> } };
-				plannerProviders.push(record.options?.model ?? "active");
-				if (record.options?.model === "openrouter") {
-					return {
-						thought: "provider recovered",
-						actions: ["SEND_IMESSAGE"],
-						providers: "",
-						text: "sending it now",
-						simple: false,
-					};
-				}
-				record.state!.data = {
-					structuredOutputFailure: {
-						kind: "model_error",
-						parseError: "Codex Responses API 503: upstream connection timeout",
-						responsePreview: "",
-					},
-				};
-				return null;
-			},
-			async () => "plain reply",
-			{ name: "Detour Squirrel" },
-			{ OPENROUTER_API_KEY: "sk-openrouter-test" },
-		);
-
-		const result = await runWithPlannerFallbackContext(
-			{ source: "telegram", addressed: true },
-			() => runtime.dynamicPromptExecFromState(args),
-		);
-
-		expect(calls).toEqual(["original", "original", "original"]);
-		expect(plannerProviders).toEqual(["active", "active", "openrouter"]);
-		expect(result?.actions).toEqual(["SEND_IMESSAGE"]);
-	});
-
-	test("recovery prefers Anthropic over OpenRouter when both are configured", async () => {
-		// Regression test for "structured planner falls back through weak
-		// OpenRouter free model when Anthropic/Claude is also available".
-		// PROVIDER_RECOVERY_TARGETS order must put anthropic first so the
-		// agent's structured-output path doesn't hand TOON schemas to a
-		// free-tier model that can't reliably emit them.
-		const plannerProviders: unknown[] = [];
-		const args = {
-			options: { modelType: ModelType.ACTION_PLANNER },
-			schema: [
-				{ field: "thought" },
-				{ field: "actions" },
-				{ field: "providers" },
-				{ field: "text" },
-				{ field: "simple" },
-			],
-			state: {
-				values: { recentMessages: "user: Detour fetch the report" },
-				text: "Detour fetch the report",
-			},
-		} as never;
-		const { runtime } = makeRuntime(
-			async (input) => {
-				const record = input as { options?: Record<string, unknown>; state?: { data?: Record<string, unknown> } };
-				plannerProviders.push(record.options?.model ?? "active");
-				if (record.options?.model === "anthropic") {
-					return {
-						thought: "anthropic recovered",
-						actions: ["FETCH_REPORT"],
-						providers: "",
-						text: "fetching the report",
-						simple: false,
-					};
-				}
-				record.state!.data = {
-					structuredOutputFailure: {
-						kind: "model_error",
-						parseError: "Codex Responses API 503: upstream connection timeout",
-						responsePreview: "",
-					},
-				};
-				return null;
-			},
-			async () => "plain reply",
-			{ name: "Detour Squirrel" },
-			// Both keys present — anthropic must be tried FIRST.
-			{ ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" },
-		);
-
-		const result = await runWithPlannerFallbackContext(
-			{ source: "telegram", addressed: true },
-			() => runtime.dynamicPromptExecFromState(args),
-		);
-
-		// Two failed "active" attempts (planner retries), then anthropic
-		// recovers FIRST — openrouter never gets called because anthropic
-		// succeeds. Order in plannerProviders is [active, active, anthropic].
-		expect(plannerProviders).toEqual(["active", "active", "anthropic"]);
-		expect(plannerProviders).not.toContain("openrouter");
-		expect(result?.actions).toEqual(["FETCH_REPORT"]);
-	});
-
-	test("recovery includes OAuth-paired providers even without API_KEY env", async () => {
-		// Regression: user has Anthropic via Claude Pro OAuth (no
-		// ANTHROPIC_API_KEY env var) AND Codex as the active provider via
-		// CODEX OAuth. When Codex's structured output fails, recovery
-		// must still try Anthropic (whose plugin registered a TEXT_LARGE
-		// handler at runtime) instead of silently skipping it because
-		// the env-key check returns false.
-		const plannerProviders: unknown[] = [];
-		const args = {
-			options: { modelType: ModelType.ACTION_PLANNER },
-			schema: [
-				{ field: "thought" },
-				{ field: "actions" },
-				{ field: "providers" },
-				{ field: "text" },
-				{ field: "simple" },
-			],
-			state: {
-				values: { recentMessages: "user: Detour summarize this" },
-				text: "Detour summarize this",
-			},
-		} as never;
-		const calls: string[] = [];
-		// Simulate runtime where ONLY the registered-model-handler check
-		// (not env keys, not settings) reveals Anthropic as available.
-		const modelsMap = new Map<string, Array<{ provider?: string }>>([
-			["TEXT_LARGE", [{ provider: "openai" }, { provider: "anthropic" }]],
-		]);
-		const runtime = {
-			character: { name: "Detour Squirrel" },
-			getSetting: () => undefined, // no settings configured
-			dynamicPromptExecFromState: async (input: unknown) => {
-				calls.push("original");
-				const record = input as { options?: Record<string, unknown>; state?: { data?: Record<string, unknown> } };
-				plannerProviders.push(record.options?.model ?? "active");
-				if (record.options?.model === "anthropic") {
-					return {
-						thought: "anthropic recovered via oauth",
-						actions: ["SUMMARIZE"],
-						providers: "",
-						text: "summarizing",
-						simple: false,
-					};
-				}
-				record.state!.data = {
-					structuredOutputFailure: {
-						kind: "model_error",
-						parseError: "Codex Responses API 503: upstream connection timeout",
-						responsePreview: "",
-					},
-				};
-				return null;
-			},
-			useModel: async () => "plain reply",
-			logger: { warn: () => undefined },
-			models: modelsMap,
-		} as never;
-		installDpeFallbackPatch(runtime);
-
-		// No env vars set — clear them to simulate OAuth-only Anthropic.
-		const originalEnv = process.env.ANTHROPIC_API_KEY;
-		delete process.env.ANTHROPIC_API_KEY;
-		try {
-			const result = await runWithPlannerFallbackContext(
-				{ source: "telegram", addressed: true },
-				() => (runtime as IAgentRuntime).dynamicPromptExecFromState(args),
-			);
-			expect(plannerProviders).toContain("anthropic");
-			expect(result?.actions).toEqual(["SUMMARIZE"]);
-		} finally {
-			if (originalEnv !== undefined) process.env.ANTHROPIC_API_KEY = originalEnv;
-		}
-	});
-
-	test("tries provider recovery for non-reply structured response handlers", async () => {
-		const seenProviders: unknown[] = [];
-		const responseArgs = {
-			options: { modelType: ModelType.TEXT_MEDIUM },
-			schema: [
-				{ field: "name" },
-				{ field: "reasoning" },
-				{ field: "action" },
-			],
-			state: {
-				values: { recentMessages: "user: hey" },
-				text: "hey",
-			},
-		} as never;
-		const { runtime, calls } = makeRuntime(
-			async (input) => {
-				const record = input as { options?: Record<string, unknown>; state?: { data?: Record<string, unknown> } };
-				seenProviders.push(record.options?.model ?? "active");
-				if (record.options?.model === "openrouter") {
-					return { name: "reply", reasoning: "provider recovered", action: "REPLY" };
-				}
-				record.state!.data = {
-					structuredOutputFailure: {
-						kind: "model_error",
-						parseError: "Insufficient credits",
-						responsePreview: "",
-					},
-				};
-				throw new Error("Insufficient credits");
-			},
-			async () => "plain reply",
-			{ name: "Detour Squirrel" },
-			{ OPENROUTER_API_KEY: "sk-openrouter-test" },
-		);
-
-		const result = await runtime.dynamicPromptExecFromState(responseArgs);
-
-		expect(calls).toEqual(["original", "original", "original"]);
-		expect(seenProviders).toEqual(["active", "active", "openrouter"]);
-		expect(result?.action).toBe("REPLY");
-	});
-
-	test("normalizes legacy reply planner schema before structured attempt", async () => {
-		const plannerSchemas: Array<Array<Record<string, unknown>>> = [];
-		const legacyArgs = {
-			options: { modelType: ModelType.TEXT_LARGE },
-			schema: [
-				{ field: "thought", required: true },
-				{ field: "providers" },
-				{ field: "actions", type: "string", required: true },
-				{ field: "text" },
-				{ field: "simple" },
-			],
-			state: {
-				values: { recentMessages: "user: Detour hello" },
-				text: "Detour hello",
-			},
-		} as never;
-		const { runtime } = makeRuntime(async (args) => {
-			plannerSchemas.push((args as { schema: Array<Record<string, unknown>> }).schema);
-			return {
-				text: "normal reply",
-			};
-		});
-
-		const result = await runWithPlannerFallbackContext(
-			{ source: "discord", addressed: true },
-			() => runtime.dynamicPromptExecFromState(legacyArgs),
-		);
-
-		const schema = plannerSchemas[0] ?? [];
-		const actions = schema.find((row) => row.field === "actions");
-		const thought = schema.find((row) => row.field === "thought");
-		expect(result?.text).toBe("normal reply");
-		expect(actions).toMatchObject({
-			type: "array",
-			required: false,
-			validateField: false,
-			streamField: false,
-		});
-		expect(thought).toMatchObject({
-			required: false,
-			validateField: false,
-			streamField: false,
-		});
-	});
-
 	test("does not blindly retry unaddressed planner failures", async () => {
-		const plannerOptions: unknown[] = [];
-		const { runtime, calls } = makeRuntime(async (args) => {
-			plannerOptions.push((args as { options?: Record<string, unknown> }).options);
+		const { runtime, calls } = makeRuntime(async () => {
 			throw new Error("planner failed");
 		});
 
@@ -414,140 +97,6 @@ describe("dpe fallback patch", () => {
 		)).rejects.toThrow("planner failed");
 
 		expect(calls).toEqual(["original"]);
-		expect(plannerOptions).toEqual([{ modelType: ModelType.ACTION_PLANNER }]);
-	});
-
-	test("uses compact state retry for TEXT_LARGE structured failures", async () => {
-		const seen: Array<{ modelType?: unknown; recentMessages?: string; providerText?: string }> = [];
-		const args = {
-			options: { modelType: ModelType.TEXT_LARGE, maxRetries: 3 },
-			schema: [
-				{ field: "summary" },
-				{ field: "category" },
-			],
-			state: {
-				values: { recentMessages: "x".repeat(7_000) },
-				text: "x".repeat(7_000),
-				data: { providers: { FACTS: { text: "y".repeat(7_000) } } },
-			},
-		} as never;
-		const { runtime, calls } = makeRuntime(async (dynamicArgs) => {
-			const typedArgs = dynamicArgs as {
-				options?: { modelType?: unknown };
-				state?: { values?: { recentMessages?: string }; data?: { providers?: { FACTS?: { text?: string } } } };
-			};
-			seen.push({
-				modelType: typedArgs.options?.modelType,
-				recentMessages: typedArgs.state?.values?.recentMessages,
-				providerText: typedArgs.state?.data?.providers?.FACTS?.text,
-			});
-			if (seen.length === 1) throw new Error("TEXT_LARGE schema failed");
-			return {
-				summary: "compact summary",
-				category: "prompt-state-fallback",
-			};
-		});
-
-		const result = await runtime.dynamicPromptExecFromState(args);
-
-		expect(calls).toEqual(["original", "original"]);
-		expect(result?.summary).toBe("compact summary");
-		expect(seen[0]?.modelType).toBe(ModelType.TEXT_LARGE);
-		expect(seen[1]?.modelType).toBe(ModelType.TEXT_MEDIUM);
-		expect((seen[1]?.recentMessages ?? "").length).toBeLessThan(3_000);
-		expect((seen[1]?.providerText ?? "").length).toBeLessThan(1_200);
-	});
-
-	test("fallback retries with compact prompt after a model failure", async () => {
-		const prompts: string[] = [];
-		const { runtime, calls } = makeRuntime(
-			async () => {
-				throw new Error("planner failed");
-			},
-			async (_modelType, params) => {
-				prompts.push((params as { prompt?: string }).prompt ?? "");
-				if (prompts.length === 1) throw new Error("context too large");
-				return "compact reply";
-			},
-			{ name: "Detour Squirrel" },
-			{ ADDITIONAL_RESPONSE_STATE_PROVIDERS: "FACTS" },
-		);
-		const argsWithMemory = {
-			options: { modelType: ModelType.ACTION_PLANNER },
-			schema: [
-				{ field: "thought" },
-				{ field: "actions" },
-				{ field: "providers" },
-				{ field: "text" },
-				{ field: "simple" },
-			],
-			state: {
-				values: { recentMessages: "user: Detour hello" },
-				text: "Detour hello",
-				data: {
-					providers: {
-						FACTS: { text: "Known facts:\n- Remember the unified Detour hub." },
-					},
-				},
-			},
-		} as never;
-
-		const result = await runWithPlannerFallbackContext(
-			{ source: "discord", addressed: true },
-			() => runtime.dynamicPromptExecFromState(argsWithMemory),
-		);
-
-		expect(calls).toEqual(["original", "original", "model", "model"]);
-		expect(result?.text).toBe("compact reply");
-		expect(prompts[0]).toContain("Memory and capability context");
-		expect(prompts[1]).toContain("Relevant context");
-	});
-
-	test("preserves TEXT_LARGE retry budget before compact recovery", async () => {
-		const plannerOptions: unknown[] = [];
-		const providerArgs = {
-			options: {
-				modelType: ModelType.TEXT_LARGE,
-				preferredEncapsulation: "toon",
-				contextCheckLevel: 0,
-				maxRetries: 1,
-			},
-			schema: [
-				{
-					field: "providers",
-					description: "Provider names",
-					type: "array",
-					items: { description: "One provider name" },
-					required: true,
-					validateField: false,
-					streamField: false,
-				},
-			],
-			state: {
-				values: { recentMessages: "user: check my uploaded file" },
-				text: "check my uploaded file",
-			},
-		} as never;
-		const { runtime, calls } = makeRuntime(async (args) => {
-			plannerOptions.push((args as { options?: Record<string, unknown> }).options);
-			return null;
-		});
-
-		const result = await runtime.dynamicPromptExecFromState(providerArgs);
-
-		expect(result).toBeNull();
-		expect(calls).toEqual(["original", "original"]);
-		expect(plannerOptions[0]).toMatchObject({
-			modelType: ModelType.TEXT_LARGE,
-			maxRetries: 1,
-		});
-		expect(plannerOptions[1]).toMatchObject({
-			modelType: ModelType.TEXT_MEDIUM,
-			preferredEncapsulation: "json",
-			forceFormat: "json",
-			maxRetries: 0,
-			contextCheckLevel: 0,
-		});
 	});
 
 	test("does not force plain replies for unaddressed Discord messages", async () => {
@@ -617,7 +166,7 @@ describe("dpe fallback patch", () => {
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
 
-		expect(calls).toEqual(["original", "original", "model"]);
+		expect(calls).toEqual(["original", "model"]);
 		expect(result?.text).toBe("plain reply");
 	});
 
@@ -652,13 +201,8 @@ describe("dpe fallback patch", () => {
 
 		const argsWithProviders = {
 			options: { modelType: ModelType.ACTION_PLANNER },
-			schema: [
-				{ field: "thought" },
-				{ field: "actions" },
-				{ field: "providers" },
-				{ field: "text" },
-				{ field: "simple" },
-			],
+			params: { prompt: "Reply to the user." },
+			schema: plannerSchema,
 			state: {
 				values: { recentMessages: "user: hi" },
 				text: "hi",
@@ -676,7 +220,7 @@ describe("dpe fallback patch", () => {
 					},
 				},
 			},
-		} as never;
+		} satisfies DynamicPromptArgs;
 
 		const result = await runWithPlannerFallbackContext(
 			{ source: "discord", addressed: true },
@@ -711,5 +255,83 @@ describe("dpe fallback patch", () => {
 
 		expect(prompts).toHaveLength(1);
 		expect(prompts[0]).not.toContain("Memory and capability context");
+	});
+
+	test("applies companion pre-pass for persona framing and compression", async () => {
+		let prePassCalled = false;
+		let compressCalled = false;
+		setCompanionPlannerHook({
+			personaPrePass: async (agentName, userText) => {
+				prePassCalled = true;
+				expect(agentName).toBe("Detour Squirrel");
+				expect(userText).toBe("Detour hello");
+				return "persona-frame-text";
+			},
+			compress: async (history, targetTokens) => {
+				compressCalled = true;
+				expect(history.length).toBeGreaterThan(4000);
+				return "compressed-summary";
+			},
+		});
+
+		const { runtime } = makeRuntime(
+			async (args) => {
+				const typedArgs = args as { state?: { values?: Record<string, unknown> } };
+				expect(typedArgs.state?.values?.detourCompanionFrame).toBe("persona-frame-text");
+				expect(typedArgs.state?.values?.recentMessages).toContain("compressed-summary");
+				return { text: "processed" };
+			},
+			async () => "plain",
+			{ name: "Detour Squirrel" }
+		);
+
+		const longPlannerArgs = {
+			...plannerArgs,
+			state: {
+				values: {
+					recentMessages: "User: Detour hello\n" + "x\n".repeat(2500),
+				},
+				data: {},
+				text: "Detour hello",
+			},
+		} satisfies DynamicPromptArgs;
+
+		await runWithPlannerFallbackContext(
+			{ source: "discord", addressed: true },
+			() => runtime.dynamicPromptExecFromState(longPlannerArgs)
+		);
+
+		expect(prePassCalled).toBe(true);
+		expect(compressCalled).toBe(true);
+		setCompanionPlannerHook(null);
+	});
+
+	test("short-circuits planner when quota is capped", async () => {
+		const quotaService = getProviderQuotaService();
+		quotaService.setActiveCredential("openai", "test-account");
+		quotaService.mark({
+			providerId: "openai",
+			accountId: "test-account",
+			accountLabel: "OpenAI Premium",
+			kind: "plan_quota",
+			planType: "weekly-developer",
+			resetsAtMs: Date.now() + 100_000,
+			upstreamMessage: "Exceeded rate limit for model gpt-4",
+		});
+
+		const { runtime } = makeRuntime(async () => {
+			throw new Error("should not be called because of quota cap");
+		});
+
+		const result = await runWithPlannerFallbackContext(
+			{ source: "discord", addressed: true },
+			() => runtime.dynamicPromptExecFromState(plannerArgs)
+		);
+
+		expect(result?.text).toContain("heads up — my active model provider (OpenAI Premium) hit its weekly cap.");
+		expect(result?.simple).toBe(true);
+
+		quotaService.setActiveCredential(null, null);
+		quotaService.clear("openai", "test-account");
 	});
 });

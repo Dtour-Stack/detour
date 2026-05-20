@@ -204,6 +204,10 @@ function keychainUnsafeMessage(prefix: string): string {
   return `${prefix}OS keychain is unsafe on this host (headless Linux with no reachable D-Bus session, or ELIZA_VAULT_DISABLE_KEYCHAIN=1). Set ELIZA_VAULT_PASSPHRASE (≥${PASSPHRASE_MIN_LENGTH} chars) to enable a passphrase-derived master key, or pass an inMemoryMasterKey.`;
 }
 
+function emitMasterKeyWarning(lines: readonly string[]): void {
+  process.stderr.write(`${lines.join("\n")}\n`);
+}
+
 /**
  * Default resolver: try the OS keychain first, then a passphrase-derived
  * key from `ELIZA_VAULT_PASSPHRASE`. If both fail, throws a single
@@ -226,7 +230,16 @@ export function defaultMasterKey(
       // the native crash fires.
       if (isKeychainUnsafe()) {
         const passphrase = passphraseMasterKeyFromEnv(opts.service);
-        if (passphrase) return passphrase.load();
+        if (passphrase) {
+          emitMasterKeyWarning([
+            "================================================================================",
+            "WARNING: OS keychain is unsafe or disabled on this host.",
+            "Falling back to passphrase-derived master key (ELIZA_VAULT_PASSPHRASE).",
+            "Secrets will not be stored in a native secure enclave.",
+            "================================================================================",
+          ]);
+          return passphrase.load();
+        }
         throw new MasterKeyUnavailableError(keychainUnsafeMessage("vault: "));
       }
       try {
@@ -234,6 +247,14 @@ export function defaultMasterKey(
       } catch (keychainErr) {
         const passphrase = passphraseMasterKeyFromEnv(opts.service);
         if (passphrase) {
+          emitMasterKeyWarning([
+            "================================================================================",
+            "WARNING: Native OS keychain load failed.",
+            "Falling back to passphrase-derived master key (ELIZA_VAULT_PASSPHRASE).",
+            `Error: ${keychainErr instanceof Error ? keychainErr.message : String(keychainErr)}`,
+            "Secrets will not be stored in a native secure enclave.",
+            "================================================================================",
+          ]);
           try {
             return await passphrase.load();
           } catch (passphraseErr) {

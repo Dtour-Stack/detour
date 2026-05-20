@@ -13,6 +13,23 @@
 
 import Cocoa
 
+private final class URLDispatchResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func markSucceeded() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    var succeeded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 /// AppleScript-side detour:// dispatch. Same rationale as TrayController:
 /// POST to the in-process dispatcher first so the URL is handled by THIS
 /// bun instance, falling back to NSWorkspace if the endpoint isn't up yet.
@@ -28,19 +45,19 @@ private func openDetourURL(_ url: String) -> Bool {
     // Synchronous-ish: AppleScript wants a return value on this call.
     // Use a semaphore so the script gets a real answer for small calls.
     let sema = DispatchSemaphore(value: 0)
-    var ok = false
+    let result = URLDispatchResult()
     let task = URLSession.shared.dataTask(with: req) { _, response, _ in
         if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-            ok = true
+            result.markSucceeded()
         }
         sema.signal()
     }
     task.resume()
     _ = sema.wait(timeout: .now() + 4.0)
-    if !ok, let u = URL(string: url) {
+    if !result.succeeded, let u = URL(string: url) {
         return NSWorkspace.shared.open(u)
     }
-    return ok
+    return result.succeeded
 }
 
 private func percentEncode(_ value: String) -> String {

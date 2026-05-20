@@ -2,6 +2,11 @@ import Electrobun, { Utils } from "electrobun/bun";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { logger } from "@elizaos/core";
+
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
 
 /**
  * Electrobun often launches the Bun entry without Bun CLI’s automatic `.env`
@@ -32,7 +37,7 @@ function loadRootDotEnv(): void {
 
 loadRootDotEnv();
 
-console.log("[main] starting");
+logger.info({ src: "main" }, "[Main] starting");
 
 // Shutdown hooks. Canonical Electrobun pattern is `before-quit` for async
 // cleanup — see .claude/rules/electrobun.md ("Use `before-quit` for async
@@ -50,7 +55,7 @@ const shutdownHooks: ShutdownHook[] = [];
 let cleanupPromise: Promise<void> | null = null;
 const runCleanup = (label: string): Promise<void> => {
 	if (cleanupPromise) return cleanupPromise;
-	console.log(`[main] cleanup (${label})`);
+	logger.info({ src: "main", label }, "[Main] cleanup");
 	cleanupPromise = (async () => {
 		for (const hook of shutdownHooks) {
 			try { await hook(); } catch { /* best-effort */ }
@@ -64,11 +69,11 @@ process.prependListener("SIGTERM", () => { void runCleanup("SIGTERM").finally(()
 process.prependListener("SIGHUP", () => { void runCleanup("SIGHUP").finally(() => Utils.quit()); });
 process.prependListener("exit", () => { void runCleanup("exit"); });
 process.prependListener("uncaughtException", (err) => {
-	console.error("[main] uncaughtException:", err);
+	logger.error({ src: "main", err: errorMessage(err) }, "[Main] uncaughtException");
 	void runCleanup("uncaughtException").finally(() => Utils.quit());
 });
 process.prependListener("unhandledRejection", (err) => {
-	console.error("[main] unhandledRejection:", err);
+	logger.error({ src: "main", err: errorMessage(err) }, "[Main] unhandledRejection");
 	void runCleanup("unhandledRejection").finally(() => Utils.quit());
 });
 
@@ -84,13 +89,13 @@ process.prependListener("unhandledRejection", (err) => {
 const dataDir = join(homedir(), ".detour");
 mkdirSync(dataDir, { recursive: true });
 const pgliteDataDir = join(dataDir, "eliza-db");
-console.log(`[main] dataDir=${dataDir}`);
+logger.info({ src: "main", dataDir }, "[Main] data dir ready");
 
-console.log("[main] booting core (in-process)");
+logger.info({ src: "main" }, "[Main] booting core");
 const { startCore } = await import("./core/index");
 const core = await startCore({ dataDir, pgliteDataDir, port: 2138 });
 shutdownHooks.push(() => core.stop());
-console.log(`[main] core listening on http://127.0.0.1:${core.port}`);
+logger.info({ src: "main", port: core.port }, "[Main] core listening");
 
 const { createKernel } = await import("./kernel/app");
 const { loadFeatures } = await import("./kernel/registry");
@@ -111,10 +116,10 @@ const { urlSchemeFeature } = await import("./features/url-scheme");
 const { statusWidgetFeature } = await import("./features/status-widget");
 const { trayBridgeFeature } = await import("./features/tray-bridge");
 
-console.log("[main] creating kernel");
+logger.info({ src: "main" }, "[Main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
 
-console.log("[main] loading features");
+logger.info({ src: "main" }, "[Main] loading features");
 await loadFeatures(kernel, [
 	// trayPopoverFeature MUST load before chatFeature so the popover
 	// owns the tray-icon-click target. (Both register handlers on the
@@ -140,4 +145,4 @@ await loadFeatures(kernel, [
 	trayBridgeFeature,
 ]);
 
-console.log("[main] tray-app ready");
+logger.info({ src: "main" }, "[Main] tray app ready");

@@ -38,7 +38,7 @@ final class GlobalHotKeys {
         handlers[id] = action
 
         var hotKeyRef: EventHotKeyRef?
-        var hotKeyID = EventHotKeyID(signature: 0x44_45_54_52 /* "DETR" */, id: id)
+        let hotKeyID = EventHotKeyID(signature: 0x44_45_54_52 /* "DETR" */, id: id)
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
                                           GetEventDispatcherTarget(),
                                           0,

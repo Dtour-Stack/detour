@@ -36,7 +36,7 @@ struct AskDetourIntent: AppIntent {
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let encoded = prompt.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let url = URL(string: "detour://chat?text=\(encoded)&submit=1")!
-        await MainActor.run { NSWorkspace.shared.open(url) }
+        _ = await MainActor.run { NSWorkspace.shared.open(url) }
         // Best-effort: hit /api/eval/send synchronously if a token is
         // available so the Shortcut returns the reply text.
         if let token = readEvalTokenForIntent() {
@@ -82,7 +82,7 @@ struct SearchMemoryIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let url = URL(string: "detour://pensieve/search?q=\(encoded)")!
-        await MainActor.run { NSWorkspace.shared.open(url) }
+        _ = await MainActor.run { NSWorkspace.shared.open(url) }
         return .result()
     }
 }
@@ -101,7 +101,7 @@ struct OpenDetourWindowIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         let url = URL(string: "detour://window?target=\(target.rawValue)")!
-        await MainActor.run { NSWorkspace.shared.open(url) }
+        _ = await MainActor.run { NSWorkspace.shared.open(url) }
         return .result()
     }
 }
@@ -133,7 +133,7 @@ struct StartLocalChatIntent: AppIntent {
     )
     func perform() async throws -> some IntentResult {
         let url = URL(string: "detour://localchat/start")!
-        await MainActor.run { NSWorkspace.shared.open(url) }
+        _ = await MainActor.run { NSWorkspace.shared.open(url) }
         return .result()
     }
 }
@@ -147,7 +147,7 @@ struct StopLocalChatIntent: AppIntent {
     )
     func perform() async throws -> some IntentResult {
         let url = URL(string: "detour://localchat/stop")!
-        await MainActor.run { NSWorkspace.shared.open(url) }
+        _ = await MainActor.run { NSWorkspace.shared.open(url) }
         return .result()
     }
 }

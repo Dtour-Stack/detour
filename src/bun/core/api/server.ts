@@ -1,4 +1,4 @@
-import type { Memory, UUID } from "@elizaos/core";
+import { logger, type Memory, type UUID } from "@elizaos/core";
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, extname, join, normalize, resolve as pathResolve, sep } from "node:path";
@@ -15,6 +15,10 @@ import type {
 } from "../../../shared/index";
 
 const VERSION = "0.0.1";
+
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
 
 /** Resolve the bundled `Resources/app/views/main/` directory on disk —
  *  same logic `view-url.ts` uses for the WKWebView's local file URL. We
@@ -342,7 +346,7 @@ export class ApiServer {
 			return await this.tryStart(preferredPort);
 		} catch (err) {
 			if ((err as { code?: string }).code === "EADDRINUSE") {
-				console.warn(`[core] port ${preferredPort} in use, falling back to ephemeral`);
+				logger.warn({ src: "api", preferredPort }, "[ApiServer] preferred port in use");
 				return this.tryStart(0);
 			}
 			throw err;
@@ -657,7 +661,7 @@ export class ApiServer {
 				}),
 			);
 		} catch (err) {
-			console.error("Failed to write runtime lockfile:", err);
+			logger.error({ src: "api", lockFile: this.lockFile, err: errorMessage(err) }, "[ApiServer] failed to write runtime lockfile");
 		}
 	}
 

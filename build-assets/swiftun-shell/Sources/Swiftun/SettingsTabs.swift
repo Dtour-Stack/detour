@@ -430,7 +430,7 @@ struct NativeSkillRow: View {
             Spacer()
             Toggle("", isOn: $enabled)
                 .labelsHidden()
-                .onChange(of: enabled) { newValue in onToggle(newValue) }
+                .onChange(of: enabled) { _, newValue in onToggle(newValue) }
         }
         .padding(.vertical, 4)
     }
@@ -477,7 +477,7 @@ struct SettingsSkillRow: View {
             Spacer()
             Toggle("", isOn: $enabled)
                 .labelsHidden()
-                .onChange(of: enabled) { newValue in
+                .onChange(of: enabled) { _, newValue in
                     Task {
                         await client.postEval("api/eval/skills/\(skill.id)",
                                               body: ["enabled": newValue])

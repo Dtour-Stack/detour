@@ -17,35 +17,6 @@ import Foundation
 import Speech
 import Vision
 
-let args = CommandLine.arguments.dropFirst()
-guard let kind = args.first else {
-    print("Usage: MLXOmniVerify <tts|vision|stt> <input>")
-    exit(2)
-}
-let inputArg = args.dropFirst().first ?? ""
-let outRoot = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".detour", isDirectory: true)
-try? FileManager.default.createDirectory(at: outRoot, withIntermediateDirectories: true)
-let stamp = Int(Date().timeIntervalSince1970)
-
-Task {
-    do {
-        switch kind {
-        case "tts": try await runTts(text: inputArg.isEmpty ? "Hello from Detour's local TTS path." : inputArg)
-        case "vision": try await runVision(path: inputArg)
-        case "stt": try await runStt(path: inputArg)
-        default:
-            print("unknown kind: \(kind)")
-            exit(2)
-        }
-        exit(0)
-    } catch {
-        NSLog("[omni-verify] FAIL: \(error.localizedDescription)")
-        exit(1)
-    }
-}
-dispatchMain()
-
 // MARK: - TTS
 
 func runTts(text: String) async throws {
@@ -145,10 +116,9 @@ func runVisionAt(path: String) async throws {
     let started = Date()
     try handler.perform([textReq, classify])
     let detected = (textReq.results ?? [])
-        .compactMap { ($0 as? VNRecognizedTextObservation)?.topCandidates(1).first?.string }
+        .compactMap { $0.topCandidates(1).first?.string }
         .joined(separator: " ")
     let labels = (classify.results ?? [])
-        .compactMap { $0 as? VNClassificationObservation }
         .filter { $0.confidence > 0.25 }
         .prefix(5)
         .map { "\($0.identifier)(\(Int($0.confidence * 100))%)" }
@@ -233,3 +203,32 @@ func runStt(path: String) async throws {
     let outURL = outRoot.appendingPathComponent("mlx-verify-omni-stt-\(stamp).txt")
     try report.write(to: outURL, atomically: true, encoding: .utf8)
 }
+
+let args = CommandLine.arguments.dropFirst()
+guard let kind = args.first else {
+    print("Usage: MLXOmniVerify <tts|vision|stt> <input>")
+    exit(2)
+}
+let inputArg = args.dropFirst().first ?? ""
+let outRoot = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".detour", isDirectory: true)
+try? FileManager.default.createDirectory(at: outRoot, withIntermediateDirectories: true)
+let stamp = Int(Date().timeIntervalSince1970)
+
+Task {
+    do {
+        switch kind {
+        case "tts": try await runTts(text: inputArg.isEmpty ? "Hello from Detour's local TTS path." : inputArg)
+        case "vision": try await runVision(path: inputArg)
+        case "stt": try await runStt(path: inputArg)
+        default:
+            print("unknown kind: \(kind)")
+            exit(2)
+        }
+        exit(0)
+    } catch {
+        NSLog("[omni-verify] FAIL: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+dispatchMain()

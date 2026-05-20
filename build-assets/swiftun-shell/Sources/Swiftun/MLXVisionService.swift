@@ -132,12 +132,11 @@ final class MLXVisionService {
         }
 
         let detectedText: String? = (textReq.results ?? [])
-            .compactMap { ($0 as? VNRecognizedTextObservation)?.topCandidates(1).first?.string }
+            .compactMap { $0.topCandidates(1).first?.string }
             .joined(separator: "\n")
             .nilIfEmpty()
 
         let topLabels: [(label: String, confidence: Float)] = (classifyReq.results ?? [])
-            .compactMap { $0 as? VNClassificationObservation }
             .filter { $0.confidence > 0.25 }
             .prefix(8)
             .map { (label: $0.identifier, confidence: $0.confidence) }

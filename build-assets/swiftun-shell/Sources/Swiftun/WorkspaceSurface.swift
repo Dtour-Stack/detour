@@ -425,7 +425,7 @@ private struct WorkspaceProjectDetail: View {
             .padding(20)
         }
         .onAppear { loadEntries() }
-        .onChange(of: project.id) { _ in loadEntries() }
+        .onChange(of: project.id) { _, _ in loadEntries() }
     }
 
     private func isDir(_ url: URL) -> Bool {

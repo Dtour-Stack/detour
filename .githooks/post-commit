@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v xh >/dev/null 2>&1; then
+	xh _record-commit "${GIT_DIR:-.git}" || true
+	xh backup --bg || true
+elif [[ -x /Users/home/.local/bin/xh ]]; then
+	/Users/home/.local/bin/xh _record-commit "${GIT_DIR:-.git}" || true
+	/Users/home/.local/bin/xh backup --bg || true
+fi

@@ -546,9 +546,9 @@ final class MicDictation: @unchecked Sendable {
 }
 
 // SSE delegate — split data into newline-delimited chunks.
-private final class SSEDelegate: NSObject, URLSessionDataDelegate {
-    let onLine: (String) -> Void
-    init(onLine: @escaping (String) -> Void) { self.onLine = onLine }
+private final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let onLine: @Sendable (String) -> Void
+    init(onLine: @escaping @Sendable (String) -> Void) { self.onLine = onLine }
     func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         if let s = String(data: data, encoding: .utf8) { onLine(s) }
     }
@@ -672,7 +672,7 @@ private struct ChatTranscript: View {
                 }
                 .padding(.vertical, 14)
             }
-            .onChange(of: vm.messages.count) { _ in
+            .onChange(of: vm.messages.count) { _, _ in
                 if vm.selectedChannel == .detour, let last = vm.messages.last {
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(last.id, anchor: .bottom)

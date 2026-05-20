@@ -319,7 +319,7 @@ private struct ModelRoutingRow: View {
                 .onAppear {
                     selected = entry.selected.isEmpty ? (entry.options.first?.id ?? "") : entry.selected
                 }
-                .onChange(of: selected) { newValue in
+                .onChange(of: selected) { _, newValue in
                     guard !newValue.isEmpty, newValue != entry.selected else { return }
                     Task { await client.setSetting(key: settingKey, value: newValue) }
                 }
@@ -566,7 +566,10 @@ private struct LocalMlxMediaRow: View {
                 Text(statusLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 if available {
-                    Toggle("", isOn: Binding(get: { enabled }, set: onToggle))
+                    Toggle("", isOn: Binding(
+                        get: { enabled },
+                        set: { newValue in onToggle(newValue) },
+                    ))
                         .labelsHidden()
                         .toggleStyle(.switch)
                 }
@@ -585,7 +588,7 @@ private struct LocalMlxMediaRow: View {
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .onAppear { pickedPreset = preset ?? presets.first?.id ?? "" }
-                .onChange(of: pickedPreset) { newValue in
+                .onChange(of: pickedPreset) { _, newValue in
                     guard !newValue.isEmpty, newValue != (preset ?? "") else { return }
                     onPresetChange(newValue)
                 }
@@ -789,7 +792,7 @@ struct SettingsAppearanceTab: View {
                         Text("Light").tag("light")
                         Text("Dark").tag("dark")
                     }.pickerStyle(.segmented)
-                    .onChange(of: theme) { newValue in
+                    .onChange(of: theme) { _, newValue in
                         AppearanceController.applyTheme(newValue)
                     }
                     Picker("Accent", selection: $accent) {
@@ -802,7 +805,7 @@ struct SettingsAppearanceTab: View {
                         Text("Yellow").tag("yellow")
                         Text("Green").tag("green")
                     }.pickerStyle(.menu)
-                    .onChange(of: accent) { newValue in
+                    .onChange(of: accent) { _, newValue in
                         AppearanceController.applyAccent(newValue)
                     }
                     Text("Tint applies to every Detour window — buttons, toggles, segmented controls — and updates the moment you pick.")
@@ -811,20 +814,20 @@ struct SettingsAppearanceTab: View {
 
                 GlassCard("Tray", systemImage: "menubar.rectangle") {
                     Toggle("Status header (provider + embedding state)", isOn: $showProviderDot)
-                        .onChange(of: showProviderDot) { _ in TrayController.shared?.rebuild() }
+                        .onChange(of: showProviderDot) { _, _ in TrayController.shared?.rebuild() }
                     Toggle("Local AI submenu", isOn: $showLocalAI)
-                        .onChange(of: showLocalAI) { _ in TrayController.shared?.rebuild() }
+                        .onChange(of: showLocalAI) { _, _ in TrayController.shared?.rebuild() }
                     Toggle("Recent activity submenu", isOn: $showRecent)
-                        .onChange(of: showRecent) { _ in TrayController.shared?.rebuild() }
+                        .onChange(of: showRecent) { _, _ in TrayController.shared?.rebuild() }
                 }
 
                 GlassCard("Windows", systemImage: "macwindow") {
                     Toggle("Hide window when focus leaves it", isOn: $hideOnBlur)
-                        .onChange(of: hideOnBlur) { newValue in
+                        .onChange(of: hideOnBlur) { _, newValue in
                             AppearanceController.applyHideOnBlur(newValue)
                         }
                     Toggle("Always on top", isOn: $alwaysOnTop)
-                        .onChange(of: alwaysOnTop) { newValue in
+                        .onChange(of: alwaysOnTop) { _, newValue in
                             AppearanceController.applyAlwaysOnTop(newValue)
                         }
                     Toggle("Remember window size + position", isOn: $rememberSize)
@@ -866,6 +869,7 @@ struct SettingsAppearanceTab: View {
 /// Applies the SwiftUI Appearance settings to real AppKit state. The
 /// toggles previously only flipped @AppStorage values that nothing
 /// read; now each one actually mutates window/app state on change.
+@MainActor
 enum AppearanceController {
     static func applyTheme(_ value: String) {
         switch value {

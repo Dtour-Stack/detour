@@ -336,7 +336,7 @@ struct ActivityLogsView: View {
                         }
                         .padding(8)
                     }
-                    .onChange(of: entries.count) { _ in
+                    .onChange(of: entries.count) { _, _ in
                         if follow, let last = entries.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }

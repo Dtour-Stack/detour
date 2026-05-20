@@ -139,7 +139,9 @@ final class WindowFactory: NSObject {
         win.isReleasedWhenClosed = false
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: win, queue: .main,
-        ) { [weak self] _ in self?.windows.removeValue(forKey: "pet") }
+        ) { [weak self] _ in
+            Task { @MainActor in self?.windows.removeValue(forKey: "pet") }
+        }
         win.makeKeyAndOrderFront(nil)
         windows["pet"] = win
     }
@@ -221,7 +223,9 @@ final class WindowFactory: NSObject {
         // hosting controllers across show/hide cycles.
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: win, queue: .main,
-        ) { [weak self] _ in self?.windows.removeValue(forKey: key) }
+        ) { [weak self] _ in
+            Task { @MainActor in self?.windows.removeValue(forKey: key) }
+        }
         win.makeKeyAndOrderFront(nil)
         windows[key] = win
         NSApp.activate(ignoringOtherApps: true)
@@ -285,7 +289,9 @@ final class WindowFactory: NSObject {
         win.setFrameAutosaveName("Detour\(key.capitalized)Window")
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: win, queue: .main,
-        ) { [weak self] _ in self?.windows.removeValue(forKey: key) }
+        ) { [weak self] _ in
+            Task { @MainActor in self?.windows.removeValue(forKey: key) }
+        }
         win.makeKeyAndOrderFront(nil)
         windows[key] = win
         NSApp.activate(ignoringOtherApps: true)

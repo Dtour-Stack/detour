@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { logger } from "@elizaos/core";
 import { clearSkillsDirCache } from "@elizaos/skills";
 import { ActivityService } from "./activity";
 import { AgentHfSyncService } from "./agent-hf-sync-service";
@@ -13,7 +14,7 @@ import { ContinuousImprovementService } from "./continuous-improvement-service";
 import { DreamService } from "./dream-service";
 import { GoalService } from "./goal-service";
 import { attachGoalService } from "../plugins/detour-goal/index";
-import { CronService } from "./cron-service";
+import { CronService, type CronJobInput, type CronJobUpdate } from "./cron-service";
 import { DiscordObservationService } from "./discord-observation-service";
 import { InboxService } from "./inbox";
 import { OwnerBindService } from "./owner-bind";
@@ -21,6 +22,7 @@ import { newTraceId, traceScope } from "./trace";
 import { LlamaServerService } from "./llama/server-service";
 import { PortlessService } from "./portless";
 import { PensieveService } from "./pensieve";
+import type { ListMemoriesOptions, PensieveMemoryService } from "./pensieve/memory-service";
 import { RuntimeService } from "./runtime";
 import { VaultService } from "./vault";
 import { buildRpcDeps } from "./rpc/registry";
@@ -42,6 +44,157 @@ export type CoreHandle = {
 	rpcDeps: RpcDeps;
 	stop: () => Promise<void>;
 };
+
+type PensieveMemoryCreateInput = Parameters<PensieveMemoryService["create"]>[0];
+
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+	if (!isPlainRecord(value)) {
+		throw new Error(`${label} must be an object`);
+	}
+	return value;
+}
+
+function requireString(value: unknown, label: string): string {
+	if (typeof value !== "string") {
+		throw new Error(`${label} must be a string`);
+	}
+	return value;
+}
+
+function optionalStringField(input: Record<string, unknown>, field: string): string | undefined {
+	const value = input[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") {
+		throw new Error(`${field} must be a string`);
+	}
+	return value;
+}
+
+function optionalBooleanField(input: Record<string, unknown>, field: string): boolean | undefined {
+	const value = input[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "boolean") {
+		throw new Error(`${field} must be a boolean`);
+	}
+	return value;
+}
+
+function optionalNumberField(input: Record<string, unknown>, field: string): number | undefined {
+	const value = input[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new Error(`${field} must be a finite number`);
+	}
+	return value;
+}
+
+function optionalStringArrayField(input: Record<string, unknown>, field: string): string[] | undefined {
+	const value = input[field];
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+		throw new Error(`${field} must be an array of strings`);
+	}
+	return value;
+}
+
+function optionalRecordField(input: Record<string, unknown>, field: string): Record<string, unknown> | undefined {
+	const value = input[field];
+	if (value === undefined) return undefined;
+	if (!isPlainRecord(value)) {
+		throw new Error(`${field} must be an object`);
+	}
+	return value;
+}
+
+function cronJobInput(value: unknown): CronJobInput {
+	const input = requireRecord(value, "cron job input");
+	const schedule = optionalStringField(input, "schedule");
+	const prompt = optionalStringField(input, "prompt");
+	if (!schedule) throw new Error("schedule must be a non-empty string");
+	if (!prompt) throw new Error("prompt must be a non-empty string");
+	const name = optionalStringField(input, "name");
+	const enabled = optionalBooleanField(input, "enabled");
+	const createdBy = optionalStringField(input, "createdBy");
+	const out: CronJobInput = {
+		schedule,
+		prompt,
+	};
+	if (name !== undefined) out.name = name;
+	if (enabled !== undefined) out.enabled = enabled;
+	if (createdBy !== undefined) out.createdBy = createdBy;
+	return out;
+}
+
+function cronJobUpdate(value: unknown): CronJobUpdate {
+	const input = requireRecord(value, "cron job update");
+	const name = optionalStringField(input, "name");
+	const schedule = optionalStringField(input, "schedule");
+	const prompt = optionalStringField(input, "prompt");
+	const enabled = optionalBooleanField(input, "enabled");
+	const out: CronJobUpdate = {};
+	if (name !== undefined) out.name = name;
+	if (schedule !== undefined) out.schedule = schedule;
+	if (prompt !== undefined) out.prompt = prompt;
+	if (enabled !== undefined) out.enabled = enabled;
+	return out;
+}
+
+function listMemoriesOptions(value: unknown): ListMemoriesOptions {
+	if (value === undefined || value === null) return {};
+	const input = requireRecord(value, "memory list options");
+	const roomId = optionalStringField(input, "roomId");
+	const entityId = optionalStringField(input, "entityId");
+	const type = optionalStringField(input, "type");
+	const q = optionalStringField(input, "q");
+	const limit = optionalNumberField(input, "limit");
+	const offset = optionalNumberField(input, "offset");
+	const tag = optionalStringField(input, "tag");
+	const tableName = optionalStringField(input, "tableName");
+	const pathPrefix = optionalStringField(input, "pathPrefix");
+	const out: ListMemoriesOptions = {};
+	if (roomId !== undefined) out.roomId = roomId;
+	if (entityId !== undefined) out.entityId = entityId;
+	if (type !== undefined) out.type = type;
+	if (q !== undefined) out.q = q;
+	if (limit !== undefined) out.limit = limit;
+	if (offset !== undefined) out.offset = offset;
+	if (tag !== undefined) out.tag = tag;
+	if (tableName !== undefined) out.tableName = tableName;
+	if (pathPrefix !== undefined) out.pathPrefix = pathPrefix;
+	return out;
+}
+
+function memoryCreateInput(value: unknown): PensieveMemoryCreateInput {
+	const input = requireRecord(value, "memory create input");
+	const text = optionalStringField(input, "text");
+	if (text === undefined) throw new Error("text must be a string");
+	const path = optionalStringField(input, "path");
+	const type = optionalStringField(input, "type");
+	const tags = optionalStringArrayField(input, "tags");
+	const roomId = optionalStringField(input, "roomId");
+	const entityId = optionalStringField(input, "entityId");
+	const worldId = optionalStringField(input, "worldId");
+	const extraMetadata = optionalRecordField(input, "extraMetadata");
+	const tableName = optionalStringField(input, "tableName");
+	const out: PensieveMemoryCreateInput = { text };
+	if (path !== undefined) out.path = path;
+	if (type !== undefined) out.type = type;
+	if (tags !== undefined) out.tags = tags;
+	if (roomId !== undefined) out.roomId = roomId;
+	if (entityId !== undefined) out.entityId = entityId;
+	if (worldId !== undefined) out.worldId = worldId;
+	if (extraMetadata !== undefined) out.extraMetadata = extraMetadata;
+	if (tableName !== undefined) out.tableName = tableName;
+	return out;
+}
 
 /**
  * macOS .app bundles launched from Finder/Launchd inherit a minimal PATH
@@ -132,7 +285,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		mkdirSync(agentSandboxDir, { recursive: true });
 		process.env.DETOUR_AGENT_SANDBOX = agentSandboxDir;
 	} catch (err) {
-		console.warn("[core] failed to create agent sandbox dir:", err instanceof Error ? err.message : err);
+		logger.warn({ src: "core", err: errorMessage(err) }, "[Core] failed to create agent sandbox dir");
 	}
 
 	const vault = new VaultService();
@@ -229,8 +382,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	cron.start();
 	runtime.onAfterBuild(async (state) => {
 		try { await cron.attachRuntime(state.runtime); }
-		catch (err) { console.warn("[cron] attachRuntime failed:", err instanceof Error ? err.message : err); }
+		catch (err) { logger.warn({ src: "cron", err: errorMessage(err) }, "[CronService] attachRuntime failed"); }
 	});
+
+	// Local llama-server for embeddings (and later, optional chat fallback).
+	// Lazy-spawned on first ensureRunning() call, with model auto-download.
+	const llama = new LlamaServerService();
 
 	// Carrot bridge — load runtime-installable plugins ("carrots"), each in
 	// its own isolated Bun Worker. The CarrotManager exposes a curated set
@@ -239,10 +396,53 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const carrotManager = new (await import("./carrots")).CarrotManager();
 	carrotManager.registerService("cron", {
 		listJobs: () => cron.listJobs(),
-		getJob: (id: unknown) => cron.getJob(String(id)),
-		createJob: (input: unknown) => cron.createJob(input as Parameters<typeof cron.createJob>[0]),
-		updateJob: (id: unknown, patch: unknown) => cron.updateJob(String(id), patch as Parameters<typeof cron.updateJob>[1]),
-		deleteJob: (id: unknown) => cron.deleteJob(String(id)),
+		getJob: (id: unknown) => cron.getJob(requireString(id, "cron job id")),
+		createJob: (input: unknown) => cron.createJob(cronJobInput(input)),
+		updateJob: (id: unknown, patch: unknown) => cron.updateJob(requireString(id, "cron job id"), cronJobUpdate(patch)),
+		deleteJob: (id: unknown) => cron.deleteJob(requireString(id, "cron job id")),
+	});
+	carrotManager.registerService("vault", {
+		hasMasterKey: async () => {
+			try {
+				const v = await vault.vault();
+				return v !== null && v !== undefined;
+			} catch {
+				return false;
+			}
+		},
+	});
+	carrotManager.registerService("pensieve", {
+		listMemories: (opts: unknown) => pensieve.memories.list(listMemoriesOptions(opts)),
+		getMemory: (id: unknown) => pensieve.memories.get(requireString(id, "memory id")),
+		createMemory: (input: unknown) => pensieve.memories.create(memoryCreateInput(input)),
+		deleteMemory: (id: unknown) => pensieve.memories.remove(requireString(id, "memory id")),
+		listTemplates: () => pensieve.templates.listTemplates(),
+		getTemplate: (id: unknown) => pensieve.templates.getTemplate(requireString(id, "template id")),
+	});
+	carrotManager.registerService("channels", {
+		listChannels: async () => {
+			const snap = activity.pluginsSnapshot();
+			const loadedNames = snap.plugins.map((p) => p.name);
+			const liveRuntime = runtime.peek();
+			const result = await channels.snapshot(loadedNames, liveRuntime);
+			return result.channels.map((c) => c.id);
+		},
+		getChannelStatus: async (channelId: unknown) => {
+			const id = requireString(channelId, "channel id");
+			const snap = activity.pluginsSnapshot();
+			const loadedNames = snap.plugins.map((p) => p.name);
+			const liveRuntime = runtime.peek();
+			const result = await channels.snapshot(loadedNames, liveRuntime);
+			const channel = result.channels.find((c) => c.id === id);
+			if (!channel) {
+				throw new Error(`Channel "${id}" not found`);
+			}
+			return channel;
+		},
+	});
+	carrotManager.registerService("llama", {
+		status: () => llama.status(),
+		ensureRunning: () => llama.ensureRunning(),
 	});
 	const extraPlugins: Awaited<ReturnType<typeof carrotManager.loadFromDir>>[] = [];
 	const carrotsDir = resolveCarrotsDir();
@@ -250,12 +450,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		try {
 			const cronCarrotPlugin = await carrotManager.loadFromDir(join(carrotsDir, "cron-tools"));
 			extraPlugins.push(cronCarrotPlugin);
-			console.log(`[carrots] loaded cron-tools (${extraPlugins.length} carrot(s) loaded from ${carrotsDir})`);
+			logger.info({ src: "carrots", count: extraPlugins.length, carrotsDir }, "[CarrotManager] loaded cron-tools");
 		} catch (err) {
-			console.warn("[carrots] failed to load cron-tools:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "carrots", carrotsDir, err: errorMessage(err) }, "[CarrotManager] failed to load cron-tools");
 		}
 	} else {
-		console.warn("[carrots] carrots dir not found — skipping carrot load");
+		logger.warn({ src: "carrots" }, "[CarrotManager] carrots dir not found");
 	}
 	runtime.setExtraPlugins(extraPlugins);
 
@@ -265,14 +465,8 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// registry shared with the `portless` CLI via the standard state dir.
 	const portless = new PortlessService();
 	try { portless.start(); }
-	catch (err) { console.warn("[portless] start failed:", err instanceof Error ? err.message : err); }
-	// Local llama-server for embeddings (and later, optional chat fallback).
-	// Lazy-spawned on first ensureRunning() call, with model auto-download.
-	// We DO eagerly start it in the background so the first embedding call
-	// (which fires from elizaOS evaluators on the first user message) doesn't
-	// pay the 1-3s model-load cost. Failure is non-fatal — the embedding
-	// plugin gracefully falls back to OpenAI key or zero vector.
-	const llama = new LlamaServerService();
+	catch (err) { logger.warn({ src: "portless", err: errorMessage(err) }, "[PortlessService] start failed"); }
+
 	// AWAIT llama startup BEFORE the runtime builds. Previously this was a
 	// fire-and-forget Promise — the env vars below were set asynchronously,
 	// so the embedding plugin's settings were already cached as undefined by
@@ -299,12 +493,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			process.env.EMBEDDING_PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
 			process.env.LOCAL_EMBEDDING_MODEL = process.env.LOCAL_EMBEDDING_MODEL ?? "local";
 			process.env.LOCAL_EMBEDDING_DIMENSIONS = process.env.LOCAL_EMBEDDING_DIMENSIONS ?? "384";
-			console.log(`[core] local llama-server embeddings ready at ${res.url}`);
+			logger.info({ src: "llama", url: res.url }, "[LlamaServerService] embeddings ready");
 		} else {
-			console.warn("[core] local llama-server unavailable; embeddings will fall back to OpenAI key or zeros");
+			logger.warn({ src: "llama" }, "[LlamaServerService] unavailable for embeddings");
 		}
 	} catch (err) {
-		console.warn("[core] llama-server start failed:", err instanceof Error ? err.message : err);
+		logger.warn({ src: "llama", err: errorMessage(err) }, "[LlamaServerService] start failed");
 	}
 
 	// Shared RAM-budget gate for the three llama tiers; see memory-arbiter.ts.
@@ -326,15 +520,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		try {
 			const result = await localChat.start();
 			if (result) {
-				console.log(`[core] local-chat ready at ${result.url} model=${result.modelPath}`);
+				logger.info({ src: "local-chat", url: result.url, modelPath: result.modelPath }, "[LocalChatService] ready");
 			} else {
-				console.warn("[core] local-chat enabled but failed to start");
+				logger.warn({ src: "local-chat" }, "[LocalChatService] enabled but failed to start");
 			}
 		} catch (err) {
-			console.warn(
-				"[core] local-chat start failed:",
-				err instanceof Error ? err.message : err,
-			);
+			logger.warn({ src: "local-chat", err: errorMessage(err) }, "[LocalChatService] start failed");
 		}
 	}
 
@@ -413,17 +604,12 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		try {
 			const result = await companion.start();
 			if (result) {
-				console.log(
-					`[core] companion ready at ${result.url} model=${result.modelPath}`,
-				);
+				logger.info({ src: "companion", url: result.url, modelPath: result.modelPath }, "[CompanionService] ready");
 			} else {
-				console.warn("[core] companion enabled but failed to start");
+				logger.warn({ src: "companion" }, "[CompanionService] enabled but failed to start");
 			}
 		} catch (err) {
-			console.warn(
-				"[core] companion start failed:",
-				err instanceof Error ? err.message : err,
-			);
+			logger.warn({ src: "companion", err: errorMessage(err) }, "[CompanionService] start failed");
 		}
 	}
 
@@ -439,14 +625,14 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 				const { importImessageContacts } = await import("./channels/contact-import");
 				const result = await importImessageContacts(state.runtime);
 				if (result.available && result.contactsFound > 0) {
-					console.log(`[contacts] imported ${result.entitiesCreated} entities + ${result.relationshipsCreated} relationships from ${result.contactsFound} macOS contacts (skipped ${result.skipped})`);
+					logger.info({ src: "contacts", entitiesCreated: result.entitiesCreated, relationshipsCreated: result.relationshipsCreated, contactsFound: result.contactsFound, skipped: result.skipped }, "[ContactImport] imported macOS contacts");
 				} else if (!result.available && attempt < 3) {
 					setTimeout(() => void tryImport(attempt + 1), attempt * 5000);
 				} else if (result.error) {
-					console.warn(`[contacts] import skipped after ${attempt} attempt(s): ${result.error}`);
+					logger.warn({ src: "contacts", attempt, err: result.error }, "[ContactImport] import skipped");
 				}
 			} catch (err) {
-				console.warn("[contacts] import failed:", err instanceof Error ? err.message : err);
+				logger.warn({ src: "contacts", err: errorMessage(err) }, "[ContactImport] import failed");
 			}
 		};
 		setTimeout(() => void tryImport(1), 5000);
@@ -459,9 +645,11 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	runtime.onAfterBuild(async (state) => {
 		try {
 			const result = await pensieve.templates.applyTemplatesToRuntime(state.runtime);
-			if (result.applied > 0) console.log(`[pensieve] applied ${result.applied} template(s) to character: ${result.names.join(", ")}`);
+			if (result.applied > 0) {
+				logger.info({ src: "pensieve", applied: result.applied, names: result.names }, "[PensieveTemplatesService] applied templates to runtime");
+			}
 		} catch (err) {
-			console.warn("[pensieve] template injection failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "pensieve", err: errorMessage(err) }, "[PensieveTemplatesService] template injection failed");
 		}
 	});
 	// Tray-state builder for the Swift DetourTray.app companion. Gathers
@@ -674,7 +862,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	);
 	const { port } = await api.start(opts.port ?? 2138);
 
-	console.log(`[core] api listening on http://127.0.0.1:${port}`);
+	logger.info({ src: "core", port }, "[Core] API listening");
 
 	// 2026 perf: typed RPC over Unix domain socket. Coexists with the
 	// HTTP server above during migration. Per-call latency ~80µs vs
@@ -713,10 +901,13 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// yet) is non-fatal: getOrBuild will simply retry on the next chat send.
 	void runtime.getOrBuild()
 		.then((state) => {
-			if (state) console.log(`[core] runtime warm (provider=${state.provider})`);
-			else console.log("[core] runtime not built — no provider configured");
+			if (state) {
+				logger.info({ src: "runtime", provider: state.provider }, "[RuntimeService] runtime warm");
+			} else {
+				logger.info({ src: "runtime" }, "[RuntimeService] runtime not built");
+			}
 		})
-		.catch((err) => console.warn("[core] eager runtime build failed:", err));
+		.catch((err) => logger.warn({ src: "runtime", err: errorMessage(err) }, "[RuntimeService] eager build failed"));
 
 	const handle: CoreHandle = {
 		port,
