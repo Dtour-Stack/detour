@@ -32,6 +32,7 @@ import type { ChannelGatewayService, GatewayMessage } from "../channels/gateway"
 import type { RuntimeService } from "../runtime";
 import { getTraceId, newTraceId, traceScope } from "../trace";
 import { KeyedAsyncLock } from "../async-lock";
+import { broadcaster } from "../rpc/registry";
 
 const RING_CAP = 1000;
 const INBOX_TAG = "inbox";
@@ -415,6 +416,26 @@ export class InboxService {
 			...(opts.meta ? { meta: opts.meta } : {}),
 		};
 		this.append(item);
+
+		// Surface the new item to subscribers — the pet bubble feed listens
+		// for `inboxItemCreated` and announces "📨 @sender · channel:
+		// preview…". The payload is minimal on purpose: pet UI doesn't need
+		// the full body. Send it fire-and-forget so a slow subscriber can't
+		// block inbox persistence.
+		try {
+			broadcaster.broadcast("inboxItemCreated", {
+				id: item.id,
+				kind: item.kind,
+				channel: item.channel ?? null,
+				source: item.source,
+				fromHandle: item.fromHandle ?? null,
+				title: item.title,
+				body: item.body.length > 200 ? `${item.body.slice(0, 200)}…` : item.body,
+				time: item.time,
+			});
+		} catch (err) {
+			logger.debug({ src: "inbox", err: err instanceof Error ? err.message : err }, "broadcast inboxItemCreated failed");
+		}
 
 		// Persist to eliza Memory so Pensieve can index/search it. Best-effort
 		// — failure here doesn't block the inbox itself.

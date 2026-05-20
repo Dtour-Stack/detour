@@ -28,7 +28,7 @@ function makeFakeMemoryService() {
 					type: input.type ?? "custom",
 					path: "/goals/test",
 					roomId: input.roomId ?? "",
-					metadata: { ...(input.extraMetadata ?? {}) },
+					metadata: input.extraMetadata ?? {},
 				});
 				return { id };
 			},

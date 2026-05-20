@@ -7,11 +7,18 @@
   "scripts": {
     "start": "electrobun dev",
     "dev": "electrobun dev --watch",
+    "dev:web": "vite --host 127.0.0.1 --port 5180",
     "build:dev": "electrobun build --env=dev",
     "build:canary": "electrobun build --env=canary",
     "build:stable": "electrobun build --env=stable",
+    "build:agent": "bun run scripts/bundle-agent.ts",
+    "build:mac": "bun run scripts/build-mac-app.ts",
+    "build:app": "bun run build:agent && bun run build:mac",
+    "build:swiftun": "bun run scripts/build-mac-app.ts",
     "typecheck": "tsc --noEmit",
-    "verify:phantom-extension": "bun run scripts/verify-phantom-extension.ts",
+    "verify:agents": "bun run scripts/verify-codex-setup.ts",
+    "verify:swift": "bun run scripts/verify-swift-setup.ts",
+    "verify:swift:build": "bun run scripts/verify-swift-setup.ts --build",
     "build:eliza": "bun run --cwd eliza/packages/shared build:i18n && bun run --cwd eliza/packages/core build && bun run --cwd eliza/packages/shared build:dist && bun run --cwd eliza/packages/vault build && bun run --cwd eliza/packages/skills build && bun run --cwd eliza/plugins/plugin-sql build && bun run --cwd eliza/plugins/plugin-anthropic build && bun run --cwd eliza/plugins/plugin-openai build && bun run --cwd eliza/plugins/plugin-imessage build && bun run --cwd eliza/plugins/plugin-discord build && bun run --cwd eliza/plugins/plugin-coding-tools build && bun run --cwd eliza/plugins/plugin-agent-skills build && bun run --cwd eliza/plugins/plugin-agent-orchestrator build && (cd eliza/plugins/plugin-pdf && bun run build.ts) && (cd eliza/plugins/plugin-elizacloud && bun run build.ts) && (cd eliza/plugins/plugin-github && bunx tsup src/index.ts src/register-routes.ts --format esm --no-dts --clean) && bun run --cwd eliza/plugins/plugin-telegram build"
   },
   "dependencies": {

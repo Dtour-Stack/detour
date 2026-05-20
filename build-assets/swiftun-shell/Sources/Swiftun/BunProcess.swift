@@ -25,7 +25,26 @@ final class BunProcess {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: binary)
         p.arguments = ["run", entry]
-        p.environment = ProcessInfo.processInfo.environment
+        // Inherit parent env, then layer ~/.detour/.env on top so the
+        // user's local config (DETOUR_EVAL_TOKEN, provider keys, …)
+        // reaches bun even when the app is launched from Finder (no
+        // shell, no automatic .env merge).
+        var env = ProcessInfo.processInfo.environment
+        let dotEnv = NSString(string: "~/.detour/.env").expandingTildeInPath
+        if let text = try? String(contentsOfFile: dotEnv, encoding: .utf8) {
+            for line in text.split(separator: "\n") {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.isEmpty || t.hasPrefix("#") { continue }
+                guard let eq = t.firstIndex(of: "=") else { continue }
+                let key = String(t[..<eq]).trimmingCharacters(in: .whitespaces)
+                var val = String(t[t.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+                if (val.hasPrefix("\"") && val.hasSuffix("\"")) || (val.hasPrefix("'") && val.hasSuffix("'")) {
+                    val = String(val.dropFirst().dropLast())
+                }
+                if env[key] == nil { env[key] = val }
+            }
+        }
+        p.environment = env
         // Bun must be detached from stdin or it'll exit immediately
         // when the parent's stdin closes during launchd-style launches.
         p.standardInput = FileHandle.nullDevice
@@ -65,15 +84,24 @@ final class BunProcess {
                 return env
             }
         }
-        // Bundled location: Detour.app/Contents/Resources/bin/bun.
-        // For the scaffold we look upward from the current executable.
-        let appBundleBun = Bundle.main.bundleURL
+        // Bundled location: Swiftun.app/Contents/MacOS/bun. This is
+        // where build-swiftun-app.ts drops the Electrobun-staged bun
+        // binary, mirroring Electrobun's own launcher layout.
+        let macosBun = Bundle.main.bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("MacOS")
+            .appendingPathComponent("bun")
+        if FileManager.default.isExecutableFile(atPath: macosBun.path) {
+            return macosBun.path
+        }
+        // Legacy fallback in case packaging moves to Resources/bin/.
+        let resourcesBinBun = Bundle.main.bundleURL
             .appendingPathComponent("Contents")
             .appendingPathComponent("Resources")
             .appendingPathComponent("bin")
             .appendingPathComponent("bun")
-        if FileManager.default.isExecutableFile(atPath: appBundleBun.path) {
-            return appBundleBun.path
+        if FileManager.default.isExecutableFile(atPath: resourcesBinBun.path) {
+            return resourcesBinBun.path
         }
         // Fall back to whatever's on PATH.
         let paths = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":") ?? []

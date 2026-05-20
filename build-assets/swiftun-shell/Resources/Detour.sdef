@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<!--
+  Detour Bridge scripting dictionary.
+
+  Loaded by DetourBridge.app at startup (OSAScriptingDefinition in
+  Info.plist). The NSScriptCommand subclasses are declared in
+  main.swift via @objc(...) and bound here through `<cocoa class="..."/>`.
+
+  Each command forwards to a `detour://` URL via NSWorkspace.openURL,
+  which macOS routes to the real Detour.app — see the bun-side
+  handler at src/bun/features/url-scheme/index.ts.
+
+  Codes: suite is 4 chars ("DETR"); each command is 8 chars
+  (suite + 4-char verb); each parameter is 4 chars. macOS rejects
+  the sdef as corrupt if any code length is wrong.
+-->
+<dictionary title="Detour Bridge Terminology" xmlns:xi="http://www.w3.org/2003/XInclude">
+	<!--
+		Inherit the standard Cocoa suite so `text`, `string`, and
+		`record` types resolve. Without this, the dictionary parses
+		as corrupt because the types are undefined.
+	-->
+	<xi:include href="file:///System/Library/ScriptingDefinitions/CocoaStandard.sdef" xpointer="xpointer(/dictionary/suite)"/>
+
+	<suite name="Detour Suite" code="DETR" description="Detour agent automation.">
+		<command name="ask agent" code="DETRaska" description="Send a prompt to the Detour agent and auto-submit.">
+			<cocoa class="AskAgentCommand"/>
+			<direct-parameter type="text" description="The prompt to send."/>
+			<result type="boolean" description="True if the request was accepted."/>
+		</command>
+		<command name="draft prompt" code="DETRdrft" description="Open the chat composer with the prompt prefilled but not sent.">
+			<cocoa class="DraftPromptCommand"/>
+			<direct-parameter type="text" description="The prompt text to insert."/>
+			<result type="boolean" description="True if the request was accepted."/>
+		</command>
+		<command name="search memory" code="DETRsrch" description="Search the agent's memory (Pensieve).">
+			<cocoa class="SearchMemoryCommand"/>
+			<direct-parameter type="text" description="Search query."/>
+			<result type="boolean" description="True if the request was accepted."/>
+		</command>
+		<command name="open window" code="DETRopnw" description="Open or focus a named Detour window.">
+			<cocoa class="OpenWindowCommand"/>
+			<direct-parameter type="text" description="Window target: chat, settings, pensieve, activity, browser, agents, pet, gallery, portless, workspace, command-palette."/>
+			<result type="boolean" description="True if the request was accepted."/>
+		</command>
+		<command name="open setting" code="DETRopns" description="Open Settings and deep-link to a specific tab.">
+			<cocoa class="OpenSettingCommand"/>
+			<direct-parameter type="text" description="Tab path, e.g. configuration:local-ai"/>
+			<result type="boolean" description="True if the request was accepted."/>
+		</command>
+		<command name="run action" code="DETRract" description="Run a named agent action through the inbox pipeline.">
+			<cocoa class="RunActionCommand"/>
+			<direct-parameter type="text" description="Action name (e.g. CALENDAR_LIST_TODAY)."/>
+			<parameter name="with parameters" code="parm" type="record" optional="yes" description="Optional key-value params for the action.">
+				<cocoa key="parm"/>
+			</parameter>
+			<result type="boolean" description="True if the request was accepted."/>
+		</command>
+		<command name="ping" code="DETRping" description="Smoke-test ping — returns true if the bridge is alive.">
+			<cocoa class="PingCommand"/>
+			<result type="boolean" description="Always true if the bridge is responding."/>
+		</command>
+	</suite>
+</dictionary>

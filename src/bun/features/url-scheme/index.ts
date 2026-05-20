@@ -37,6 +37,7 @@
  */
 
 import Electrobun from "electrobun/bun";
+import { logger } from "@elizaos/core";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -94,6 +95,10 @@ const BUNDLED_COMPANIONS: Record<string, string> = {
 	settings: "DetourSettings.app",
 	activity: "DetourActivity.app",
 	pensieve: "DetourPensieve.app",
+	chat: "DetourChat.app",
+	browser: "DetourBrowser.app",
+	gallery: "DetourGallery.app",
+	workspace: "DetourWorkspace.app",
 };
 
 function findBundledCompanion(target: string): string | null {
@@ -118,7 +123,7 @@ function spawnCompanion(appPath: string, binaryName: string): boolean {
 		spawn(binary, [], { stdio: "ignore", detached: true }).unref();
 		return true;
 	} catch (err) {
-		console.warn(`[url-scheme] spawn ${binaryName} failed:`, err);
+		logger.warn({ src: "url-scheme", binaryName, err }, "[UrlScheme] companion spawn failed");
 		return false;
 	}
 }
@@ -126,7 +131,7 @@ function spawnCompanion(appPath: string, binaryName: string): boolean {
 function registerBridgeWithLaunchServices(): void {
 	const bridgePath = findBundledBridge();
 	if (!bridgePath) {
-		console.log("[url-scheme] DetourBridge.app not bundled — skipping LS registration");
+		logger.info({ src: "url-scheme" }, "[UrlScheme] DetourBridge.app not bundled; skipping LS registration");
 		return;
 	}
 	// `lsregister` lives at a deep system path; -f forces re-registration
@@ -134,7 +139,7 @@ function registerBridgeWithLaunchServices(): void {
 	const lsregister =
 		"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 	if (!existsSync(lsregister)) {
-		console.warn("[url-scheme] lsregister not found; skipping bridge registration");
+		logger.warn({ src: "url-scheme" }, "[UrlScheme] lsregister not found; skipping bridge registration");
 		return;
 	}
 	const child = spawn(lsregister, ["-f", bridgePath], {
@@ -142,9 +147,9 @@ function registerBridgeWithLaunchServices(): void {
 	});
 	child.once("close", (code) => {
 		if (code === 0) {
-			console.log(`[url-scheme] registered DetourBridge.app at ${bridgePath}`);
+			logger.info({ src: "url-scheme", bridgePath }, "[UrlScheme] registered DetourBridge.app");
 		} else {
-			console.warn(`[url-scheme] lsregister exited ${code}`);
+			logger.warn({ src: "url-scheme", code }, "[UrlScheme] lsregister failed");
 		}
 	});
 }
@@ -185,183 +190,191 @@ function asBool(value: string | null | undefined): boolean {
 	return ["1", "true", "yes", "on"].includes(lower);
 }
 
+/**
+ * Global dispatcher registered at feature init. The API server's
+ * `POST /api/url-scheme/dispatch` route reads this so the Swift tray
+ * + AppleScript can dispatch detour:// URLs straight into the running
+ * bun without bouncing through LaunchServices (which may resolve the
+ * scheme to a stale Electrobun bundle while we're mid-cutover).
+ *
+ * Self-dispatched URLs (Swiftun → Swiftun's bun) avoid the dual-
+ * registration race entirely. External callers (Shortcuts.app, raw
+ * `open detour://…` from terminal) still come in via the OS-level
+ * URL handler.
+ */
+type UrlSchemeDispatcher = (rawUrl: string) => boolean;
+const DISPATCHER_KEY = Symbol.for("detour.url-scheme.dispatch");
+type DispatcherHost = { [DISPATCHER_KEY]?: UrlSchemeDispatcher };
+
+export function getUrlSchemeDispatcher(): UrlSchemeDispatcher | null {
+	const host = globalThis as unknown as DispatcherHost;
+	return host[DISPATCHER_KEY] ?? null;
+}
+
 export const urlSchemeFeature: Feature = {
 	id: "url-scheme",
 	init(deps) {
-		// Register the embedded AppleScript bridge with LaunchServices
-		// so `tell application id "ai.detour.bridge" to ...` works
-		// without manual setup. Idempotent — re-runs on every Detour
-		// launch but only does I/O on first install / bundle move.
 		try {
 			registerBridgeWithLaunchServices();
 		} catch (err) {
 			console.warn("[url-scheme] bridge registration failed:", err);
 		}
-		Electrobun.events.on("open-url", (e: { data: { url: string } }) => {
-			const raw = e?.data?.url ?? "";
-			if (!raw.startsWith("detour:")) return;
-			const url = parseUrl(raw);
-			if (!url) {
-				console.warn(`[url-scheme] could not parse: ${raw}`);
-				return;
-			}
-			// URL.host carries the route name (`detour://chat?...`),
-			// not the path. `detour://pensieve/search?q=x` would split
-			// host=pensieve + pathname=/search.
+		const dispatch: UrlSchemeDispatcher = (raw: string): boolean => {
+			if (!raw.startsWith("detour:")) return false;
+				const url = parseUrl(raw);
+				if (!url) {
+					logger.warn({ src: "url-scheme", raw }, "[UrlScheme] could not parse URL");
+					return false;
+				}
 			const route = (url.host || "").toLowerCase();
 			const sub = url.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
 			const params = url.searchParams;
-			console.log(`[url-scheme] route=${route} sub=${sub} params=${params}`);
-			try {
-				handleRoute(route, sub, params, deps);
-			} catch (err) {
-				console.warn("[url-scheme] handler failed:", err);
-			}
-		});
+				try {
+					handleRoute(route, sub, params, deps);
+					return true;
+				} catch (err) {
+					logger.warn({ src: "url-scheme", route, sub, err }, "[UrlScheme] handler failed");
+					return false;
+				}
+			};
+		(globalThis as unknown as DispatcherHost)[DISPATCHER_KEY] = dispatch;
+		Electrobun.events.on("open-url", (e: { data: { url: string } }) => {
+				const raw = e?.data?.url ?? "";
+				if (!raw.startsWith("detour:")) return;
+				logger.info({ src: "url-scheme", raw }, "[UrlScheme] external open-url");
+				dispatch(raw);
+			});
 	},
 };
 
-function handleRoute(
-	route: string,
-	sub: string,
-	params: URLSearchParams,
-	deps: Parameters<Feature["init"]>[0],
-): void {
-	switch (route) {
-		case "ping":
-			console.log("[url-scheme] ping → ok");
-			return;
+type UrlRouteDeps = Parameters<Feature["init"]>[0];
+type UrlRouteHandler = (sub: string, params: URLSearchParams, deps: UrlRouteDeps, route: string) => void;
 
-		case "chat": {
-			deps.events.emit("ui:open-chat", {});
-			const text = asString(params.get("text"));
-			if (text) {
-				broadcaster.broadcast("chatCommandRun", {
-					command: { text, submit: asBool(params.get("submit")) },
-				});
-			}
-			return;
-		}
+const URL_ROUTE_HANDLERS: Record<string, UrlRouteHandler> = {
+	ping: handlePingRoute,
+	chat: handleChatRoute,
+	settings: handleSettingsRoute,
+	window: handleWindowRoute,
+	localchat: handleLocalAiRoute,
+	companion: handleLocalAiRoute,
+	pensieve: handlePensieveRoute,
+	action: handleActionRoute,
+};
 
-		case "settings": {
-			const tab = asString(params.get("tab"));
-			// Prefer the SwiftUI DetourSettings.app companion when bundled.
-			// Tabs DetourSettings doesn't cover yet fall through to the
-			// React drawer (its label-only entries broadcast back with a
-			// deep-link via uiOpenSettings, the legacy path).
-			const SWIFT_TABS = new Set([
-				"",
-				"configuration:providers",
-				"configuration:local-ai",
-				"configuration:tray",
-			]);
-			const bridgePath = findBundledSettings();
-			if (bridgePath && (!tab || SWIFT_TABS.has(tab))) {
-				const binary = join(bridgePath, "Contents", "MacOS", "DetourSettings");
-				if (existsSync(binary)) {
-					try {
-						spawn(binary, [], { stdio: "ignore", detached: true }).unref();
-						return;
-					} catch (err) {
-						console.warn("[url-scheme] DetourSettings spawn failed, falling through:", err);
-					}
-				}
-			}
-			deps.events.emit("ui:open-settings", {});
-			broadcaster.broadcast("uiOpenSettings", tab ? { tab } : {});
-			return;
-		}
-
-		case "window": {
-			const target = asString(params.get("target"));
-			// For targets that have a native SwiftUI companion bundled
-			// (settings / activity / pensieve), spawn that. Falls back
-			// to broadcasting `uiOpen<Target>` to the React shell when
-			// no companion is bundled.
-			if (target && target in BUNDLED_COMPANIONS) {
-				const appPath = findBundledCompanion(target);
-				if (appPath) {
-					const binName = BUNDLED_COMPANIONS[target]!.replace(/\.app$/, "");
-					if (spawnCompanion(appPath, binName)) return;
-				}
-			}
-			if (target && VALID_TARGETS.has(target as WindowOpenTarget)) {
-				broadcaster.broadcast(`uiOpen${capitalize(target)}` as never, {});
-			}
-			return;
-		}
-
-		case "localchat":
-		case "companion": {
-			// detour://localchat/start?preset=… / detour://localchat/stop
-			// detour://companion/start?preset=… / detour://companion/stop
-			// Routes back into the same HTTP /api/local-ai/*/{start,stop}
-			// endpoint via localhost so we have ONE code path that
-			// validates + drives the service.
-			const tier = route === "localchat" ? "chat" : "companion";
-			if (sub !== "start" && sub !== "stop") {
-				console.warn(`[url-scheme] /${route} requires /start or /stop`);
-				return;
-			}
-			const preset = asString(params.get("preset"));
-			const body = sub === "start" && preset ? { preset } : {};
-			void fetch(`http://127.0.0.1:2138/api/local-ai/${tier}/${sub}`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(body),
-			}).catch((err) => {
-				console.warn(`[url-scheme] /${route}/${sub} fetch failed:`, err);
-			});
-			return;
-		}
-
-		case "pensieve": {
-			deps.events.emit("ui:open-pensieve", {});
-			const q = asString(params.get("q"));
-			if (sub === "search" && q) {
-				// Pensieve listens for this broadcast and runs the search
-				// when its view mounts.
-				broadcaster.broadcast(
-					"pensieveDeepLink" as never,
-					{ kind: "search", query: q },
-				);
-			}
-			return;
-		}
-
-		case "action": {
-			const name = asString(params.get("name"));
-			if (!name) {
-				console.warn("[url-scheme] /action missing `name`");
-				return;
-			}
-			const actionParams: Record<string, string> = {};
-			for (const [k, v] of params) {
-				if (k === "name") continue;
-				actionParams[k] = v;
-			}
-			// Queue through the inbox pipeline so the agent processes it
-			// like any external trigger. The handler reads the JSON body
-			// and dispatches to the named action.
-			const body = JSON.stringify({ action: name, params: actionParams });
-			void deps.core.rpcDeps.inbox
-				.post({
-					kind: "task",
-					title: `[url-scheme] ${name}`,
-					body,
-					source: `url-scheme:${name}`,
-					prompt: true,
-					dedupeBySource: false,
-				})
-				.catch((err) => {
-					console.warn(`[url-scheme] inbox.post failed:`, err);
-				});
-			return;
-		}
-
-		default:
-			console.warn(`[url-scheme] unknown route: detour://${route}`);
+function handleRoute(route: string, sub: string, params: URLSearchParams, deps: UrlRouteDeps): void {
+	const handler = URL_ROUTE_HANDLERS[route];
+	if (!handler) {
+		logger.warn({ src: "url-scheme", route }, "[UrlScheme] unknown route");
+		return;
 	}
+	handler(sub, params, deps, route);
+}
+
+function handlePingRoute(): void {
+	logger.info({ src: "url-scheme" }, "[UrlScheme] ping ok");
+}
+
+function handleChatRoute(_sub: string, params: URLSearchParams, deps: UrlRouteDeps): void {
+	deps.events.emit("ui:open-chat", {});
+	const text = asString(params.get("text"));
+	if (!text) return;
+	broadcaster.broadcast("chatCommandRun", {
+		command: { text, submit: asBool(params.get("submit")) },
+	});
+}
+
+function handleSettingsRoute(_sub: string, params: URLSearchParams, deps: UrlRouteDeps): void {
+	const tab = asString(params.get("tab"));
+	if (openSettingsCompanion(tab)) return;
+	deps.events.emit("ui:open-settings", {});
+	broadcaster.broadcast("uiOpenSettings", tab ? { tab } : {});
+}
+
+const SWIFT_SETTINGS_TABS = new Set([
+	"",
+	"configuration:providers",
+	"configuration:local-ai",
+	"configuration:tray",
+]);
+
+function openSettingsCompanion(tab: string | undefined): boolean {
+	const bridgePath = findBundledSettings();
+	if (!bridgePath || (tab && !SWIFT_SETTINGS_TABS.has(tab))) return false;
+	const binary = join(bridgePath, "Contents", "MacOS", "DetourSettings");
+	if (!existsSync(binary)) return false;
+	try {
+		spawn(binary, [], { stdio: "ignore", detached: true }).unref();
+		return true;
+	} catch (err) {
+		logger.warn({ src: "url-scheme", err }, "[UrlScheme] DetourSettings spawn failed; falling through");
+		return false;
+	}
+}
+
+function handleWindowRoute(_sub: string, params: URLSearchParams): void {
+	const target = asString(params.get("target"));
+	if (!target) return;
+	if (target in BUNDLED_COMPANIONS) {
+		const appPath = findBundledCompanion(target);
+		const binName = BUNDLED_COMPANIONS[target]?.replace(/\.app$/, "");
+		if (appPath && binName && spawnCompanion(appPath, binName)) return;
+	}
+	if (VALID_TARGETS.has(target as WindowOpenTarget)) {
+		broadcaster.broadcast(`uiOpen${capitalize(target)}` as never, {});
+	}
+}
+
+function handleLocalAiRoute(sub: string, params: URLSearchParams, _deps: UrlRouteDeps, route: string): void {
+	const tier = route === "localchat" ? "chat" : "companion";
+	if (sub !== "start" && sub !== "stop") {
+		logger.warn({ src: "url-scheme", route, sub }, "[UrlScheme] local AI route requires start or stop");
+		return;
+	}
+	const preset = asString(params.get("preset"));
+	const body = sub === "start" && preset ? { preset } : {};
+	void fetch(`http://127.0.0.1:2138/api/local-ai/${tier}/${sub}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	}).catch((err) => {
+		logger.warn({ src: "url-scheme", route, sub, err }, "[UrlScheme] local AI fetch failed");
+	});
+}
+
+function handlePensieveRoute(sub: string, params: URLSearchParams, deps: UrlRouteDeps): void {
+	deps.events.emit("ui:open-pensieve", {});
+	const q = asString(params.get("q"));
+	if (sub === "search" && q) {
+		broadcaster.broadcast("pensieveDeepLink" as never, { kind: "search", query: q });
+	}
+}
+
+function handleActionRoute(_sub: string, params: URLSearchParams, deps: UrlRouteDeps): void {
+	const name = asString(params.get("name"));
+	if (!name) {
+		logger.warn({ src: "url-scheme" }, "[UrlScheme] action route missing name");
+		return;
+	}
+	void deps.core.rpcDeps.inbox
+		.post({
+			kind: "task",
+			title: `[url-scheme] ${name}`,
+			body: JSON.stringify({ action: name, params: actionParams(params) }),
+			source: `url-scheme:${name}`,
+			prompt: true,
+			dedupeBySource: false,
+		})
+		.catch((err) => {
+			logger.warn({ src: "url-scheme", name, err }, "[UrlScheme] inbox post failed");
+		});
+}
+
+function actionParams(params: URLSearchParams): Record<string, string> {
+	const result: Record<string, string> = {};
+	for (const [key, value] of params) {
+		if (key !== "name") result[key] = value;
+	}
+	return result;
 }
 
 function capitalize(s: string): string {

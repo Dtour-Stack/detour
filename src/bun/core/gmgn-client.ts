@@ -129,7 +129,7 @@ export async function gmgnRequest(req: GmgnRequest): Promise<unknown> {
 	if (!cfg.configured) throw new Error(cfg.reason);
 	const timestamp = Math.floor(Date.now() / 1000);
 	const client_id = randomUUID();
-	const query: Record<string, GmgnQueryValue | undefined> = { ...(req.query ?? {}), timestamp, client_id };
+	const query: Record<string, GmgnQueryValue | undefined> = { ...req.query, timestamp, client_id };
 	const bodyStr = req.body !== undefined && req.body !== null ? JSON.stringify(req.body) : "";
 	const url = buildUrl(req.subPath, query);
 	const headers: Record<string, string> = {

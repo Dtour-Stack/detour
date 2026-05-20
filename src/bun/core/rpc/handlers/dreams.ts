@@ -33,9 +33,11 @@ export function dreamsRequests(deps: RpcDeps) {
 			counts: { additions: number; merges: number; replacements: number; deletions: number };
 			skipReason?: string;
 		}> => {
-			const result = await deps.dream.runNow({
-				...(typeof params.instructions === "string" ? { instructions: params.instructions } : {}),
-			});
+			const runOptions: { instructions?: string } = {};
+			if (typeof params.instructions === "string") {
+				runOptions.instructions = params.instructions;
+			}
+			const result = await deps.dream.runNow(runOptions);
 			void broadcast();
 			return {
 				planId: result.planId ?? null,

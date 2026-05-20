@@ -31,7 +31,7 @@ function makeFakeMemoryService(): {
 				store.set(id, {
 					text,
 					tags: tags ?? [],
-					metadata: { ...(extraMetadata ?? {}) },
+					metadata: extraMetadata ?? {},
 					roomId: roomId ?? "",
 				});
 				return { id };
