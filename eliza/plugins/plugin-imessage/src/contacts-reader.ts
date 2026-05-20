@@ -157,35 +157,21 @@ export async function loadContacts(): Promise<ContactsMap> {
     return map;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    // INFO not WARN, dedup'd. Contacts is optional — the plugin documents
-    // its raw-handle fallback. A persistent WARN on every poll is noise
-    // when the user has chosen not to grant Automation. Surface the same
-    // diagnostic once per process via the module-scope dedup set.
-    const failureKind = /not authorized|1743/.test(reason) ? "not_authorized" : "other";
-    if (!loggedContactsLoadFailures.has(failureKind)) {
-      loggedContactsLoadFailures.add(failureKind);
-      if (failureKind === "not_authorized") {
-        logger.info(
-          "[imessage] Contacts not yet authorized; inbound messages will " +
-            "use raw handles (phone/email). Grant Automation → Contacts in " +
-            "macOS System Settings to enable name resolution."
-        );
-      } else {
-        logger.info(
-          `[imessage] Contacts.app read unavailable (${reason}); using raw handles. Further identical failures log at debug.`
-        );
-      }
+    if (/not authorized|1743/.test(reason)) {
+      logger.warn(
+        "[imessage] Contacts access not yet authorized. macOS will prompt " +
+          "the user on the next run. Inbound messages will use raw handles " +
+          "(phone numbers / emails) until Contacts access is granted."
+      );
     } else {
-      logger.debug(`[imessage] Contacts.app still unavailable: ${reason}`);
+      logger.warn(
+        `[imessage] Failed to load Contacts.app data: ${reason}. ` +
+          "Inbound messages will use raw handles instead of names."
+      );
     }
     return new Map();
   }
 }
-
-// Module-scope dedup: log the Contacts.app load failure once per process,
-// downgrade subsequent attempts to debug. Mirrors the chat.db pattern.
-const loggedContactsLoadFailures = new Set<string>();
-const loggedListAllContactsFailures = new Set<string>();
 
 // ============================================================================
 // Full-contact read + CRUD
@@ -408,16 +394,9 @@ export async function listAllContacts(): Promise<FullContact[]> {
     const stdout = await runContactsScript(FULL_CONTACTS_DUMP_SCRIPT);
     return parseFullContactsOutput(stdout);
   } catch (error) {
-    // Same dedup pattern as loadContacts — first failure as INFO with
-    // hint, subsequent as DEBUG. The function gracefully returns [].
-    const reason = error instanceof Error ? error.message : String(error);
-    const failureKind = /not authorized|1743/.test(reason) ? "not_authorized" : "other";
-    if (!loggedListAllContactsFailures.has(failureKind)) {
-      loggedListAllContactsFailures.add(failureKind);
-      logger.info(`[imessage] listAllContacts unavailable (${failureKind}: ${reason}); returning empty list.`);
-    } else {
-      logger.debug(`[imessage] listAllContacts still unavailable: ${reason}`);
-    }
+    logger.warn(
+      `[imessage] listAllContacts failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     return [];
   }
 }
@@ -500,9 +479,55 @@ export interface ContactPatch {
 
 export async function updateContact(personId: string, patch: ContactPatch): Promise<boolean> {
   const id = escapeAppleScriptString(personId);
-  const fragments = contactPatchFragments(patch);
+  const fragments: string[] = [];
+
+  if (patch.firstName !== undefined) {
+    fragments.push(`set first name of thePerson to "${escapeAppleScriptString(patch.firstName)}"`);
+  }
+  if (patch.lastName !== undefined) {
+    fragments.push(`set last name of thePerson to "${escapeAppleScriptString(patch.lastName)}"`);
+  }
+
+  for (const phone of patch.addPhones ?? []) {
+    if (!phone.value) continue;
+    fragments.push(
+      `tell thePerson to make new phone at end of phones with properties {value:"${escapeAppleScriptString(phone.value)}", label:"${escapeAppleScriptString(phone.label ?? "mobile")}"}`
+    );
+  }
+  for (const phoneValue of patch.removePhones ?? []) {
+    if (!phoneValue) continue;
+    fragments.push(`
+    tell thePerson
+      repeat with ph in phones
+        if (value of ph) is "${escapeAppleScriptString(phoneValue)}" then
+          delete ph
+          exit repeat
+        end if
+      end repeat
+    end tell`);
+  }
+
+  for (const email of patch.addEmails ?? []) {
+    if (!email.value) continue;
+    fragments.push(
+      `tell thePerson to make new email at end of emails with properties {value:"${escapeAppleScriptString(email.value)}", label:"${escapeAppleScriptString(email.label ?? "home")}"}`
+    );
+  }
+  for (const emailValue of patch.removeEmails ?? []) {
+    if (!emailValue) continue;
+    fragments.push(`
+    tell thePerson
+      repeat with em in emails
+        if (value of em) is "${escapeAppleScriptString(emailValue)}" then
+          delete em
+          exit repeat
+        end if
+      end repeat
+    end tell`);
+  }
 
   if (fragments.length === 0) {
+    // Nothing to do — treat as a successful no-op.
     return true;
   }
 
@@ -526,61 +551,6 @@ end tell
     );
     return false;
   }
-}
-
-function contactPatchFragments(patch: ContactPatch): string[] {
-  return [
-    ...namePatchFragments(patch),
-    ...phonePatchFragments(patch),
-    ...emailPatchFragments(patch),
-  ];
-}
-
-function namePatchFragments(patch: ContactPatch): string[] {
-  const fragments: string[] = [];
-  if (patch.firstName !== undefined) {
-    fragments.push(`set first name of thePerson to "${escapeAppleScriptString(patch.firstName)}"`);
-  }
-  if (patch.lastName !== undefined) {
-    fragments.push(`set last name of thePerson to "${escapeAppleScriptString(patch.lastName)}"`);
-  }
-  return fragments;
-}
-
-function phonePatchFragments(patch: ContactPatch): string[] {
-  const fragments = (patch.addPhones ?? [])
-    .filter((phone) => phone.value)
-    .map((phone) =>
-      `tell thePerson to make new phone at end of phones with properties {value:"${escapeAppleScriptString(phone.value)}", label:"${escapeAppleScriptString(phone.label ?? "mobile")}"}`
-    );
-  for (const phoneValue of patch.removePhones ?? []) {
-    if (phoneValue) fragments.push(removePropertyFragment("phones", "ph", phoneValue));
-  }
-  return fragments;
-}
-
-function emailPatchFragments(patch: ContactPatch): string[] {
-  const fragments = (patch.addEmails ?? [])
-    .filter((email) => email.value)
-    .map((email) =>
-      `tell thePerson to make new email at end of emails with properties {value:"${escapeAppleScriptString(email.value)}", label:"${escapeAppleScriptString(email.label ?? "home")}"}`
-    );
-  for (const emailValue of patch.removeEmails ?? []) {
-    if (emailValue) fragments.push(removePropertyFragment("emails", "em", emailValue));
-  }
-  return fragments;
-}
-
-function removePropertyFragment(collection: "phones" | "emails", variableName: "ph" | "em", value: string): string {
-  return `
-    tell thePerson
-      repeat with ${variableName} in ${collection}
-        if (value of ${variableName}) is "${escapeAppleScriptString(value)}" then
-          delete ${variableName}
-          exit repeat
-        end if
-      end repeat
-    end tell`;
 }
 
 /**
