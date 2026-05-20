@@ -1,7 +1,0 @@
-excluded:
-  - build-assets
-
-disabled_rules:
-  - cyclomatic_complexity
-  - discarded_notification_center_observer
-  - redundant_string_enum_value

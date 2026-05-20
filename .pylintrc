@@ -1,9 +1,0 @@
-[MASTER]
-ignore=dist-agent
-
-[MESSAGES CONTROL]
-disable=
-	too-many-branches,
-	too-many-locals,
-	too-many-return-statements,
-	too-many-statements
