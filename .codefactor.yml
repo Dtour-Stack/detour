@@ -1,0 +1,12 @@
+ratings:
+  paths:
+    - "src/**"
+    - "scripts/**"
+    - "build-assets/shared/**"
+    - "build-assets/swiftun-shell/Sources/**"
+
+exclude:
+  - "eliza/**"
+  - "dist-agent/**"
+  - "build-assets/**/Detour*.app/**"
+  - "build-assets/**/_CodeSignature/**"

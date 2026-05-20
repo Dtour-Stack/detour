@@ -22,6 +22,10 @@ function writeGatewayLog(dir: string, rows: Array<Record<string, unknown>>): voi
 	writeFileSync(join(gatewayDir, "messages.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n"));
 }
 
+function metadataWithPath(type: "description" | "custom", path: string) {
+	return { type, path };
+}
+
 function runtime(memories: Partial<Record<string, Memory[]>> = {}): IAgentRuntime {
 	const agentId = "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID;
 	const entities = new Map<string, Entity>([
@@ -122,7 +126,7 @@ describe("discord context provider", () => {
 					roomId: roomId as UUID,
 					entityId: "0b0d99a5-666d-0f9f-9c12-3c0022b95db3" as UUID,
 					content: { text: "Dexploarer expects Detour to inspect X notifications directly." },
-					metadata: { type: "description", ...{ path: `/discord/rooms/${roomId}/observations` } },
+					metadata: metadataWithPath("description", `/discord/rooms/${roomId}/observations`),
 					createdAt: 1,
 				}],
 				facts: [{
@@ -130,7 +134,7 @@ describe("discord context provider", () => {
 					roomId: roomId as UUID,
 					entityId: "c2269992-d475-04ad-ab68-7dff9209c695" as UUID,
 					content: { text: "Dexploarer is Detour's dev/operator." },
-					metadata: { type: "custom", ...{ path: "/facts/discord/people" } },
+					metadata: metadataWithPath("custom", "/facts/discord/people"),
 					createdAt: 2,
 				}],
 			}), message);

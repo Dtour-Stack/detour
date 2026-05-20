@@ -635,46 +635,75 @@ async function handleCharacterPostRoute(ctx: EvalRequestContext): Promise<Respon
 	return null;
 }
 
+interface CharacterGenerateInput {
+	section: string;
+	count: number;
+	hint: string;
+	existing: string[];
+}
+
+async function readCharacterGenerateInput(ctx: EvalRequestContext): Promise<CharacterGenerateInput | Response> {
+	let body: { section?: unknown; existing?: unknown; count?: unknown; hint?: unknown } = {};
+	try {
+		body = await ctx.req.json();
+	} catch {
+		return ctx.error("invalid JSON", 400);
+	}
+
+	const section = typeof body.section === "string" ? body.section : "";
+	if (!section) return ctx.error("section is required", 400);
+
+	return {
+		section,
+		count: typeof body.count === "number" && body.count > 0 && body.count <= 10 ? body.count : 3,
+		hint: typeof body.hint === "string" ? body.hint : "",
+		existing: Array.isArray(body.existing)
+			? body.existing.filter((value): value is string => typeof value === "string").slice(0, 50)
+			: [],
+	};
+}
+
+function characterGeneratePrompt(input: CharacterGenerateInput, character: Awaited<ReturnType<ConfigService["getCharacter"]>> | null): string {
+	const lines = [
+		`You are helping author the character file for the agent "${character?.name ?? "this agent"}".`,
+		`Current persona: ${character?.system ?? "(none)"}.`,
+		`Generate exactly ${input.count} new entries for the '${input.section}' section.`,
+		`Output one entry per line, no numbering, no quotes, no commentary, no blank lines.`,
+		input.existing.length > 0
+			? `Existing entries (don't duplicate):\n${input.existing.map((entry) => `- ${entry}`).join("\n")}`
+			: "",
+		input.hint ? `Additional guidance from the user: ${input.hint}` : "",
+		`Respond with ONLY the ${input.count} new entries — nothing else.`,
+	].filter(Boolean);
+	return lines.join("\n\n");
+}
+
+function characterSuggestions(text: string, count: number): string[] {
+	return text.trim()
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.map((line) => line.replace(/^[\s\-\*\d\.\)]+/, "").replace(/^"|"$/g, "").trim())
+		.filter((line) => line.length > 0)
+		.slice(0, count);
+}
+
 async function handleCharacterGenerateRoute(ctx: EvalRequestContext): Promise<Response | null> {
 	const { deps, req, path, json, error } = ctx;
 
 	if (req.method !== "POST" || path !== "/api/eval/character/generate") return null;
 
-	let body: { section?: string; existing?: unknown; count?: number; hint?: string } = {};
-	try { body = (await req.json()) as typeof body; } catch { return error("invalid JSON", 400); }
-	const section = typeof body.section === "string" ? body.section : "";
-	if (!section) return error("section is required", 400);
-	const count = typeof body.count === "number" && body.count > 0 && body.count <= 10 ? body.count : 3;
-	const hint = typeof body.hint === "string" ? body.hint : "";
-	const existing = Array.isArray(body.existing)
-		? body.existing.filter((v): v is string => typeof v === "string").slice(0, 50)
-		: [];
+	const input = await readCharacterGenerateInput(ctx);
+	if (input instanceof Response) return input;
+
 	const character = deps.config ? await deps.config.getCharacter() : null;
-	const lines = [
-		`You are helping author the character file for the agent "${character?.name ?? "this agent"}".`,
-		`Current persona: ${character?.system ?? "(none)"}.`,
-		`Generate exactly ${count} new entries for the '${section}' section.`,
-		`Output one entry per line, no numbering, no quotes, no commentary, no blank lines.`,
-		existing.length > 0
-			? `Existing entries (don't duplicate):\n${existing.map((e) => `- ${e}`).join("\n")}`
-			: "",
-		hint ? `Additional guidance from the user: ${hint}` : "",
-		`Respond with ONLY the ${count} new entries — nothing else.`,
-	].filter(Boolean);
 	const chunks: string[] = [];
 	try {
-		await deps.runtime.sendMessage(lines.join("\n\n"), (d) => chunks.push(d));
+		await deps.runtime.sendMessage(characterGeneratePrompt(input, character), (d) => chunks.push(d));
 	} catch (err) {
 		return error(err instanceof Error ? err.message : "generate failed", 500);
 	}
-	const suggestions = chunks.join("").trim()
-		.split(/\r?\n/)
-		.map((l) => l.trim())
-		.filter((l) => l.length > 0)
-		.map((l) => l.replace(/^[\s\-\*\d\.\)]+/, "").replace(/^"|"$/g, "").trim())
-		.filter((l) => l.length > 0)
-		.slice(0, count);
-	return json({ ok: true, section, suggestions });
+	return json({ ok: true, section: input.section, suggestions: characterSuggestions(chunks.join(""), input.count) });
 }
 
 async function handleLogsAndEventsRoutes(ctx: EvalRequestContext): Promise<Response | null> {

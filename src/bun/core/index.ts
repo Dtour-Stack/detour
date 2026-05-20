@@ -24,6 +24,7 @@ import { PortlessService } from "./portless";
 import { PensieveService } from "./pensieve";
 import type { ListMemoriesOptions, PensieveMemoryService } from "./pensieve/memory-service";
 import { RuntimeService } from "./runtime";
+import { createTraySnapshotBuilder } from "./tray-snapshot";
 import { VaultService } from "./vault";
 import { buildRpcDeps } from "./rpc/registry";
 import type { RpcDeps } from "./rpc/types";
@@ -46,6 +47,9 @@ export type CoreHandle = {
 };
 
 type PensieveMemoryCreateInput = Parameters<PensieveMemoryService["create"]>[0];
+type CarrotManager = import("./carrots").CarrotManager;
+type LocalChatServiceInstance = import("./llama/chat-service").LocalChatService;
+type CompanionServiceInstance = import("./llama/companion-service").CompanionService;
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -266,20 +270,11 @@ function ensureBundledSkillsEnv(): void {
 	}
 }
 
-export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
+function prepareCoreEnvironment(opts: CoreOptions): void {
 	ensureUsefulPath();
 	ensureBundledSkillsEnv();
 	process.env.PGLITE_DATA_DIR = opts.pgliteDataDir;
-	// Anchor @elizaos/vault + auth at the canonical Detour data dir (~/.detour).
-	// `<ELIZA_STATE_DIR>/auth/` is a SYMLINK to ~/.eliza/auth/, so eliza's
-	// listAccounts() reads the same OAuth pool the user's other eliza apps use.
-	// Must run BEFORE VaultService construction since createVault() reads
-	// ELIZA_STATE_DIR at call time.
 	process.env.ELIZA_STATE_DIR = opts.dataDir;
-	// Per-agent sandbox dir for plugin-coding-tools. Pre-created here so
-	// the path exists before any FILE/WRITE action fires; surfaced to the
-	// agent via runtime settings (DETOUR_AGENT_SANDBOX) in
-	// runtime.ts:buildRuntimeSettings.
 	try {
 		const agentSandboxDir = join(opts.dataDir, "agent-sandbox");
 		mkdirSync(agentSandboxDir, { recursive: true });
@@ -287,6 +282,237 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	} catch (err) {
 		logger.warn({ src: "core", err: errorMessage(err) }, "[Core] failed to create agent sandbox dir");
 	}
+}
+
+function attachCronRuntime(cron: CronService, runtime: RuntimeService): void {
+	runtime.onAfterBuild(async (state) => {
+		try {
+			await cron.attachRuntime(state.runtime);
+		} catch (err) {
+			logger.warn({ src: "cron", err: errorMessage(err) }, "[CronService] attachRuntime failed");
+		}
+	});
+}
+
+function registerCarrotServices(
+	carrotManager: CarrotManager,
+	deps: {
+		cron: CronService;
+		vault: VaultService;
+		pensieve: PensieveService;
+		activity: ActivityService;
+		runtime: RuntimeService;
+		channels: ChannelsService;
+		llama: LlamaServerService;
+	},
+): void {
+	const { cron, vault, pensieve, activity, runtime, channels, llama } = deps;
+	carrotManager.registerService("cron", {
+		listJobs: () => cron.listJobs(),
+		getJob: (id: unknown) => cron.getJob(requireString(id, "cron job id")),
+		createJob: (input: unknown) => cron.createJob(cronJobInput(input)),
+		updateJob: (id: unknown, patch: unknown) => cron.updateJob(requireString(id, "cron job id"), cronJobUpdate(patch)),
+		deleteJob: (id: unknown) => cron.deleteJob(requireString(id, "cron job id")),
+	});
+	carrotManager.registerService("vault", {
+		hasMasterKey: async () => {
+			try {
+				const v = await vault.vault();
+				return v !== null && v !== undefined;
+			} catch {
+				return false;
+			}
+		},
+	});
+	carrotManager.registerService("pensieve", {
+		listMemories: (opts: unknown) => pensieve.memories.list(listMemoriesOptions(opts)),
+		getMemory: (id: unknown) => pensieve.memories.get(requireString(id, "memory id")),
+		createMemory: (input: unknown) => pensieve.memories.create(memoryCreateInput(input)),
+		deleteMemory: (id: unknown) => pensieve.memories.remove(requireString(id, "memory id")),
+		listTemplates: () => pensieve.templates.listTemplates(),
+		getTemplate: (id: unknown) => pensieve.templates.getTemplate(requireString(id, "template id")),
+	});
+	carrotManager.registerService("channels", {
+		listChannels: async () => {
+			const snap = activity.pluginsSnapshot();
+			const loadedNames = snap.plugins.map((plugin) => plugin.name);
+			const liveRuntime = runtime.peek();
+			const result = await channels.snapshot(loadedNames, liveRuntime);
+			return result.channels.map((channel) => channel.id);
+		},
+		getChannelStatus: async (channelId: unknown) => {
+			const id = requireString(channelId, "channel id");
+			const snap = activity.pluginsSnapshot();
+			const loadedNames = snap.plugins.map((plugin) => plugin.name);
+			const liveRuntime = runtime.peek();
+			const result = await channels.snapshot(loadedNames, liveRuntime);
+			const channel = result.channels.find((candidate) => candidate.id === id);
+			if (!channel) {
+				throw new Error(`Channel "${id}" not found`);
+			}
+			return channel;
+		},
+	});
+	carrotManager.registerService("llama", {
+		status: () => llama.status(),
+		ensureRunning: () => llama.ensureRunning(),
+	});
+}
+
+async function loadCarrotPlugins(carrotManager: CarrotManager) {
+	const extraPlugins: Awaited<ReturnType<typeof carrotManager.loadFromDir>>[] = [];
+	const carrotsDir = resolveCarrotsDir();
+	if (!carrotsDir) {
+		logger.warn({ src: "carrots" }, "[CarrotManager] carrots dir not found");
+		return extraPlugins;
+	}
+	try {
+		const cronCarrotPlugin = await carrotManager.loadFromDir(join(carrotsDir, "cron-tools"));
+		extraPlugins.push(cronCarrotPlugin);
+		logger.info({ src: "carrots", count: extraPlugins.length, carrotsDir }, "[CarrotManager] loaded cron-tools");
+	} catch (err) {
+		logger.warn({ src: "carrots", carrotsDir, err: errorMessage(err) }, "[CarrotManager] failed to load cron-tools");
+	}
+	return extraPlugins;
+}
+
+function startPortless(portless: PortlessService): void {
+	try {
+		portless.start();
+	} catch (err) {
+		logger.warn({ src: "portless", err: errorMessage(err) }, "[PortlessService] start failed");
+	}
+}
+
+async function startEmbeddingServer(llama: LlamaServerService): Promise<void> {
+	try {
+		const res = await llama.ensureRunning();
+		if (!res) {
+			logger.warn({ src: "llama" }, "[LlamaServerService] unavailable for embeddings");
+			return;
+		}
+		process.env.OPENAI_EMBEDDING_URL = `${res.url}/v1/embeddings`;
+		process.env.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY ?? "local-llama";
+		process.env.OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? "local";
+		process.env.OPENAI_EMBEDDING_DIMENSIONS = process.env.OPENAI_EMBEDDING_DIMENSIONS ?? "384";
+		process.env.EMBEDDING_PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
+		process.env.LOCAL_EMBEDDING_MODEL = process.env.LOCAL_EMBEDDING_MODEL ?? "local";
+		process.env.LOCAL_EMBEDDING_DIMENSIONS = process.env.LOCAL_EMBEDDING_DIMENSIONS ?? "384";
+		logger.info({ src: "llama", url: res.url }, "[LlamaServerService] embeddings ready");
+	} catch (err) {
+		logger.warn({ src: "llama", err: errorMessage(err) }, "[LlamaServerService] start failed");
+	}
+}
+
+async function startLocalChatIfEnabled(localChat: LocalChatServiceInstance): Promise<void> {
+	if (process.env.DETOUR_LOCAL_CHAT_ENABLED !== "true") return;
+	try {
+		const result = await localChat.start();
+		if (result) {
+			logger.info({ src: "local-chat", url: result.url, modelPath: result.modelPath }, "[LocalChatService] ready");
+		} else {
+			logger.warn({ src: "local-chat" }, "[LocalChatService] enabled but failed to start");
+		}
+	} catch (err) {
+		logger.warn({ src: "local-chat", err: errorMessage(err) }, "[LocalChatService] start failed");
+	}
+}
+
+function wireCompanion(
+	companion: CompanionServiceInstance,
+	localChat: LocalChatServiceInstance,
+	activity: ActivityService,
+	pensieve: PensieveService,
+): void {
+	companion.attachLocalChat(localChat);
+	companion.setPersistHook(async (entry) => {
+		await pensieve.memories.create({
+			text: `[companion:${entry.job}] ${entry.summary} (${entry.durationMs}ms ${entry.ok ? "ok" : "fail"})`,
+			path: `/companion/${entry.job}`,
+			type: "companion-job",
+			tags: ["companion", `job:${entry.job}`, entry.ok ? "ok" : "fail"],
+			extraMetadata: {
+				job: entry.job,
+				startedAt: entry.startedAt,
+				durationMs: entry.durationMs,
+				ok: entry.ok,
+				summary: entry.summary,
+			},
+		});
+	});
+	companion.setTrajectoryCountProbe(async () => {
+		try {
+			const result = await activity.trajectories.list({ limit: 1, status: "completed" });
+			return typeof result.total === "number" ? result.total : null;
+		} catch {
+			return null;
+		}
+	});
+	pensieve.memories.setMemoryQueryHook((userText) => companion.memoryQuery(userText));
+}
+
+async function startCompanionIfEnabled(companion: CompanionServiceInstance): Promise<void> {
+	if (process.env.DETOUR_COMPANION_ENABLED !== "true") return;
+	try {
+		const result = await companion.start();
+		if (result) {
+			logger.info({ src: "companion", url: result.url, modelPath: result.modelPath }, "[CompanionService] ready");
+		} else {
+			logger.warn({ src: "companion" }, "[CompanionService] enabled but failed to start");
+		}
+	} catch (err) {
+		logger.warn({ src: "companion", err: errorMessage(err) }, "[CompanionService] start failed");
+	}
+}
+
+function registerContactImport(runtime: RuntimeService): void {
+	runtime.onAfterBuild(async (state) => {
+		const tryImport = async (attempt: number): Promise<void> => {
+			try {
+				const { importImessageContacts } = await import("./channels/contact-import");
+				const result = await importImessageContacts(state.runtime);
+				if (result.available && result.contactsFound > 0) {
+					logger.info({ src: "contacts", entitiesCreated: result.entitiesCreated, relationshipsCreated: result.relationshipsCreated, contactsFound: result.contactsFound, skipped: result.skipped }, "[ContactImport] imported macOS contacts");
+				} else if (!result.available && attempt < 3) {
+					setTimeout(() => void tryImport(attempt + 1), attempt * 5000);
+				} else if (result.error) {
+					logger.warn({ src: "contacts", attempt, err: result.error }, "[ContactImport] import skipped");
+				}
+			} catch (err) {
+				logger.warn({ src: "contacts", err: errorMessage(err) }, "[ContactImport] import failed");
+			}
+		};
+		setTimeout(() => void tryImport(1), 5000);
+	});
+}
+
+function registerPensieveTemplates(runtime: RuntimeService, pensieve: PensieveService): void {
+	runtime.onAfterBuild(async (state) => {
+		try {
+			const result = await pensieve.templates.applyTemplatesToRuntime(state.runtime);
+			if (result.applied > 0) {
+				logger.info({ src: "pensieve", applied: result.applied, names: result.names }, "[PensieveTemplatesService] applied templates to runtime");
+			}
+		} catch (err) {
+			logger.warn({ src: "pensieve", err: errorMessage(err) }, "[PensieveTemplatesService] template injection failed");
+		}
+	});
+}
+
+function warmRuntime(runtime: RuntimeService): void {
+	void runtime.getOrBuild()
+		.then((state) => {
+			if (state) {
+				logger.info({ src: "runtime", provider: state.provider }, "[RuntimeService] runtime warm");
+			} else {
+				logger.info({ src: "runtime" }, "[RuntimeService] runtime not built");
+			}
+		})
+		.catch((err) => logger.warn({ src: "runtime", err: errorMessage(err) }, "[RuntimeService] eager build failed"));
+}
+
+export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
+	prepareCoreEnvironment(opts);
 
 	const vault = new VaultService();
 	const auth = new AuthService();
@@ -380,10 +606,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		);
 	});
 	cron.start();
-	runtime.onAfterBuild(async (state) => {
-		try { await cron.attachRuntime(state.runtime); }
-		catch (err) { logger.warn({ src: "cron", err: errorMessage(err) }, "[CronService] attachRuntime failed"); }
-	});
+	attachCronRuntime(cron, runtime);
 
 	// Local llama-server for embeddings (and later, optional chat fallback).
 	// Lazy-spawned on first ensureRunning() call, with model auto-download.
@@ -394,69 +617,16 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// of core service methods; carrots invoke them over RPC. See
 	// src/bun/core/carrots/README and src/bun/carrot-sdk/.
 	const carrotManager = new (await import("./carrots")).CarrotManager();
-	carrotManager.registerService("cron", {
-		listJobs: () => cron.listJobs(),
-		getJob: (id: unknown) => cron.getJob(requireString(id, "cron job id")),
-		createJob: (input: unknown) => cron.createJob(cronJobInput(input)),
-		updateJob: (id: unknown, patch: unknown) => cron.updateJob(requireString(id, "cron job id"), cronJobUpdate(patch)),
-		deleteJob: (id: unknown) => cron.deleteJob(requireString(id, "cron job id")),
+	registerCarrotServices(carrotManager, {
+		cron,
+		vault,
+		pensieve,
+		activity,
+		runtime,
+		channels,
+		llama,
 	});
-	carrotManager.registerService("vault", {
-		hasMasterKey: async () => {
-			try {
-				const v = await vault.vault();
-				return v !== null && v !== undefined;
-			} catch {
-				return false;
-			}
-		},
-	});
-	carrotManager.registerService("pensieve", {
-		listMemories: (opts: unknown) => pensieve.memories.list(listMemoriesOptions(opts)),
-		getMemory: (id: unknown) => pensieve.memories.get(requireString(id, "memory id")),
-		createMemory: (input: unknown) => pensieve.memories.create(memoryCreateInput(input)),
-		deleteMemory: (id: unknown) => pensieve.memories.remove(requireString(id, "memory id")),
-		listTemplates: () => pensieve.templates.listTemplates(),
-		getTemplate: (id: unknown) => pensieve.templates.getTemplate(requireString(id, "template id")),
-	});
-	carrotManager.registerService("channels", {
-		listChannels: async () => {
-			const snap = activity.pluginsSnapshot();
-			const loadedNames = snap.plugins.map((p) => p.name);
-			const liveRuntime = runtime.peek();
-			const result = await channels.snapshot(loadedNames, liveRuntime);
-			return result.channels.map((c) => c.id);
-		},
-		getChannelStatus: async (channelId: unknown) => {
-			const id = requireString(channelId, "channel id");
-			const snap = activity.pluginsSnapshot();
-			const loadedNames = snap.plugins.map((p) => p.name);
-			const liveRuntime = runtime.peek();
-			const result = await channels.snapshot(loadedNames, liveRuntime);
-			const channel = result.channels.find((c) => c.id === id);
-			if (!channel) {
-				throw new Error(`Channel "${id}" not found`);
-			}
-			return channel;
-		},
-	});
-	carrotManager.registerService("llama", {
-		status: () => llama.status(),
-		ensureRunning: () => llama.ensureRunning(),
-	});
-	const extraPlugins: Awaited<ReturnType<typeof carrotManager.loadFromDir>>[] = [];
-	const carrotsDir = resolveCarrotsDir();
-	if (carrotsDir) {
-		try {
-			const cronCarrotPlugin = await carrotManager.loadFromDir(join(carrotsDir, "cron-tools"));
-			extraPlugins.push(cronCarrotPlugin);
-			logger.info({ src: "carrots", count: extraPlugins.length, carrotsDir }, "[CarrotManager] loaded cron-tools");
-		} catch (err) {
-			logger.warn({ src: "carrots", carrotsDir, err: errorMessage(err) }, "[CarrotManager] failed to load cron-tools");
-		}
-	} else {
-		logger.warn({ src: "carrots" }, "[CarrotManager] carrots dir not found");
-	}
+	const extraPlugins = await loadCarrotPlugins(carrotManager);
 	runtime.setExtraPlugins(extraPlugins);
 
 	// Portless — local-dev reverse proxy giving each app a stable
@@ -464,8 +634,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// on a non-privileged port (no sudo, no certs). Persistent route
 	// registry shared with the `portless` CLI via the standard state dir.
 	const portless = new PortlessService();
-	try { portless.start(); }
-	catch (err) { logger.warn({ src: "portless", err: errorMessage(err) }, "[PortlessService] start failed"); }
+	startPortless(portless);
 
 	// AWAIT llama startup BEFORE the runtime builds. Previously this was a
 	// fire-and-forget Promise — the env vars below were set asynchronously,
@@ -475,31 +644,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// Blocking ~1s on first launch (model already on disk → fast) is the
 	// price we pay for the embedding plugin to see OPENAI_EMBEDDING_URL
 	// when it loads.
-	try {
-		const res = await llama.ensureRunning();
-		if (res) {
-			process.env.OPENAI_EMBEDDING_URL = `${res.url}/v1/embeddings`;
-			process.env.OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY ?? "local-llama";
-			process.env.OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL ?? "local";
-			process.env.OPENAI_EMBEDDING_DIMENSIONS = process.env.OPENAI_EMBEDDING_DIMENSIONS ?? "384";
-			// Eliza's knowledge service validates EMBEDDING_PROVIDER ∈
-			// {"local","openai","google"}. We ARE local — the llama-server
-			// is bundled with Detour and runs in-process. Eliza's "local"
-			// path calls runtime.useModel(ModelType.TEXT_EMBEDDING, …)
-			// which routes through our embedding-openai plugin → the
-			// llama-server. (The plugin happens to speak OpenAI's wire
-			// shape, but that's an implementation detail; semantically
-			// this is local-only inference with no network egress.)
-			process.env.EMBEDDING_PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
-			process.env.LOCAL_EMBEDDING_MODEL = process.env.LOCAL_EMBEDDING_MODEL ?? "local";
-			process.env.LOCAL_EMBEDDING_DIMENSIONS = process.env.LOCAL_EMBEDDING_DIMENSIONS ?? "384";
-			logger.info({ src: "llama", url: res.url }, "[LlamaServerService] embeddings ready");
-		} else {
-			logger.warn({ src: "llama" }, "[LlamaServerService] unavailable for embeddings");
-		}
-	} catch (err) {
-		logger.warn({ src: "llama", err: errorMessage(err) }, "[LlamaServerService] start failed");
-	}
+	await startEmbeddingServer(llama);
 
 	// Shared RAM-budget gate for the three llama tiers; see memory-arbiter.ts.
 	// Embedding is already running by this point — reserve its ~0.5 GB
@@ -516,18 +661,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const { LocalChatService } = await import("./llama/chat-service");
 	const localChat = new LocalChatService();
 	localChat.attachArbiter(arbiter);
-	if (process.env.DETOUR_LOCAL_CHAT_ENABLED === "true") {
-		try {
-			const result = await localChat.start();
-			if (result) {
-				logger.info({ src: "local-chat", url: result.url, modelPath: result.modelPath }, "[LocalChatService] ready");
-			} else {
-				logger.warn({ src: "local-chat" }, "[LocalChatService] enabled but failed to start");
-			}
-		} catch (err) {
-			logger.warn({ src: "local-chat", err: errorMessage(err) }, "[LocalChatService] start failed");
-		}
-	}
+	await startLocalChatIfEnabled(localChat);
 
 	// Companion — small 0.6B sidecar model. Runs 5 light jobs to
 	// offload trivial decisions (triage, should-respond, memory query
@@ -539,57 +673,9 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	// companion.
 	const { CompanionService } = await import("./llama/companion-service");
 	const companion = new CompanionService();
-	// Wire the companion → local-chat dedup: when the user picks the same
-	// modelRef for both tiers (e.g. eliza-1 0.6B for chat AND companion,
-	// or Qwen3-0.6B for both), companion.start() will reuse the chat
-	// server's port instead of spawning a duplicate ~3 GB process. Lookup
-	// is re-resolved on each call, so stopping local-chat cleanly drops
-	// the companion to classical-only.
-	companion.attachLocalChat(localChat);
 	companion.attachArbiter(arbiter);
 	companionRef = companion;
-	// Wire the Pensieve query-expansion hook to the companion's
-	// memoryQuery job. When the companion is off this returns null
-	// and Pensieve runs its literal-text path; no race, no startup
-	// dependency.
-	pensieve.memories.setMemoryQueryHook(async (userText) => {
-		return companion.memoryQuery(userText);
-	});
-	// Persist every companion job to the memory store so the HF
-	// auto-dump captures companion activity in the corpus that feeds
-	// APOLLO fine-tuning. Cheap writes; the agent's main flow doesn't
-	// retrieve `companion-job` entries (they're tagged for export only).
-	companion.setPersistHook(async (entry) => {
-		await pensieve.memories.create({
-			text: `[companion:${entry.job}] ${entry.summary} (${entry.durationMs}ms ${entry.ok ? "ok" : "fail"})`,
-			path: `/companion/${entry.job}`,
-			type: "companion-job",
-			tags: ["companion", `job:${entry.job}`, entry.ok ? "ok" : "fail"],
-			extraMetadata: {
-				job: entry.job,
-				startedAt: entry.startedAt,
-				durationMs: entry.durationMs,
-				ok: entry.ok,
-				summary: entry.summary,
-			},
-		});
-	});
-	// Wire APOLLO fine-tune readiness probe: count successful
-	// trajectories since the last fine-tune marker. When the count
-	// crosses APOLLO_FINETUNE_THRESHOLD, the LocalAITab Companion
-	// section shows a "ready to retrain" indicator pointing at the
-	// runbook in docs/companion-apollo-finetune.md.
-	companion.setTrajectoryCountProbe(async () => {
-		try {
-			const result = await activity.trajectories.list({
-				limit: 1,
-				status: "completed",
-			});
-			return typeof result.total === "number" ? result.total : null;
-		} catch {
-			return null;
-		}
-	});
+	wireCompanion(companion, localChat, activity, pensieve);
 	// Wire the planner pre-pass (personaPrePass + compress + triage).
 	// dpe-fallback-plugin reads this on every dynamicPromptExecFromState
 	// call. Null returns are safe; the planner runs unchanged.
@@ -600,259 +686,19 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		compress: (history, target) => companion.compress(history, target),
 		triage: (userText) => companion.triage(userText),
 	});
-	if (process.env.DETOUR_COMPANION_ENABLED === "true") {
-		try {
-			const result = await companion.start();
-			if (result) {
-				logger.info({ src: "companion", url: result.url, modelPath: result.modelPath }, "[CompanionService] ready");
-			} else {
-				logger.warn({ src: "companion" }, "[CompanionService] enabled but failed to start");
-			}
-		} catch (err) {
-			logger.warn({ src: "companion", err: errorMessage(err) }, "[CompanionService] start failed");
-		}
-	}
+	await startCompanionIfEnabled(companion);
 
-	// Import macOS contacts → entity graph + relationships, on every build
-	// where the iMessage plugin is live. The iMessage service starts async
-	// AFTER this hook fires (and itself spawns AppleScript to read Contacts.app
-	// which can take several seconds), so we schedule the import on a delay
-	// and retry once if the service isn't ready yet. Idempotent: stable
-	// entity IDs derived from contact UUIDs.
-	runtime.onAfterBuild(async (state) => {
-		const tryImport = async (attempt: number): Promise<void> => {
-			try {
-				const { importImessageContacts } = await import("./channels/contact-import");
-				const result = await importImessageContacts(state.runtime);
-				if (result.available && result.contactsFound > 0) {
-					logger.info({ src: "contacts", entitiesCreated: result.entitiesCreated, relationshipsCreated: result.relationshipsCreated, contactsFound: result.contactsFound, skipped: result.skipped }, "[ContactImport] imported macOS contacts");
-				} else if (!result.available && attempt < 3) {
-					setTimeout(() => void tryImport(attempt + 1), attempt * 5000);
-				} else if (result.error) {
-					logger.warn({ src: "contacts", attempt, err: result.error }, "[ContactImport] import skipped");
-				}
-			} catch (err) {
-				logger.warn({ src: "contacts", err: errorMessage(err) }, "[ContactImport] import failed");
-			}
-		};
-		setTimeout(() => void tryImport(1), 5000);
+	registerContactImport(runtime);
+	registerPensieveTemplates(runtime, pensieve);
+	const buildTraySnapshot = await createTraySnapshotBuilder({
+		vault,
+		activity,
+		config,
+		llama,
+		localChat,
+		companion,
+		arbiter,
 	});
-
-	// Inject Pensieve templates into runtime.character.templates on every build.
-	// Subsystems (messageHandler/reply/shouldRespond/reflection/think/etc.)
-	// all read via `runtime.character.templates?.<name>` so this is the
-	// integration point that makes user-authored templates actually used.
-	runtime.onAfterBuild(async (state) => {
-		try {
-			const result = await pensieve.templates.applyTemplatesToRuntime(state.runtime);
-			if (result.applied > 0) {
-				logger.info({ src: "pensieve", applied: result.applied, names: result.names }, "[PensieveTemplatesService] applied templates to runtime");
-			}
-		} catch (err) {
-			logger.warn({ src: "pensieve", err: errorMessage(err) }, "[PensieveTemplatesService] template injection failed");
-		}
-	});
-	// Tray-state builder for the Swift DetourTray.app companion. Gathers
-	// from every service it needs in one read — kept compact since the
-	// tray polls every ~4s.
-	const { LOCAL_CHAT_PRESETS } = await import("./llama/chat-service");
-	const { COMPANION_MODEL_PRESETS } = await import("./llama/companion-service");
-	const { isModelDownloaded } = await import("./llama/server-service");
-
-	const buildTraySnapshot = async () => {
-		const llamaSnap = llama.status();
-		const localChatSnap = localChat.status();
-		const companionSnap = companion.status();
-		const memorySnap = arbiter.inspect();
-		// Local MLX image/video — best-effort. The MLX socket may not
-		// be reachable (Swift not running, or hardware not Apple Silicon).
-		// We use connectTimeoutMs=0 so non-Apple-Silicon Macs (or pre-Swift
-		// boot) fast-fail instead of stalling the 4s tray broadcaster.
-		const { mlxRpc } = await import("./mlx-rpc-client");
-		const FAST = 0;
-		const localMlxImage = await (async () => {
-			try {
-				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.image.presets", {}, 2000, FAST)).presets;
-				return { available: true, presets };
-			} catch {
-				return { available: false, presets: [] };
-			}
-		})();
-		// Local video removed — no MLX port, no preset list to fetch.
-		const localMlxStt = await (async () => {
-			try {
-				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.stt.presets", {}, 2000, FAST)).presets;
-				return { available: true, presets };
-			} catch {
-				return { available: false, presets: [] };
-			}
-		})();
-		const localMlxTts = await (async () => {
-			try {
-				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.tts.presets", {}, 2000, FAST)).presets;
-				return { available: true, presets };
-			} catch {
-				return { available: false, presets: [] };
-			}
-		})();
-		const localMlxVision = await (async () => {
-			try {
-				const presets = (await mlxRpc.call<{ presets: unknown[] }>("mlx.vision.presets", {}, 2000, FAST)).presets;
-				return { available: true, presets };
-			} catch {
-				return { available: false, presets: [] };
-			}
-		})();
-		const mlxHealth = await (async () => {
-			try { return await mlxRpc.call("mlx.health", {}, 2000, FAST); } catch { return null; }
-		})();
-		const providers = await vault.listProviders().catch(() => [] as Awaited<ReturnType<typeof vault.listProviders>>);
-		const activeProviderId = providers.find((p) => p.active)?.id ?? null;
-		const trajectoriesResult = await activity.trajectories
-			.list({ limit: 5, offset: 0 })
-			.catch(() => ({ trajectories: [] as Array<{
-				id: string;
-				source?: string;
-				startTime?: number;
-				status?: string;
-			}> }));
-		const prefs = await config.getTrayPrefs().catch(() => null);
-		const chatPresets = LOCAL_CHAT_PRESETS.map((p) => ({
-			id: p.id,
-			label: p.label,
-			approxLiveRamGB: p.approxLiveRamGB,
-			approxDiskGB: p.approxDiskGB,
-			downloaded: isModelDownloaded(p.modelRef),
-		}));
-		const companionPresets = COMPANION_MODEL_PRESETS.map((p) => ({
-			id: p.id,
-			label: p.label,
-			approxLiveRamGB: p.approxLiveRamGB,
-			approxDiskGB: p.approxDiskMB / 1024,
-			downloaded: isModelDownloaded(p.modelRef),
-		}));
-		return {
-			activeProviderId,
-			providers: providers.map((p) => ({
-				id: p.id,
-				label: p.label,
-				active: !!p.active,
-				configured: !!p.hasKey || (p.oauthAccountCount ?? 0) > 0,
-			})),
-			embed: {
-				running: llamaSnap.running,
-				...(llamaSnap.downloadProgress
-					? {
-						downloadPercent: llamaSnap.downloadProgress.percent,
-						downloadedBytes: llamaSnap.downloadProgress.downloadedBytes,
-						totalBytes: llamaSnap.downloadProgress.totalBytes,
-					}
-					: {}),
-				lastError: llamaSnap.lastError,
-			},
-			localChat: {
-				enabled: localChatSnap.enabled,
-				running: localChatSnap.running,
-				preset: localChatSnap.preset,
-				...(localChatSnap.downloadProgress
-					? {
-						downloadPercent: localChatSnap.downloadProgress.percent,
-						downloadedBytes: localChatSnap.downloadProgress.downloadedBytes,
-						totalBytes: localChatSnap.downloadProgress.totalBytes,
-					}
-					: {}),
-				lastArbiterRefusal: localChat.getLastArbiterRefusal(),
-				presets: chatPresets,
-			},
-			companion: {
-				enabled: companionSnap.enabled,
-				running: companionSnap.running,
-				preset: companionSnap.preset,
-				sharedWithLocalChat: companionSnap.sharedWithLocalChat,
-				...(companionSnap.downloadProgress
-					? {
-						downloadPercent: companionSnap.downloadProgress.percent,
-						downloadedBytes: companionSnap.downloadProgress.downloadedBytes,
-						totalBytes: companionSnap.downloadProgress.totalBytes,
-					}
-					: {}),
-				lastArbiterRefusal: companion.getLastArbiterRefusal(),
-				presets: companionPresets,
-			},
-			memory: {
-				totalGB: memorySnap.totalGB,
-				headroomGB: memorySnap.headroomGB,
-				budgetGB: memorySnap.budgetGB,
-				usedGB: memorySnap.usedGB,
-			},
-			localMlxImage: {
-				enabled: process.env.LOCAL_MLX_IMAGE_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_IMAGE_ENABLED === "1",
-				available: localMlxImage.available,
-				preset: process.env.LOCAL_MLX_IMAGE_PRESET ?? null,
-				presets: localMlxImage.presets,
-			},
-			localMlxVideo: {
-				enabled: false,
-				available: false,
-				preset: null,
-				presets: [],
-			},
-			localMlxStt: {
-				enabled: process.env.LOCAL_MLX_STT_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_STT_ENABLED === "1",
-				available: localMlxStt.available,
-				preset: process.env.LOCAL_MLX_STT_PRESET ?? null,
-				presets: localMlxStt.presets,
-			},
-			localMlxTts: {
-				enabled: process.env.LOCAL_MLX_TTS_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_TTS_ENABLED === "1",
-				available: localMlxTts.available,
-				preset: process.env.LOCAL_MLX_TTS_PRESET ?? null,
-				presets: localMlxTts.presets,
-			},
-			localMlxVision: {
-				enabled: process.env.LOCAL_MLX_VISION_ENABLED?.toLowerCase() === "true" || process.env.LOCAL_MLX_VISION_ENABLED === "1",
-				available: localMlxVision.available,
-				preset: process.env.LOCAL_MLX_VISION_PRESET ?? null,
-				presets: localMlxVision.presets,
-			},
-			mlxHealth,
-			modelRouting: await (async () => {
-				const { ROUTING_CATALOG, ROUTED_TYPE_LABELS, getProviderFor } = await import("./model-routing");
-				const cloudConfigured = new Set<string>(
-					providers.filter((p) => p.hasKey || (p.oauthAccountCount ?? 0) > 0).map((p) => p.id)
-				);
-				const localAvailable = new Set<string>([
-					...(localMlxImage.available ? ["local-mlx-image"] : []),
-					...(localMlxStt.available ? ["local-mlx-stt"] : []),
-					...(localMlxTts.available ? ["local-mlx-tts"] : []),
-					...(localMlxVision.available ? ["local-mlx-vision"] : []),
-				]);
-				return ROUTING_CATALOG.map((entry) => {
-					const explicit = getProviderFor(null, entry.type);
-					return {
-						type: entry.type,
-						label: ROUTED_TYPE_LABELS[entry.type],
-						selected: explicit ?? "",
-						options: entry.options.map((opt) => ({
-							id: opt.id,
-							label: opt.label,
-							kind: opt.kind,
-							available: opt.kind === "local"
-								? localAvailable.has(opt.id)
-								: cloudConfigured.has(opt.id),
-						})),
-					};
-				});
-			})(),
-			recentTrajectories: trajectoriesResult.trajectories.slice(0, 5).map((t) => ({
-				id: t.id,
-				...(t.source !== undefined ? { source: t.source } : {}),
-				...(t.startTime !== undefined ? { startTime: t.startTime } : {}),
-				...(t.status !== undefined ? { status: t.status } : {}),
-			})),
-			traySlots: prefs?.slots ?? [],
-		};
-	};
 
 	const api = new ApiServer(
 		runtime,
@@ -895,19 +741,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		goal, dream, memoryArbiter: arbiter,
 	});
 
-	// Eager-build the runtime in the background so Pensieve / Activity have
-	// real data the moment the user opens those windows — instead of
-	// `available: false` until first chat. Failure (e.g. no provider configured
-	// yet) is non-fatal: getOrBuild will simply retry on the next chat send.
-	void runtime.getOrBuild()
-		.then((state) => {
-			if (state) {
-				logger.info({ src: "runtime", provider: state.provider }, "[RuntimeService] runtime warm");
-			} else {
-				logger.info({ src: "runtime" }, "[RuntimeService] runtime not built");
-			}
-		})
-		.catch((err) => logger.warn({ src: "runtime", err: errorMessage(err) }, "[RuntimeService] eager build failed"));
+	warmRuntime(runtime);
 
 	const handle: CoreHandle = {
 		port,

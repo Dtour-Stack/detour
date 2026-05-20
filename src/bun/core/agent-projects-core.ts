@@ -548,7 +548,7 @@ export function detectProjectKind(absDir: string): { type: ProjectType; template
 	if (existsSync(pkgPath)) {
 		try {
 			const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-			const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+			const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 			if ("next" in deps) return { type: "app", template: "nextjs" };
 			return { type: "app", template: "carrot" };
 		} catch { /* fall through */ }
