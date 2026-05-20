@@ -7925,19 +7925,16 @@ ${section_end}`;
 		};
 	}
 
-	private mergeAgentSecrets(existingAgent: Agent, agent: Partial<Agent>): Record<string, unknown> {
+	private mergeAgentSecrets(
+		existingAgent: Agent,
+		agent: Partial<Agent>,
+	): Record<string, string | number | boolean> {
 		return {
-			...this.objectRecord(existingAgent.secrets),
-			...this.objectRecord(existingAgent.settings?.secrets),
-			...this.objectRecord(agent.secrets),
-			...this.objectRecord(agent.settings?.secrets),
+			...existingAgent.secrets,
+			...existingAgent.settings?.secrets,
+			...agent.secrets,
+			...agent.settings?.secrets,
 		};
-	}
-
-	private objectRecord(value: unknown): Record<string, unknown> {
-		return value && typeof value === "object" && !Array.isArray(value)
-			? value as Record<string, unknown>
-			: {};
 	}
 	async getEntityById(entityId: UUID): Promise<Entity | null> {
 		const entities = await this.adapter.getEntitiesByIds([entityId]);
