@@ -1,0 +1,10 @@
+{
+	"ignorePatterns": [
+		"dist-agent/**",
+		"eliza/**"
+	],
+	"rules": {
+		"complexity": "off",
+		"unicorn/no-useless-fallback-in-spread": "off"
+	}
+}
