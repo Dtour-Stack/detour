@@ -16,6 +16,7 @@ import type {
 	ModelConfig,
 } from "../../shared/index";
 import type { CloudCreditsBalance } from "../../shared/rpc/providers";
+import { UI_DELAY_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
 const selectStyle = {
@@ -106,7 +107,7 @@ export function ElizaCloudTab() {
 			await rpc.request.configSetModels(next);
 			setCfg(next);
 			setSavedAt(Date.now());
-			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);
+			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > UI_DELAY_MS.saveFlashVisible ? null : t)), UI_DELAY_MS.saveFlash);
 		} finally {
 			setSaving(false);
 		}

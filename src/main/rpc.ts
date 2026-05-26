@@ -12,11 +12,12 @@
 
 import Electrobun, { Electroview } from "electrobun/view";
 import type { DetourRPC } from "../shared/rpc";
+import { RPC_TIMING_MS } from "../shared/timing";
 import { buildViewListeners } from "./rpc-listeners";
 import { phantomViewRequestHandlers } from "./wallet/phantom-view-handlers";
 
 const rpcDef = Electroview.defineRPC<DetourRPC>({
-	maxRequestTime: 30_000,
+	maxRequestTime: RPC_TIMING_MS.maxRequest,
 	handlers: {
 		// Bun → view awaitable RPC (Phantom wallet, etc.). View → bun traffic
 		// remains `request` / `send` on the same bridge; see

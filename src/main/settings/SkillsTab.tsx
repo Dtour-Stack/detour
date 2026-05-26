@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { rpc } from "../rpc";
 import type { SkillSourceTag, SkillSummary } from "../../shared/rpc/skills";
+import { UI_DELAY_MS } from "../../shared/timing";
 
 const SOURCE_LABEL: Record<SkillSourceTag, string> = {
 	bundled: "Bundled",
@@ -14,7 +15,7 @@ const SOURCE_HINT: Record<SkillSourceTag, string> = {
 	bundled: "Ships with Detour; read-only.",
 	managed: "Installed via INSTALL_SKILL from the agent's registry.",
 	curated: "Locally promoted / actively used by the agent.",
-	project: "Workspace-specific, in this project's skills folder.",
+	project: "Project-specific, in this project's skills folder.",
 	unknown: "Source unknown.",
 };
 
@@ -69,10 +70,10 @@ export function SkillsTab() {
 		try {
 			await rpc.request.skillsOpenDir({ path });
 			setToast(`Opened ${path}`);
-			setTimeout(() => setToast(null), 1500);
+			setTimeout(() => setToast(null), UI_DELAY_MS.skillsToastShort);
 		} catch (e) {
 			setToast(`Open failed: ${e instanceof Error ? e.message : String(e)}`);
-			setTimeout(() => setToast(null), 3000);
+			setTimeout(() => setToast(null), UI_DELAY_MS.skillsToastLong);
 		}
 	}, []);
 

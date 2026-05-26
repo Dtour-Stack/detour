@@ -26,7 +26,7 @@ end draftPrompt
 
 -- Open a Detour window by name. Valid: "chat", "settings", "pensieve",
 -- "activity", "browser", "agents", "pet", "gallery", "portless",
--- "workspace", "command-palette".
+-- "command-palette".
 on openWindow(target)
 	set u to "detour://window?target=" & target
 	tell application "System Events" to open location u

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { WindowConfig } from "../../shared/index";
+import { UI_DELAY_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
 export function WindowTab() {
@@ -17,7 +18,7 @@ export function WindowTab() {
 			await rpc.request.configSetWindow(next);
 			setCfg(next);
 			setSavedAt(Date.now());
-			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);
+			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > UI_DELAY_MS.saveFlashVisible ? null : t)), UI_DELAY_MS.saveFlash);
 			if (next.width !== cfg?.width || next.height !== cfg?.height) {
 				await rpc.request.windowResize({ width: next.width, height: next.height }).catch(() => {});
 			}

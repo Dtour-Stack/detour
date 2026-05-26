@@ -12,6 +12,7 @@ import type {
 	ActivityTrajectoryListResult,
 	ActivityXAutonomyUpdate,
 } from "../../../../shared/index";
+import { X_AUTONOMY_LIMITS, X_AUTONOMY_NUMBER_FIELDS } from "../../../../shared/x-autonomy-policy";
 import { xAutonomyRuntimeSettings } from "../../activity/autonomy-service";
 import { pensieveAudit } from "../../pensieve";
 import type { RpcDeps } from "../types";
@@ -21,10 +22,8 @@ import type { RpcDeps } from "../types";
  * `/api/activity/*` HTTP routes (see src/bun/core/api/server.ts) so
  * call sites can move 1:1.
  *
- * X autonomy validation duplicated here from server.ts because the
- * server module is not in scope to refactor in this phase. The helpers
- * preserve the same clamping/trim/slice semantics so the RPC wire
- * shape matches HTTP exactly.
+ * X autonomy validation uses the shared autonomy policy so UI writes,
+ * runtime snapshots, and task workers clamp the same fields the same way.
  */
 
 type XAutonomyBooleanField =
@@ -35,13 +34,6 @@ type XAutonomyBooleanField =
 	| "proactiveEngagementEnabled"
 	| "followEnabled";
 
-type XAutonomyNumberField =
-	| "intervalMs"
-	| "statusIntervalMs"
-	| "discoveryIntervalMs"
-	| "maxRepliesPerTick"
-	| "maxDiscoveryPerTick";
-
 const X_AUTONOMY_BOOLEAN_FIELDS: XAutonomyBooleanField[] = [
 	"enabled",
 	"writeEnabled",
@@ -49,14 +41,6 @@ const X_AUTONOMY_BOOLEAN_FIELDS: XAutonomyBooleanField[] = [
 	"discoveryEnabled",
 	"proactiveEngagementEnabled",
 	"followEnabled",
-];
-
-const X_AUTONOMY_NUMBER_FIELDS: Array<{ key: XAutonomyNumberField; min: number; max: number }> = [
-	{ key: "intervalMs", min: 30_000, max: 30 * 60_000 },
-	{ key: "statusIntervalMs", min: 15 * 60_000, max: 24 * 60 * 60_000 },
-	{ key: "discoveryIntervalMs", min: 5 * 60_000, max: 24 * 60 * 60_000 },
-	{ key: "maxRepliesPerTick", min: 1, max: 5 },
-	{ key: "maxDiscoveryPerTick", min: 0, max: 8 },
 ];
 
 function recordValue(body: unknown): Record<string, unknown> | null {
@@ -99,7 +83,7 @@ function validateXAutonomyUpdate(update: ActivityXAutonomyUpdate): {
 			const query = item.trim();
 			if (query.length > 0) queries.push(query);
 		}
-		out.discoveryQueries = queries.slice(0, 12);
+		out.discoveryQueries = queries.slice(0, X_AUTONOMY_LIMITS.discoveryQueries.max);
 	}
 	return { ok: true, value: out as ActivityXAutonomyUpdate };
 }

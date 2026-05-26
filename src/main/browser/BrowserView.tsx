@@ -1,5 +1,6 @@
 import { createElement, useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserCommand, SavedLoginEntry } from "../../shared/index";
+import { BROWSER_TIMING_MS, UI_DELAY_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { onBrowserCommand } from "../rpc-listeners/browser";
 
@@ -43,7 +44,7 @@ type BrowserWebviewEvent = Event & {
 
 const DEFAULT_URL = "https://www.google.com";
 const PARTITION = "detour-agent-browser";
-const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
+const DEFAULT_SCRIPT_TIMEOUT_MS: number = BROWSER_TIMING_MS.scriptTimeout;
 const NAVIGATION_RULES = ["^*", "https://*", "http://*", "file://*", "about:*"];
 
 const DETOUR_BROWSER_PRELOAD_SCRIPT = `
@@ -246,7 +247,7 @@ function useElectrobunWebviewScript(): "loading" | "ready" | "unavailable" {
 				setStatus("unavailable");
 				return;
 			}
-			setTimeout(check, 100);
+			setTimeout(check, UI_DELAY_MS.browserWebviewReadyRetry);
 		};
 		check();
 		return () => {
@@ -343,8 +344,8 @@ export function BrowserView({ embedded = false }: { embedded?: boolean } = {}) {
 		};
 		load();
 		requestAnimationFrame(load);
-		setTimeout(load, 100);
-		setTimeout(load, 500);
+		setTimeout(load, UI_DELAY_MS.browserSyncImmediate);
+		setTimeout(load, UI_DELAY_MS.browserLoadRetrySlow);
 	}, []);
 
 	const navigateTab = useCallback((id: string, input: string) => {
@@ -545,8 +546,8 @@ export function BrowserView({ embedded = false }: { embedded?: boolean } = {}) {
 		};
 		sync();
 		requestAnimationFrame(() => requestAnimationFrame(sync));
-		const quick = setTimeout(sync, 100);
-		const settled = setTimeout(sync, 350);
+		const quick = setTimeout(sync, UI_DELAY_MS.browserSyncImmediate);
+		const settled = setTimeout(sync, UI_DELAY_MS.browserSyncSettled);
 		return () => {
 			clearTimeout(quick);
 			clearTimeout(settled);
@@ -575,8 +576,8 @@ export function BrowserView({ embedded = false }: { embedded?: boolean } = {}) {
 		if (stageRef.current) observer?.observe(stageRef.current);
 		window.addEventListener("resize", sync);
 		requestAnimationFrame(() => requestAnimationFrame(sync));
-		setTimeout(sync, 250);
-		setTimeout(sync, 1_000);
+		setTimeout(sync, UI_DELAY_MS.browserSyncQuick);
+		setTimeout(sync, UI_DELAY_MS.browserSyncSlow);
 		return () => {
 			observer?.disconnect();
 			window.removeEventListener("resize", sync);
@@ -663,16 +664,16 @@ export function BrowserView({ embedded = false }: { embedded?: boolean } = {}) {
 		void element.toggleHidden?.(id !== activeTabIdRef.current);
 		sync();
 		requestAnimationFrame(() => requestAnimationFrame(sync));
-		setTimeout(sync, 100);
-		setTimeout(sync, 250);
-		setTimeout(sync, 1_000);
+		setTimeout(sync, UI_DELAY_MS.browserSyncImmediate);
+		setTimeout(sync, UI_DELAY_MS.browserSyncQuick);
+		setTimeout(sync, UI_DELAY_MS.browserSyncSlow);
 		const loadPending = () => {
 			const url = pendingNavigation.current.get(id);
 			if (url) loadTabUrl(id, url);
 		};
 		requestAnimationFrame(loadPending);
-		setTimeout(loadPending, 150);
-		setTimeout(loadPending, 750);
+		setTimeout(loadPending, UI_DELAY_MS.browserPendingShort);
+		setTimeout(loadPending, UI_DELAY_MS.browserPendingLong);
 	}, [addTab, fillLogin, loadTabUrl, patchTab, refreshNavState, reportCommandResult]);
 
 	function submitAddress(event: React.FormEvent) {

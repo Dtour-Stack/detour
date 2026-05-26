@@ -10,12 +10,13 @@
 
 import { useCallback, useState } from "react";
 import type { ActivityPluginDetail, ActivityPluginsSnapshot } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
 export function PluginsPane() {
 	const fetcher = useCallback(() => rpc.request.activityPluginsList({}), []);
-	const { data, error, refresh } = usePoller<ActivityPluginsSnapshot>(fetcher, 8000);
+	const { data, error, refresh } = usePoller<ActivityPluginsSnapshot>(fetcher, UI_POLL_INTERVAL_MS.activityPlugins);
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string | null>(null);
 

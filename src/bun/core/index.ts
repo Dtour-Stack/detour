@@ -710,20 +710,6 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 
 	logger.info({ src: "core", port }, "[Core] API listening");
 
-	// 2026 perf: typed RPC over Unix domain socket. Coexists with the
-	// HTTP server above during migration. Per-call latency ~80µs vs
-	// ~1ms for the HTTP loopback. Swift launcher uses this; legacy
-	// HTTP callers (external curl, eval drivers) keep working unchanged.
-	const { startRpcSocket, buildAgentMethods, startTrayBroadcaster } = await import("./rpc-socket");
-	const rpcMethods = buildAgentMethods({
-		runtime, activity, pensieve, config, vault, inbox,
-		trayStateBuilder: buildTraySnapshot,
-	});
-	const rpcSocket = startRpcSocket(rpcMethods);
-	// Push-based tray-state: bun polls every 4s, diffs, only emits
-	// when the snapshot changes. Clients drop their HTTP polling.
-	const stopTrayBroadcaster = startTrayBroadcaster(buildTraySnapshot);
-
 	// Per-project static-file preview server registry. Hands out
 	// stable `<slug>.localhost:<portlessPort>` URLs for static + carrot
 	// projects; nextjs projects register their own dev-server port via
@@ -759,8 +745,6 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			activity.stop();
 			pensieve.stop();
 			cron.stop();
-			stopTrayBroadcaster();
-			rpcSocket.stop();
 			api.stop();
 			llama.stop();
 			carrotManager.stopAll();

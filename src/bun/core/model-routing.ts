@@ -10,7 +10,6 @@
  *                            store backs its selection
  *   - `getProviderFor(rt,t)` resolves the active provider id for type
  *   - `setProviderFor(rt,t)` persists a user pick to the right store
- *   - `isLocalPreferredFor(rt,t)` legacy gate the local-mlx-* plugins use
  *   - `ROUTING_SETTING_KEYS` allowlist of env keys the settings.set RPC
  *                            is permitted to write
  *
@@ -25,8 +24,7 @@
  *     this consolidation — UI advertised it but `useModel` would throw.
  *     We register cloud handlers (elizacloud, openrouter) inside the
  *     model-router plugin so `useModel(VIDEO_GENERATION, ...)` works.
- *     Local video stays unsupported (no working MLX-Swift port; the
- *     SDXL-frame-stitch experiment froze 16GB Macs).
+ *     Local video stays unsupported.
  *
  * (3) ElevenLabs sub-modalities (TTS / music / SFX / voice design / dub)
  *     stay as plain actions for now — they're discrete one-shot APIs
@@ -35,13 +33,10 @@
  *     every audio modality. ElevenLabs config is "API key in vault" —
  *     unchanged.
  *
- * (4) Legacy `LOCAL_MLX_<TYPE>_ENABLED` booleans are still honored as a
- *     fallback so existing user setups don't break. Setting any new
- *     provider via `setProviderFor` migrates the user off the legacy
- *     toggle on next save.
  */
 
 import type { IAgentRuntime } from "@elizaos/core";
+import { MODEL_ROUTING_SETTING_KEYS } from "../../shared/settings-registry";
 
 // ──────────────────────────────────────────────────────────────────────
 // Types
@@ -63,7 +58,7 @@ export type RoutedType =
 	| "TEXT_EMBEDDING";
 
 export interface RoutingOption {
-	id: string;            // "anthropic", "local-mlx-image", "elizacloud", etc.
+	id: string;            // "anthropic", "elizacloud", etc.
 	label: string;         // human-readable
 	kind: "local" | "cloud";
 	/** Set at snapshot time based on whether the relevant API key /
@@ -115,7 +110,6 @@ export const ROUTING_CATALOG: ReadonlyArray<RoutingCatalogEntry> = [
 		default: "elizacloud",
 		store: "env",
 		options: [
-			{ id: "local-mlx-image", label: "Local MLX (SDXL Turbo)", kind: "local", hint: "Apple Silicon, ~7GB disk" },
 			{ id: "elizacloud", label: "ElizaCloud (Gemini Flash Image)", kind: "cloud" },
 			{ id: "openrouter", label: "OpenRouter", kind: "cloud" },
 			{ id: "codex-chatgpt", label: "ChatGPT image", kind: "cloud", hint: "via Codex subscription" },
@@ -128,7 +122,6 @@ export const ROUTING_CATALOG: ReadonlyArray<RoutingCatalogEntry> = [
 		default: "anthropic",
 		store: "env",
 		options: [
-			{ id: "local-mlx-vision", label: "Local MLX (Apple Vision + Qwen3-VL)", kind: "local", hint: "OCR ships; Qwen3-VL pending vendor" },
 			{ id: "anthropic", label: "Anthropic Claude (vision)", kind: "cloud" },
 			{ id: "openai", label: "OpenAI GPT-4 (vision)", kind: "cloud" },
 			{ id: "openrouter", label: "OpenRouter", kind: "cloud" },
@@ -138,10 +131,9 @@ export const ROUTING_CATALOG: ReadonlyArray<RoutingCatalogEntry> = [
 		type: "TRANSCRIPTION",
 		label: "Speech-to-text",
 		help: "Audio → text. Used by mic dictation, voice memos, and the agent's TRANSCRIBE_MEDIA action.",
-		default: "local-mlx-stt",
+		default: "openai",
 		store: "env",
 		options: [
-			{ id: "local-mlx-stt", label: "Local MLX (Apple Speech)", kind: "local", hint: "On-device, offline" },
 			{ id: "openai", label: "OpenAI Whisper API", kind: "cloud" },
 			{ id: "elizacloud", label: "ElizaCloud Whisper", kind: "cloud" },
 			{ id: "elevenlabs", label: "ElevenLabs Transcribe", kind: "cloud", hint: "Highest quality, paid" },
@@ -151,10 +143,9 @@ export const ROUTING_CATALOG: ReadonlyArray<RoutingCatalogEntry> = [
 		type: "TEXT_TO_SPEECH",
 		label: "Text-to-speech",
 		help: "Agent voice output. Picks the engine when the agent speaks back to you.",
-		default: "local-mlx-tts",
+		default: "openai",
 		store: "env",
 		options: [
-			{ id: "local-mlx-tts", label: "Local (AVSpeech)", kind: "local", hint: "Free, on-device" },
 			{ id: "openai", label: "OpenAI TTS", kind: "cloud" },
 			{ id: "elizacloud", label: "ElizaCloud TTS", kind: "cloud" },
 			{ id: "elevenlabs", label: "ElevenLabs", kind: "cloud", hint: "Studio-grade voices, paid" },
@@ -167,9 +158,6 @@ export const ROUTING_CATALOG: ReadonlyArray<RoutingCatalogEntry> = [
 		default: "elizacloud",
 		store: "env",
 		options: [
-			// No local — no working MLX-Swift video model fits in 16GB
-			// budget on Apple Silicon. SDXL-frame-stitch was tried and
-			// removed (froze main thread).
 			{ id: "elizacloud", label: "ElizaCloud (Veo3)", kind: "cloud", hint: "Pro plan" },
 			{ id: "openrouter", label: "OpenRouter (Veo)", kind: "cloud" },
 		],
@@ -217,25 +205,6 @@ export const ROUTING_CATALOG: ReadonlyArray<RoutingCatalogEntry> = [
 		],
 	},
 ];
-
-// Local-provider IDs by RoutedType — used by isLocalPreferredFor() for
-// the legacy plugin gate. Modalities with no local provider map to a
-// sentinel that no provider id will ever equal.
-const LOCAL_PROVIDER_ID: Partial<Record<RoutedType, string>> = {
-	TEXT: "local-chat",
-	IMAGE: "local-mlx-image",
-	IMAGE_DESCRIPTION: "local-mlx-vision",
-	TRANSCRIPTION: "local-mlx-stt",
-	TEXT_TO_SPEECH: "local-mlx-tts",
-	TEXT_EMBEDDING: "local-bge",
-};
-
-const LEGACY_LOCAL_ENABLED_KEY: Partial<Record<RoutedType, string>> = {
-	IMAGE: "LOCAL_MLX_IMAGE_ENABLED",
-	IMAGE_DESCRIPTION: "LOCAL_MLX_VISION_ENABLED",
-	TRANSCRIPTION: "LOCAL_MLX_STT_ENABLED",
-	TEXT_TO_SPEECH: "LOCAL_MLX_TTS_ENABLED",
-};
 
 // ──────────────────────────────────────────────────────────────────────
 // Key / store helpers
@@ -287,28 +256,10 @@ export function getProviderFor(runtime: IAgentRuntime | null, type: RoutedType):
 	return null;
 }
 
-/** True when the local-mlx-* (or local-chat / local-bge) plugin should
- * actually handle a request for this type. Honors the new
- * DETOUR_MODEL_<TYPE>_PROVIDER setting if present; otherwise falls back
- * to the legacy LOCAL_MLX_<TYPE>_ENABLED boolean. */
-export function isLocalPreferredFor(runtime: IAgentRuntime, type: RoutedType): boolean {
-	const explicit = getProviderFor(runtime, type);
-	if (explicit !== null) {
-		const localId = LOCAL_PROVIDER_ID[type];
-		return localId !== undefined && explicit === localId;
-	}
-	const legacy = LEGACY_LOCAL_ENABLED_KEY[type];
-	if (!legacy) return false;
-	const raw = (readSetting(runtime, legacy) ?? "").trim().toLowerCase();
-	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
 /** The list of allowed routing setting keys for the settings.set RPC
  * allowlist. Includes every env-backed routed type. Vault-backed types
  * have their own RPC path (vault.set / providers.setActive). */
-export const ROUTING_SETTING_KEYS: ReadonlyArray<string> = ROUTING_CATALOG
-	.filter((c) => c.store === "env")
-	.map((c) => routingEnvKey(c.type));
+export const ROUTING_SETTING_KEYS: ReadonlyArray<string> = MODEL_ROUTING_SETTING_KEYS;
 
 /** Human-readable type labels — kept for compat with older callers
  * that imported ROUTED_TYPE_LABELS directly. */

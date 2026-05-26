@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { PortlessSnapshot } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
@@ -30,7 +31,7 @@ export function PortlessView({ embedded: _embedded = false }: { embedded?: boole
 
 	useEffect(() => {
 		void refresh();
-		const t = setInterval(refresh, 3000);
+		const t = setInterval(refresh, UI_POLL_INTERVAL_MS.portless);
 		return () => clearInterval(t);
 	}, [refresh]);
 

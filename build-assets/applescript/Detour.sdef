@@ -10,8 +10,8 @@
   helpers (build-assets/applescript/DetourHelpers.applescript) line up
   with what the dictionary advertises.
 
-  Until the Swift bridge ships, callers should use the helpers, which
-  route through the `detour://` URL scheme. See docs/applescript.md.
+  Callers should use the helpers, which route through the `detour://`
+  URL scheme. See docs/applescript.md.
 -->
 <dictionary title="Detour Terminology">
 	<suite name="Detour Suite" code="DETR" description="Detour agent automation.">

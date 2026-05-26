@@ -6,10 +6,12 @@ import type {
 	ActivityXAutonomyHandled,
 	ActivityXAutonomyUpdate,
 } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
+import { X_AUTONOMY_INTERVAL_PRESETS_MS } from "../../shared/x-autonomy-policy";
 import { TaskRow, fmtInterval, fmtTime } from "./task-row";
 import { usePoller } from "./usePoller";
 
-const PRESETS = [5_000, 15_000, 30_000, 60_000, 300_000];
+const PRESETS = X_AUTONOMY_INTERVAL_PRESETS_MS;
 
 function runnerLabel(runner: ActivityAutonomySnapshot["runner"]): string {
 	if (runner === "prompt-batcher") return "prompt batcher";
@@ -431,7 +433,7 @@ function ImprovementSection({ data }: { data: ActivityAutonomySnapshot }) {
 
 export function AutonomyPane() {
 	const fetcher = useCallback(() => rpc.request.activityAutonomy({}), []);
-	const { data, error, refresh } = usePoller<ActivityAutonomySnapshot>(fetcher, 3000);
+	const { data, error, refresh } = usePoller<ActivityAutonomySnapshot>(fetcher, UI_POLL_INTERVAL_MS.activityAutonomy);
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [draftInterval, setDraftInterval] = useState<number | null>(null);

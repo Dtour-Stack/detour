@@ -13,6 +13,7 @@ import type {
 	CloudContainerStatus,
 	CloudContainersList,
 } from "../../shared/rpc/providers";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
 const STATUS_TONE: Record<CloudContainerStatus, string> = {
@@ -68,7 +69,7 @@ export function CloudContainersTab() {
 
 	useEffect(() => {
 		void refresh();
-		const t = setInterval(refresh, 8000);
+		const t = setInterval(refresh, UI_POLL_INTERVAL_MS.cloudContainers);
 		return () => clearInterval(t);
 	}, []);
 

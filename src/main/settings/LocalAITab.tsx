@@ -17,6 +17,7 @@ import type {
 	LocalChatPresetWire,
 	LocalChatStatusWire,
 } from "../../shared/rpc/llama";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { ArbiterRefusalBanner, DownloadProgress } from "./local-ai/banners";
 import { CompanionCard } from "./local-ai/CompanionCard";
@@ -208,7 +209,7 @@ export function LocalAITab() {
 	useEffect(() => {
 		void loadStatus();
 		void checkOpenaiKey();
-		const id = setInterval(() => void loadStatus(), 4_000);
+		const id = setInterval(() => void loadStatus(), UI_POLL_INTERVAL_MS.localAi);
 		return () => clearInterval(id);
 	}, [loadStatus, checkOpenaiKey]);
 

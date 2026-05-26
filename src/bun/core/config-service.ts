@@ -324,7 +324,6 @@ export class ConfigService {
 			"settings",
 			"command-palette",
 			"portless",
-			"workspace",
 		]);
 		const rawSlots = (raw as { slots?: unknown }).slots;
 		const seen = new Set<TraySlot>();

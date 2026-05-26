@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ActivityTrajectoryListResult } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 import { TrajectoryDetail } from "./TrajectoryDetail";
@@ -36,7 +37,7 @@ export function TrajectoriesPane() {
 		() => rpc.request.activityTrajectoriesList({ limit: 100, ...(status ? { status } : {}) }),
 		[status],
 	);
-	const { data, error } = usePoller<ActivityTrajectoryListResult>(fetcher, 5000, [status]);
+	const { data, error } = usePoller<ActivityTrajectoryListResult>(fetcher, UI_POLL_INTERVAL_MS.default, [status]);
 
 	const handleExportAll = useCallback(async () => {
 		setExporting(true);

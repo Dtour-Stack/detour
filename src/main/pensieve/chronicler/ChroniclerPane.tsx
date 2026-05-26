@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ChroniclerConfig, ChroniclerObservation, ChroniclerStatus } from "../../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../../shared/timing";
 import { rpc } from "../../rpc";
 import { usePoller } from "../usePoller";
 
@@ -133,7 +134,7 @@ export function ChroniclerPane() {
 		]);
 		return { status, recent };
 	}, []);
-	const { data, error, loading, refresh } = usePoller<ChroniclerData>(fetcher, 5000, []);
+	const { data, error, loading, refresh } = usePoller<ChroniclerData>(fetcher, UI_POLL_INTERVAL_MS.default, []);
 	const status = data?.status;
 	const busy = busyCount > 0;
 	const errors = [error, actionError, status?.lastError].filter((value): value is string => !!value);

@@ -5,6 +5,7 @@ import type {
 	ProviderInfo,
 	ThemeChoice,
 } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { ChatView } from "./ChatView";
 import { ChannelRail, hubChannelId, isHubToolView, type HubToolView, type HubView } from "./ChannelRail";
 import { ChannelView } from "./ChannelView";
@@ -15,7 +16,6 @@ import { GatewayPane } from "./gateway/GatewayPane";
 import { PensieveView } from "../pensieve/PensieveView";
 import { ActivityView } from "../activity/ActivityView";
 import { BrowserView } from "../browser/BrowserView";
-import { WorkspaceView } from "../workspace/WorkspaceView";
 import { GalleryView } from "../gallery/GalleryView";
 import { PortlessView } from "../portless/PortlessView";
 import { CommandPalette } from "../command-palette/CommandPalette";
@@ -36,7 +36,6 @@ function renderToolView(view: HubToolView): React.ReactNode {
 		case "pensieve": return <PensieveView embedded />;
 		case "activity": return <ActivityView embedded />;
 		case "browser": return <BrowserView embedded />;
-		case "workspace": return <WorkspaceView embedded />;
 		case "gallery": return <GalleryView embedded />;
 		case "portless": return <PortlessView embedded />;
 	}
@@ -107,7 +106,7 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 			}).catch(() => {});
 		};
 		refresh();
-		const t = setInterval(refresh, 6000);
+		const t = setInterval(refresh, UI_POLL_INTERVAL_MS.mainChat);
 		return () => {
 			cancelled = true;
 			clearInterval(t);
@@ -169,7 +168,7 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 			}).catch(() => setLlamaReady(false));
 		};
 		refreshLlama();
-		const llamaTimer = setInterval(refreshLlama, 4_000);
+		const llamaTimer = setInterval(refreshLlama, UI_POLL_INTERVAL_MS.localAi);
 		return () => {
 			offSettings();
 			offChat();

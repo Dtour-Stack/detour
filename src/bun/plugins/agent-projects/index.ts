@@ -261,7 +261,7 @@ export const agentProjectImportAction: Action = {
 	name: "AGENT_PROJECT_IMPORT",
 	similes: ["IMPORT_PROJECT", "IMPORT_FOLDER", "REGISTER_PROJECT", "ADOPT_DIRECTORY"],
 	description:
-		"Register an existing on-disk directory as a workspace project so you can FILE/BASH/EDIT inside it with full tooling (file tree, git, Monaco preview). Required: `dir` (absolute path on the user's machine). Optional: `name`, `description`. Detects type/template from contents (carrot.json → app/carrot, package.json with next → app/nextjs, index.html → page/static). Writes a `project.json` sidecar inside the dir + symlinks it into the workspace registry. Use when the user says \"work on /Users/.../foo\" or \"import this repo\". Path can be ANY directory the user names — including their actual repos, not just the agent sandbox.",
+		"Register an existing on-disk directory as an agent project so you can FILE/BASH/EDIT inside it with full tooling. Required: `dir` (absolute path on the user's machine). Optional: `name`, `description`. Detects type/template from contents (carrot.json → app/carrot, package.json with next → app/nextjs, index.html → page/static). Writes a `project.json` sidecar inside the dir + symlinks it into the project registry. Use when the user says \"work on /Users/.../foo\" or \"import this repo\". Path can be ANY directory the user names — including their actual repos, not just the agent sandbox.",
 	validate: async () => true,
 	handler: importHandler,
 	examples: [],
@@ -421,7 +421,7 @@ const promoteHandler: Handler = async (runtime, _message, _state, options, callb
 				workerPath,
 				`import { app } from "./carrot-runtime/bun";
 
-console.log("[${promotedMeta.slug}] worker boot (promoted from page). manifest:", app.manifest.id);
+void app.manifest.id;
 `,
 			);
 		}

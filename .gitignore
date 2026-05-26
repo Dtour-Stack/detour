@@ -5,6 +5,7 @@
 node_modules/
 build/
 dist/
+dist-agent/
 artifacts/
 *.tsbuildinfo
 
@@ -54,12 +55,3 @@ packages/web/public/apple-touch-icon.png
 # scripts locally if you need fresh data; do not commit the output.
 eliza/*-export.json
 eliza/*-export.jsonl
-
-# Compiled Swift AppleScript bridge — produced by build-assets/applescript-bridge/build.sh
-# and re-embedded into Detour.app on every build. Source files are tracked.
-build-assets/applescript-bridge/DetourBridge.app/
-build-assets/tray-bridge/DetourTray.app/
-build-assets/settings-bridge/DetourSettings.app/
-build-assets/swiftun-shell/.build/
-build-assets/activity-bridge/DetourActivity.app/
-build-assets/pensieve-bridge/DetourPensieve.app/

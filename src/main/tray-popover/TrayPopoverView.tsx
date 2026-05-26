@@ -27,10 +27,11 @@ import {
 	type TrayPrefs,
 	type TraySlot,
 } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { onTrayPrefsChanged } from "../rpc-listeners/config";
 
-const POLL_MS = 4_000;
+const POLL_MS = UI_POLL_INTERVAL_MS.trayStatus;
 
 const ICONS = {
 	chat: "💬",
@@ -79,7 +80,6 @@ const SLOT_META: Record<TraySlot, { icon: string; label: string }> = {
 	settings: { icon: "⚙", label: "Settings" },
 	"command-palette": { icon: "⌘", label: "Palette" },
 	portless: { icon: "↔", label: "Portless" },
-	workspace: { icon: "🧰", label: "Workspace" },
 };
 
 function fmtRelative(ts?: number): string {

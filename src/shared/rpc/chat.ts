@@ -71,7 +71,6 @@ export type ChatMessages = {
 	uiOpenChat: Record<string, never>;
 	uiOpenCommandPalette: Record<string, never>;
 	uiOpenPortless: Record<string, never>;
-	uiOpenWorkspace: Record<string, never>;
 	uiOpenSettings: {
 		/**
 		 * Optional deep-link to a specific tab. Format: `"<section>:<tab>"`

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AddressType, ConnectButton, useDisconnect, usePhantom } from "@phantom/react-sdk";
+import { UI_DELAY_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { useDetourPhantomStatus } from "../wallet/DetourPhantomRoot";
 import { WalletStatsPanel } from "../wallet/WalletStatsPanel";
@@ -15,10 +16,10 @@ async function copyText(label: string, text: string, onDone: (msg: string | null
 	try {
 		await navigator.clipboard.writeText(text);
 		onDone(`Copied ${label}`);
-		setTimeout(() => onDone(null), 2000);
+		setTimeout(() => onDone(null), UI_DELAY_MS.phantomSuccessClear);
 	} catch {
 		onDone("Copy failed — select the text manually");
-		setTimeout(() => onDone(null), 3000);
+		setTimeout(() => onDone(null), UI_DELAY_MS.phantomErrorClear);
 	}
 }
 
@@ -169,7 +170,7 @@ export function PhantomWalletTab() {
 				) : (
 					<p className="hint" style={{ margin: 0 }}>
 						Set <code>PHANTOM_CONNECT_APP_ID</code> in the repo <code>.env</code> (already created for this
-						workspace if you pulled latest) and restart Detour.
+						worktree if you pulled latest) and restart Detour.
 					</p>
 				)}
 			</section>

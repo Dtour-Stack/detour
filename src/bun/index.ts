@@ -78,7 +78,7 @@ process.prependListener("unhandledRejection", (err) => {
 });
 
 // Detour's canonical home dir. Everything in core/cli/plugins hardcodes
-// `homedir() + ".detour"` for cron, logs, skills, workspace, runtime lock,
+// `homedir() + ".detour"` for cron, logs, skills, projects, runtime lock,
 // audit, etc. — so dataDir matches. Vault, eliza-db, gateway, inbox, llama,
 // audit, action-results live here too.
 //
@@ -108,13 +108,11 @@ const { shortcutsFeature } = await import("./features/shortcuts");
 const { notificationsFeature } = await import("./features/notifications");
 const { menusFeature } = await import("./features/menus");
 const { portlessFeature } = await import("./features/portless");
-const { workspaceFeature } = await import("./features/workspace");
 const { petFeature } = await import("./features/pet");
 const { galleryFeature } = await import("./features/gallery");
 const { trayPopoverFeature } = await import("./features/tray-popover");
 const { urlSchemeFeature } = await import("./features/url-scheme");
 const { statusWidgetFeature } = await import("./features/status-widget");
-const { trayBridgeFeature } = await import("./features/tray-bridge");
 
 logger.info({ src: "main" }, "[Main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
@@ -135,14 +133,9 @@ await loadFeatures(kernel, [
 	notificationsFeature,
 	menusFeature,
 	portlessFeature,
-	workspaceFeature,
 	petFeature,
 	galleryFeature,
 	statusWidgetFeature,
-	// trayBridgeFeature MUST load AFTER all features that addMenuItem,
-	// so when it calls deps.tray.hideIcon() the registered items are
-	// already collected (in case the Swift tray ever wants to fetch them).
-	trayBridgeFeature,
 ]);
 
 logger.info({ src: "main" }, "[Main] tray app ready");

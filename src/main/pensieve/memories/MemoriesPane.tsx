@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PensieveMemorySummary, PensieveMemoryTree, PensieveMemoryTreeNode } from "../../../shared/index";
+import { UI_DELAY_MS } from "../../../shared/timing";
 import { rpc } from "../../rpc";
 import { KnowledgeUploadDropzone } from "./KnowledgeUploadDropzone";
 import { MemoryDetail } from "./MemoryDetail";
@@ -84,7 +85,7 @@ export function MemoriesPane({ scope = "all" }: { scope?: MemoriesScope }) {
 
 	useEffect(() => { void loadTree(); }, [loadTree]);
 	useEffect(() => {
-		const t = setTimeout(load, q ? 250 : 0);
+		const t = setTimeout(load, q ? UI_DELAY_MS.pensieveSearchDebounce : 0);
 		return () => clearTimeout(t);
 	}, [load, q]);
 

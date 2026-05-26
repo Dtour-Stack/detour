@@ -102,10 +102,6 @@ bun run build:eliza
 # in two terminals: one for the React dev server, one for the .app
 bun run dev:web      # → packages/web on http://localhost:5180
 bun run dev          # → builds + launches Detour-dev.app, hot-reloads from Vite
-
-# Swift/macOS setup checks
-bun run verify:swift
-bun run verify:swift:build
 ```
 
 Useful API endpoints (the in-process API on `127.0.0.1:2138`):

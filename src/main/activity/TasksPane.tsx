@@ -8,6 +8,7 @@
 
 import { useCallback, useState } from "react";
 import type { ActivityTasksSnapshot } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { TaskRow } from "./task-row";
 import { usePoller } from "./usePoller";
@@ -16,7 +17,7 @@ export function TasksPane() {
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const fetcher = useCallback(() => rpc.request.activityTasksList({}), []);
-	const { data, error, refresh } = usePoller<ActivityTasksSnapshot>(fetcher, 5000);
+	const { data, error, refresh } = usePoller<ActivityTasksSnapshot>(fetcher, UI_POLL_INTERVAL_MS.default);
 
 	const act = useCallback(
 		async (id: string, op: "run" | "pause" | "resume" | "delete") => {

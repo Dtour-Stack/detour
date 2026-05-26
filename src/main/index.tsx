@@ -5,7 +5,6 @@ import { PensieveView } from "./pensieve/PensieveView";
 import { ActivityView } from "./activity/ActivityView";
 import { BrowserView } from "./browser/BrowserView";
 import { PortlessView } from "./portless/PortlessView";
-import { WorkspaceView } from "./workspace/WorkspaceView";
 import { PetWindow } from "./pet/PetWindow";
 import { GalleryView } from "./gallery/GalleryView";
 import { TrayPopoverView } from "./tray-popover/TrayPopoverView";
@@ -32,7 +31,6 @@ const root =
 	view === "channels" ? <App initialView="feed" initialDrawer="channels" /> :
 	view === "browser" ? <BrowserView /> :
 	view === "portless" ? <PortlessView /> :
-	view === "workspace" ? <WorkspaceView /> :
 	view === "pet" ? <PetWindow /> :
 	view === "gallery" ? <GalleryView /> :
 	view === "tray-popover" ? <TrayPopoverView /> :

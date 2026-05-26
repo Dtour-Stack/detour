@@ -27,7 +27,6 @@ export type KernelEvents = {
 	"ui:open-activity": Record<string, never>;
 	"ui:open-browser": Record<string, never>;
 	"ui:open-portless": Record<string, never>;
-	"ui:open-workspace": Record<string, never>;
 	"ui:open-pet": Record<string, never>;
 	"ui:open-gallery": Record<string, never>;
 	notify: { title: string; body?: string; subtitle?: string };

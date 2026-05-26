@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ChannelStatus } from "../../shared/index";
 import type { GitHubActivityEvent, GitHubChannelRole, GitHubIdentity } from "../../shared/rpc/github-channel";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
 const ROLE_META: Record<GitHubChannelRole, { title: string; subtitle: string }> = {
@@ -66,7 +67,7 @@ function GitHubRolePanel({ role }: { role: GitHubChannelRole }) {
 
 	useEffect(() => {
 		void load();
-		const t = setInterval(load, 30_000);
+		const t = setInterval(load, UI_POLL_INTERVAL_MS.githubFeed);
 		return () => clearInterval(t);
 	}, [load]);
 
@@ -108,8 +109,8 @@ function GitHubBadge({
 			<button
 				type="button"
 				className="badge muted"
-				onClick={() => rpc.request.workspaceOpen({}).catch(() => {})}
-				title="Configure in Messaging connections"
+				onClick={() => rpc.request.windowOpen({ target: "settings" }).catch(() => {})}
+				title="Configure GitHub credentials"
 			>
 				not signed in
 			</button>

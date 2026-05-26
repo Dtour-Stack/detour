@@ -23,8 +23,8 @@ import type { RpcDeps } from "../types";
  * state management across the ApiServer class; here it lives as
  * module-level state since (a) there's at most one pet active per
  * process and (b) RPC handlers are pure-function-over-deps so we'd
- * need a service object anyway. Kept minimal — when the workspace
- * agents service lands, petActivity can be enriched with
+ * need a service object anyway. Kept minimal — when the agent-task
+ * service lands, petActivity can be enriched with
  * runningAgents instead of returning an empty list.
  */
 
@@ -147,8 +147,8 @@ export function petsRequests(deps: RpcDeps) {
 				state: currentPetState(),
 				summary: runtime.available ? "Codex agent ready" : "Codex agent offline",
 				...(runtime.agentName ? { detail: `Agent: ${runtime.agentName}` } : {}),
-				// Workspace-agents service is not yet in flatten; when it
-				// lands, populate from readWorkspaceAgents().filter(running).slice(0,3).
+				// Agent-task service is not yet in flatten; when it lands,
+				// populate runningAgents from active task sessions.
 				runningAgents: [],
 				recentLogs,
 				runtime: {

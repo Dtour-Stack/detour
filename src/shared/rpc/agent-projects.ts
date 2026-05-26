@@ -1,8 +1,7 @@
 /**
- * Agent-projects workspace RPC. Exposes file-tree / read / write / git
+ * Agent-projects RPC. Exposes file-tree / read / write / git
  * primitives for the projects scaffolded by the AGENT_PROJECT_NEW
- * action. Used by the workspace window (#workspace view) so a human
- * can edit alongside the agent.
+ * action.
  *
  * Path semantics: every `path` parameter is RELATIVE to the project
  * root. The handler resolves it against `$DETOUR_AGENT_SANDBOX/projects/
@@ -63,7 +62,7 @@ export type AgentProjectsRequests = {
 	};
 	/**
 	 * Open a native folder-picker, then register the chosen directory as
-	 * a workspace project. The directory itself is not moved or modified
+	 * an agent project. The directory itself is not moved or modified
 	 * (other than writing a `project.json` sidecar inside it). Useful
 	 * for pointing the agent at an existing repo on disk.
 	 */
@@ -71,8 +70,7 @@ export type AgentProjectsRequests = {
 		params: {
 			/** When set, skip the native folder picker and import this absolute
 			 * directory directly. Required for non-UI callers (Discord/X
-			 * → AGENT_PROJECT_IMPORT action). When unset, the workspace UI's
-			 * folder dialog opens. */
+			 * → AGENT_PROJECT_IMPORT action). */
 			dir?: string;
 			name?: string;
 			description?: string;
@@ -95,7 +93,7 @@ export type AgentProjectsRequests = {
 		response: { ok: true; staged: boolean };
 	};
 	/**
-	 * File-system CRUD for the workspace UI (right-click context menu).
+	 * File-system CRUD for agent projects.
 	 * All paths are relative to project root and validated against escape.
 	 */
 	agentProjectCreateFile: {
@@ -128,10 +126,6 @@ export type AgentProjectsRequests = {
 	};
 	agentProjectOpenInFinder: {
 		params: { slug: string };
-		response: { ok: true };
-	};
-	workspaceOpen: {
-		params: Record<string, never>;
 		response: { ok: true };
 	};
 	workspaceDetectIDEs: {

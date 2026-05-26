@@ -54,8 +54,7 @@ export type WindowOpenTarget =
 	| "agents"
 	| "pet"
 	| "gallery"
-	| "portless"
-	| "workspace";
+	| "portless";
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
@@ -492,8 +491,7 @@ export type TraySlot =
 	| "gallery"
 	| "settings"
 	| "command-palette"
-	| "portless"
-	| "workspace";
+	| "portless";
 
 export type TrayStatusLabelMode = "terse" | "verbose";
 
@@ -530,14 +528,7 @@ export const DEFAULT_TRAY_SLOTS: TraySlot[] = [
 ];
 
 /**
- * Snapshot polled by the Swift tray companion (DetourTray.app) via
- * GET /api/tray-state every ~4s. The companion uses this to rebuild
- * its native NSMenu without needing direct access to Detour's
- * internals. Wire-only — no Bun-specific types leak through.
- */
-/**
- * Slim preset descriptor surfaced to the Swift tray's preset-picker
- * submenu. Trimmed from the full LocalChatModelPreset /
+ * Slim preset descriptor surfaced to local preset pickers. Trimmed from the full LocalChatModelPreset /
  * CompanionModelPreset shapes — just what the UI needs.
  */
 export type TrayPresetWire = {
@@ -599,7 +590,7 @@ export type TraySnapshotWire = {
 		readonly budgetGB: number;
 		readonly usedGB: number;
 	} | null;
-	/** Last N trajectories — Swift renders them as a submenu. */
+	/** Last N trajectories for compact status menus. */
 	readonly recentTrajectories: ReadonlyArray<{
 		readonly id: string;
 		readonly source?: string;

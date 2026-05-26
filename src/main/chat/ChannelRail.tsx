@@ -9,7 +9,7 @@ const CHANNEL_VIEW_PREFIX = "channel:";
  *
  *   - canonical conversation views: "inbox" | "chat" | "feed"
  *   - per-channel feeds:            "channel:discord" | "channel:telegram" | …
- *   - tool views:                   "pensieve" | "browser" | "activity" | "workspace" | "gallery" | "portless"
+ *   - tool views:                   "pensieve" | "browser" | "activity" | "gallery" | "portless"
  *
  * Tool views are rendered inline inside `.hub-main`; their own sub-nav is
  * moved to the right side as `.embedded-right-rail` (collapsed by default,
@@ -19,7 +19,6 @@ export type HubToolView =
 	| "pensieve"
 	| "browser"
 	| "activity"
-	| "workspace"
 	| "gallery"
 	| "portless";
 
@@ -34,7 +33,6 @@ export const HUB_TOOL_VIEWS: ReadonlyArray<HubToolView> = [
 	"pensieve",
 	"browser",
 	"activity",
-	"workspace",
 	"gallery",
 	"portless",
 ];
@@ -70,7 +68,6 @@ const TOOL_META: Record<HubToolView, { label: string; glyph: string }> = {
 	pensieve: { label: "Pensieve", glyph: "PN" },
 	browser: { label: "Browser", glyph: "BR" },
 	activity: { label: "Activity", glyph: "AC" },
-	workspace: { label: "Workspace", glyph: "WS" },
 	gallery: { label: "Gallery", glyph: "GL" },
 	portless: { label: "Portless", glyph: "PL" },
 };

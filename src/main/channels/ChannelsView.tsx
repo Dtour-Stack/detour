@@ -8,6 +8,7 @@ import type {
 } from "../../shared/index";
 import type { ChannelsDiscordCatchUpResult } from "../../shared/rpc/channels";
 import type { GitHubActivityEvent, GitHubChannelRole, GitHubIdentity } from "../../shared/rpc/github-channel";
+import { UI_DELAY_MS, UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 import { SidebarIcon } from "../SidebarIcon";
@@ -37,7 +38,7 @@ export function ChannelsView() {
 
 	useEffect(() => {
 		void load();
-		const t = setInterval(load, 8000);
+		const t = setInterval(load, UI_POLL_INTERVAL_MS.channels);
 		return () => clearInterval(t);
 	}, [load]);
 
@@ -301,10 +302,10 @@ function pollChannelReload(onChanged: () => Promise<void> | void, setReloading: 
 	const tick = () => {
 		i += 1;
 		void onChanged();
-		if (i < 6) setTimeout(tick, 1000);
+		if (i < 6) setTimeout(tick, UI_DELAY_MS.channelPairingRetry);
 		else setReloading(false);
 	};
-	setTimeout(tick, 1000);
+	setTimeout(tick, UI_DELAY_MS.channelPairingRetry);
 }
 
 async function toggleChannelEnabled({
@@ -742,7 +743,7 @@ function ChannelHistory({
 
 	useEffect(() => {
 		void load();
-		const t = setInterval(load, 8000);
+		const t = setInterval(load, UI_POLL_INTERVAL_MS.channels);
 		return () => clearInterval(t);
 	}, [load]);
 
@@ -968,13 +969,13 @@ function OwnerPairingSection({
 
 	useEffect(() => {
 		void refresh();
-		const t = setInterval(refresh, 5000);
+		const t = setInterval(refresh, UI_POLL_INTERVAL_MS.channelHealth);
 		return () => clearInterval(t);
 	}, [refresh]);
 
 	useEffect(() => {
 		if (!expiresAt) return;
-		const t = setInterval(() => setNow(Date.now()), 1000);
+		const t = setInterval(() => setNow(Date.now()), UI_POLL_INTERVAL_MS.liveClock);
 		return () => clearInterval(t);
 	}, [expiresAt]);
 
@@ -1170,9 +1171,9 @@ function GitHubRoleSection({
 				channel={channel}
 				credentialKey={meta.vaultKey}
 				draft={draft}
-				onClearKey={(k) => { onClearKey(k); setTimeout(() => void refreshIdentity(), 400); }}
+				onClearKey={(k) => { onClearKey(k); setTimeout(() => void refreshIdentity(), UI_DELAY_MS.credentialIdentityRefresh); }}
 				onDraftChange={onDraftChange}
-				onSetKey={(k) => { onSetKey(k); setTimeout(() => void refreshIdentity(), 400); }}
+				onSetKey={(k) => { onSetKey(k); setTimeout(() => void refreshIdentity(), UI_DELAY_MS.credentialIdentityRefresh); }}
 			/>
 			<div className="github-activity-block">
 				<div className="channel-card-section-row">
@@ -1236,7 +1237,7 @@ function GitHubActivityFeed({ role, hasPat }: { role: GitHubChannelRole; hasPat:
 	useEffect(() => {
 		void load();
 		if (!hasPat) return;
-		const t = setInterval(load, 30_000);
+		const t = setInterval(load, UI_POLL_INTERVAL_MS.githubFeed);
 		return () => clearInterval(t);
 	}, [load, hasPat]);
 

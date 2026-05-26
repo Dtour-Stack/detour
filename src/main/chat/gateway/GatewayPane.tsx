@@ -12,6 +12,7 @@ import type {
 	GatewayMessage,
 	IdentityCandidate as GatewayIdentityCandidate,
 } from "../../../bun/core/channels/gateway";
+import { UI_POLL_INTERVAL_MS } from "../../../shared/timing";
 import { rpc } from "../../rpc";
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -61,7 +62,7 @@ export function GatewayPane() {
 
 	useEffect(() => {
 		void load();
-		const id = setInterval(() => void load(), 3_000);
+		const id = setInterval(() => void load(), UI_POLL_INTERVAL_MS.gateway);
 		return () => clearInterval(id);
 	}, [load]);
 

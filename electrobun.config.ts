@@ -37,10 +37,8 @@ export default {
 		exitOnLastWindowClosed: false,
 	},
 	scripts: {
-		// Inject NSAppTransportSecurity localhost exception so the
-		// workspace's WKWebView preview iframe can load
-		// `http://<slug>.localhost:4848/` URLs from portless. Default
-		// macOS WKWebView ATS rejects plain HTTP.
+		// Inject NSAppTransportSecurity localhost exception so project previews
+		// can load `http://<slug>.localhost:4848/` URLs from portless.
 		postBuild: "scripts/post-build-ats.ts",
 		postWrap: "scripts/post-wrap-icon.ts",
 	},
@@ -109,14 +107,10 @@ export default {
 			"src/main/browser.html": "views/main/browser.html",
 			"src/main/pet.html": "views/main/pet.html",
 			"src/main/portless.html": "views/main/portless.html",
-			"src/main/workspace.html": "views/main/workspace.html",
 			"src/main/gallery.html": "views/main/gallery.html",
 			"src/main/tray-popover.html": "views/main/tray-popover.html",
 			"src/main/status-widget.html": "views/main/status-widget.html",
-			// AppleScript surface — shipped at Resources/{Detour.sdef,DetourHelpers.applescript}
-			// for power users. The sdef is a stub until we wire a Swift
-			// scripting bridge; the .applescript file holds working
-			// helpers that route through the detour:// URL scheme.
+			// AppleScript helpers route through the detour:// URL scheme.
 			"build-assets/applescript/Detour.sdef": "Detour.sdef",
 			"build-assets/applescript/DetourHelpers.applescript": "DetourHelpers.applescript",
 			// Carrot bridge — runtime-loaded plugins. Workers spawn from disk

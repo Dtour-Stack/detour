@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActivityLogEntry } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
@@ -19,7 +20,7 @@ export function LogsPane() {
 		() => rpc.request.activityLogs({ level, ...(q ? { q } : {}), limit: 500 }),
 		[level, q],
 	);
-	const { data, error } = usePoller<ActivityLogEntry[]>(fetcher, 5000, [level, q]);
+	const { data, error } = usePoller<ActivityLogEntry[]>(fetcher, UI_POLL_INTERVAL_MS.default, [level, q]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [autoScroll, setAutoScroll] = useState(true);
 

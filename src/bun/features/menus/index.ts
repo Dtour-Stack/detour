@@ -1,4 +1,5 @@
 import { ApplicationMenu, Utils } from "electrobun/bun";
+import { logger } from "@elizaos/core";
 import type { Feature } from "../../kernel/registry";
 
 /**
@@ -17,7 +18,7 @@ function relaunch(): void {
 		});
 		(proc as unknown as { unref?: () => void }).unref?.();
 	} catch (err) {
-		console.warn("[menus] relaunch spawn failed:", err instanceof Error ? err.message : err);
+		logger.warn({ src: "menus", err: err instanceof Error ? err.message : String(err) }, "[Menus] relaunch spawn failed");
 	}
 	Utils.quit();
 }
@@ -81,12 +82,6 @@ export const menusFeature: Feature = {
 				],
 			},
 			{
-				label: "Workspace",
-				submenu: [
-					{ label: "Open Workspace", action: "workspace:open", accelerator: "CommandOrControl+Shift+W" },
-				],
-			},
-			{
 				label: "Gallery",
 				submenu: [
 					{ label: "Open Gallery", action: "gallery:open", accelerator: "CommandOrControl+Shift+G" },
@@ -124,9 +119,6 @@ export const menusFeature: Feature = {
 					break;
 				case "browser:open":
 					deps.events.emit("ui:open-browser", {});
-					break;
-				case "workspace:open":
-					deps.events.emit("ui:open-workspace", {});
 					break;
 				case "gallery:open":
 					deps.events.emit("ui:open-gallery", {});

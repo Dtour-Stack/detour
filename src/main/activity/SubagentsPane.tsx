@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 import type { TaskRow } from "../../shared/rpc/tasks";
+import { UI_DELAY_MS, UI_POLL_INTERVAL_MS } from "../../shared/timing";
 
 function fmtRelative(iso: string): string {
 	if (!iso) return "—";
@@ -41,7 +42,7 @@ export function SubagentsPane() {
 		const res = await rpc.request.tasksList({});
 		return res.tasks;
 	}, []);
-	const { data, error, refresh } = usePoller<TaskRow[]>(fetcher, 4000);
+	const { data, error, refresh } = usePoller<TaskRow[]>(fetcher, UI_POLL_INTERVAL_MS.status);
 	const [selected, setSelected] = useState<string | null>(null);
 	const [tail, setTail] = useState<string>("");
 	const [input, setInput] = useState("");
@@ -55,7 +56,7 @@ export function SubagentsPane() {
 			setTail(res.output);
 			setTimeout(() => {
 				if (tailRef.current) tailRef.current.scrollTop = tailRef.current.scrollHeight;
-			}, 30);
+			}, UI_DELAY_MS.subagentTailScroll);
 		} catch (err) {
 			setTail(`(error tailing: ${err instanceof Error ? err.message : String(err)})`);
 		}
@@ -64,7 +65,7 @@ export function SubagentsPane() {
 	useEffect(() => {
 		if (!selected) return;
 		void loadTail(selected);
-		const t = setInterval(() => void loadTail(selected), 3000);
+		const t = setInterval(() => void loadTail(selected), UI_POLL_INTERVAL_MS.activityTail);
 		return () => clearInterval(t);
 	}, [selected, loadTail]);
 
@@ -85,7 +86,7 @@ export function SubagentsPane() {
 	}, [selected, input, loadTail]);
 
 	const finalize = useCallback(async (row: TaskRow) => {
-		const prompt = `Please call FINALIZE_WORKSPACE for the workspace at ${row.workdir} (session ${row.sessionId}). Use a sensible commitMessage based on what you did. Open a draft PR back to the base branch. After it lands, summarize the diff back to me.`;
+		const prompt = `Please call FINALIZE_WORKSPACE for the worktree at ${row.workdir} (session ${row.sessionId}). Use a sensible commitMessage based on what you did. Open a draft PR back to the base branch. After it lands, summarize the diff back to me.`;
 		try {
 			await rpc.request.chatSend({ convId: "default", text: prompt });
 		} catch (err) {
@@ -158,7 +159,7 @@ export function SubagentsPane() {
 													className="link"
 													disabled={busy}
 													onClick={(e) => { e.stopPropagation(); void finalize(t); }}
-													title="Tell the agent to commit + open a PR for this workspace"
+													title="Tell the agent to commit and open a PR for this worktree"
 												>
 													finalize → PR
 												</button>

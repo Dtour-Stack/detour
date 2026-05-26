@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { UI_POLL_INTERVAL_MS } from "../shared/timing";
 
 export function usePoller<T>(
 	fetcher: () => Promise<T>,
-	intervalMs = 5000,
+	intervalMs: number = UI_POLL_INTERVAL_MS.default,
 	deps: ReadonlyArray<unknown> = [],
 ): { data: T | null; error: string | null; loading: boolean; refresh: () => void } {
 	const [data, setData] = useState<T | null>(null);

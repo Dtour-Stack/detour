@@ -7,8 +7,7 @@
  *
  *   1. If `DETOUR_MODEL_<TYPE>_PROVIDER` is unset → throw
  *      RouterPassthrough so eliza's resolver falls through to the next
- *      handler (which is then governed by the existing priority order:
- *      local-mlx-* at priority 100 wins over cloud plugins at default).
+ *      handler governed by the existing priority order.
  *
  *   2. If set → call `runtime.useModel(type, params, providerName)`.
  *      Eliza's resolveModelRegistration (runtime.ts:4636) looks up by

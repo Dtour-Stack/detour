@@ -29,7 +29,6 @@ export function createKernel(opts: {
 	registerWindow((name) => {
 		if (name === "uiOpenChat") events.emit("ui:open-chat", {});
 		if (name === "uiOpenBrowser") events.emit("ui:open-browser", {});
-		if (name === "uiOpenWorkspace") events.emit("ui:open-workspace", {});
 		if (name === "uiOpenPortless") events.emit("ui:open-portless", {});
 		if (name === "uiOpenPet") events.emit("ui:open-pet", {});
 		if (name === "uiOpenGallery") events.emit("ui:open-gallery", {});

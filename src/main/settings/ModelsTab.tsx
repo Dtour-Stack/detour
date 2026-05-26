@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelConfig, OpenRouterModelCapability, OpenRouterModelInfo, OpenRouterModelsResponse } from "../../shared/index";
+import { UI_DELAY_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
 const CODEX_MODELS = [
@@ -122,7 +123,7 @@ export function ModelsTab() {
 			await rpc.request.configSetModels(next);
 			setCfg(next);
 			setSavedAt(Date.now());
-			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);
+			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > UI_DELAY_MS.saveFlashVisible ? null : t)), UI_DELAY_MS.saveFlash);
 		} finally {
 			setSaving(false);
 		}

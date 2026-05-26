@@ -224,7 +224,7 @@ function renderCodingBrief(runtime: IAgentRuntime): string {
 	lines.push("- **WEB_FETCH** — pull web content into context.");
 	lines.push("- **ENTER_WORKTREE / EXIT_WORKTREE** — git worktree isolation for parallel branches.");
 	lines.push("- **AGENT_PROJECT_NEW** — scaffold a new project (templates: `nextjs` for component-rich UIs, `carrot` for native widgets, `static` for plain HTML).");
-	lines.push("- **AGENT_PROJECT_IMPORT** — register an existing on-disk directory as a workspace project. Pass the user's actual repo path here when they say \"work on /Users/.../foo\".");
+	lines.push("- **AGENT_PROJECT_IMPORT** — register an existing on-disk directory as an agent project. Pass the user's actual repo path here when they say \"work on /Users/.../foo\".");
 	lines.push("- **AGENT_PROJECT_PREVIEW / AGENT_PROJECT_PUBLIC_PREVIEW / DEPLOY** — local preview, ngrok HTTPS public preview URL, and ElizaOS Cloud deploy. Use PUBLIC_PREVIEW when the user asks for a live/shareable/ngrok URL.");
 	if (orchestrator) {
 		lines.push("- **CREATE_TASK** — spawn a background coding subagent (Codex / Claude Code / OpenCode / Pi) in its own PTY + workdir. Use this when the request is an open-ended build (\"make me a web app for X\", \"refactor the auth flow\", \"port the docs site\") that will take more than a few turns. The subagent runs async; you stay free to keep chatting. Required: `task` (the brief). Optional: `agentType` (codex|claude|opencode|pi), `repo` (url to clone first), `agents` (array, for parallel multi-agent swarm). On Telegram, Discord, X, iMessage, and other connectors, the subagent's progress streams back into the same thread automatically.");
@@ -245,8 +245,8 @@ function renderCodingBrief(runtime: IAgentRuntime): string {
 	lines.push("## Working dir — anchor to what the user said");
 	lines.push(`- Default sandbox: \`${sandbox}\`. New scaffolds land under \`projects/<slug>/\` here.`);
 	lines.push("- **You can build ANYWHERE the user names a path.** When the user says \"work on /Users/me/foo\" or \"in my repo at ~/code/x\", treat that as the working dir for FILE/BASH/EDIT — pass it as cwd to BASH and as the prefix for FILE absolute paths.");
-	lines.push("- If a workspace context block (`[workspace:slug]` with a `dir:` line) is in this turn's prompt, default cwd to that `dir`.");
-	lines.push("- You may be invoked from any channel: workspace chat, the main chat window, Discord, X, iMessage. The path the user gives is your scope regardless of channel.");
+	lines.push("- If a project context block with a `dir:` line is in this turn's prompt, default cwd to that `dir`.");
+	lines.push("- You may be invoked from any channel: main chat, Discord, X, iMessage. The path the user gives is your scope regardless of channel.");
 	lines.push("- For \"build me a new X\" with no existing dir: use AGENT_PROJECT_NEW (pick `nextjs` template by default for anything component-rich).");
 	lines.push("- For \"work on this folder I have\": use AGENT_PROJECT_IMPORT, then operate inside it.");
 	lines.push("- For generated apps: write the code, run the relevant build/test, call AGENT_PROJECT_PUBLIC_PREVIEW, and send the ngrok `publicUrl` back to the same channel that asked.");

@@ -1,5 +1,6 @@
 import { type ReactElement, useEffect, useMemo, useState } from "react";
 import type { ProviderId, ProviderQuotaCap, ProviderInfo } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { onProviderQuotaChanged } from "../rpc-listeners/providers";
 
@@ -60,7 +61,7 @@ export function QuotaBanner({
 			const active = payload.caps.find((c) => c.active) ?? null;
 			setActiveCap(active);
 		});
-		const tick = setInterval(() => setNow(Date.now()), 1_000);
+		const tick = setInterval(() => setNow(Date.now()), UI_POLL_INTERVAL_MS.liveClock);
 		return () => {
 			cancelled = true;
 			offQuota();

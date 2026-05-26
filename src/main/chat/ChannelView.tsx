@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ChannelStatus } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { GitHubChannelFeed } from "./GitHubChannelFeed";
 
 type GatewayMessage = {
@@ -65,7 +66,7 @@ function GatewayFeedView({ channel }: { channel: ChannelStatus }) {
 
 	useEffect(() => {
 		void load();
-		const t = setInterval(load, 4000);
+		const t = setInterval(load, UI_POLL_INTERVAL_MS.status);
 		return () => clearInterval(t);
 	}, [load]);
 

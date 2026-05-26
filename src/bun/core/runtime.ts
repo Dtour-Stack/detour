@@ -57,13 +57,15 @@ import { agentSkillsPlugin } from "../plugins/agent-skills/index";
 import { agentPublicLogPlugin } from "../plugins/agent-public-log/index";
 import { phantomWalletToolsPlugin } from "../plugins/phantom-wallet-tools/index";
 import { gmgnToolsPlugin } from "../plugins/gmgn-tools/index";
-import { audioGenerationPlugin, audioSettingKeys } from "../plugins/audio-generation/index";
-import { mediaGenerationPlugin, mediaGenerationSettingKeys } from "../plugins/media-generation/index";
-import { localMlxImagePlugin } from "../plugins/local-mlx-image/index";
-import { localMlxSttPlugin } from "../plugins/local-mlx-stt/index";
-import { localMlxTtsPlugin } from "../plugins/local-mlx-tts/index";
-import { localMlxVisionPlugin } from "../plugins/local-mlx-vision/index";
+import { audioGenerationPlugin } from "../plugins/audio-generation/index";
+import { mediaGenerationPlugin } from "../plugins/media-generation/index";
 import { modelRouterPlugin } from "../plugins/model-router/index";
+import {
+	AUDIO_RUNTIME_SETTING_KEYS,
+	EMBEDDING_RUNTIME_SETTING_KEYS,
+	MEDIA_GENERATION_SETTING_KEYS,
+	X_RUNTIME_SETTING_KEYS,
+} from "../../shared/settings-registry";
 import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
 import { macAutomatePlugin } from "../plugins/mac-automate/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
@@ -176,24 +178,6 @@ const WORLD_ID = stringToUuid("tray-app:default-world");
 // IGNORE, which is why chat sends were producing trajectories with 0 LLM
 // calls while the inbox/cron path (which uses a stable system entity) worked.
 const USER_ID = stringToUuid("tray-app:default-user");
-const X_RUNTIME_SETTING_KEYS = [
-	"X_AUTH_TOKEN",
-	"X_CT0",
-	"X_USER_AGENT",
-	"X_AUTONOMY_ENABLED",
-	"X_AUTONOMY_WRITE",
-	"X_AUTONOMY_POST_STATUS_ENABLED",
-	"X_AUTONOMY_DISCOVERY_ENABLED",
-	"X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED",
-	"X_AUTONOMY_FOLLOW_ENABLED",
-	"X_AUTONOMY_INTERVAL_MS",
-	"X_AUTONOMY_STATUS_INTERVAL_MS",
-	"X_AUTONOMY_DISCOVERY_INTERVAL_MS",
-	"X_AUTONOMY_MAX_REPLIES_PER_TICK",
-	"X_AUTONOMY_MAX_DISCOVERY_PER_TICK",
-	"X_AUTONOMY_DISCOVERY_QUERIES",
-] as const;
-
 type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
 	| { kind: "reply"; text: string }
@@ -1330,13 +1314,7 @@ export class RuntimeService {
 	 * so values we place on the initial character still win over stale `OPENAI_EMBEDDING_*`
 	 * rows in the agent row — which otherwise pointed the embedding plugin at the cloud
 	 * even when `startCore` had set `process.env` for local llama-server. */
-	private static readonly EMBEDDING_SETTING_KEYS = [
-		"OPENAI_EMBEDDING_URL",
-		"OPENAI_EMBEDDING_API_KEY",
-		"OPENAI_EMBEDDING_MODEL",
-		"OPENAI_EMBEDDING_DIMENSIONS",
-		"OPENAI_EMBEDDING_MAX_CHARS",
-	] as const;
+	private static readonly EMBEDDING_SETTING_KEYS = EMBEDDING_RUNTIME_SETTING_KEYS;
 
 	private mergeEmbeddingSettingsIntoCharacter(character: Character, settings: Record<string, string>): void {
 		const base =
@@ -1372,7 +1350,7 @@ export class RuntimeService {
 	private async loadAudioSettings(settings: Record<string, string>): Promise<void> {
 		try {
 			const v = await this.vault.vault();
-			for (const key of audioSettingKeys()) {
+			for (const key of AUDIO_RUNTIME_SETTING_KEYS) {
 				if (await v.has(key)) {
 					const val = await v.get(key);
 					if (typeof val === "string" && val.length > 0) {
@@ -1389,7 +1367,7 @@ export class RuntimeService {
 	private async loadMediaGenerationSettings(settings: Record<string, string>): Promise<void> {
 		try {
 			const v = await this.vault.vault();
-			for (const key of mediaGenerationSettingKeys()) {
+			for (const key of MEDIA_GENERATION_SETTING_KEYS) {
 				if (await v.has(key)) {
 					const val = await v.get(key);
 					if (typeof val === "string" && val.length > 0) {
@@ -1454,10 +1432,6 @@ export class RuntimeService {
 			audioGenerationPlugin,
 			mediaGenerationPlugin,
 			modelRouterPlugin,    // priority 1000 — enforces user routing pref across all types
-			localMlxImagePlugin,
-			localMlxSttPlugin,
-			localMlxTtsPlugin,
-			localMlxVisionPlugin,
 			desktopControlPlugin,
 			macAutomatePlugin,
 			...(agentOrchestratorPlugin ? [agentOrchestratorPlugin] : []),

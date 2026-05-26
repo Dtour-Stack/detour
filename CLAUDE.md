@@ -55,11 +55,11 @@ Detour.app (Electrobun bundle)
 │   │                                       audio-generation, media-generation, agent-orchestrator wrapper, …)
 │   ├── kernel/  (src/bun/kernel/)       ─ tray, windows, event bus, view-url resolver — bridges Core to UI
 │   └── features/ (src/bun/features/)    ─ feature modules registered by the kernel (chat, settings,
-│                                          pensieve, activity, browser, portless, workspace, pet, gallery,
+│                                          pensieve, activity, browser, portless, pet, gallery,
 │                                          shortcuts, notifications, menus)
 ├── React UI    (src/main/)              ─ single Vite bundle, multiple HTML shells per window
 │   ├── index.tsx                            reads window.__detourView from each shell's HTML
-│   ├── chat / pensieve / activity / channels / browser / settings / portless / workspace / pet / gallery / wallet
+│   ├── chat / pensieve / activity / channels / browser / settings / portless / pet / gallery / wallet
 │   └── rpc.ts                               Electroview.defineRPC<DetourRPC> + buildViewListeners()
 └── Shared      (src/shared/)            ─ wire types + RPC schema (single source of truth)
     ├── index.ts                             shared TS types (no eliza or bun-only deps)
@@ -92,7 +92,7 @@ See `docs/runtime-contract.md` for the exhaustive map. Short version:
 
 ### Window model
 
-The view layer is one React bundle (`src/main/index.tsx`) loaded by **multiple HTML shells**. Each shell (`index.html`, `pensieve.html`, `activity.html`, `browser.html`, `pet.html`, `portless.html`, `workspace.html`, `gallery.html`) sets `window.__detourView` before the shared bundle runs. The bundle reads that and renders the corresponding root component.
+The view layer is one React bundle (`src/main/index.tsx`) loaded by **multiple HTML shells**. Each shell (`index.html`, `pensieve.html`, `activity.html`, `browser.html`, `pet.html`, `portless.html`, `gallery.html`) sets `window.__detourView` before the shared bundle runs. The bundle reads that and renders the corresponding root component.
 
 This exists because Electrobun's `views://` scheme handler doesn't strip URL fragments — `views://main/index.html#activity` 404s. Each window must get its own HTML file. When adding a new window:
 1. Create `src/main/<view>.html` that sets `window.__detourView = "<view>"`.

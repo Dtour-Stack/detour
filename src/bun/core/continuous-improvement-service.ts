@@ -19,7 +19,9 @@ import {
 
 export const CONTINUOUS_IMPROVEMENT_TASK_NAME = "CONTINUOUS_IMPROVEMENT";
 const TASK_TAGS = ["queue", "repeat", "autonomy", "continuous-improvement"];
-const DEFAULT_INTERVAL_MS = 30 * 60_000;
+export const CONTINUOUS_IMPROVEMENT_DEFAULT_INTERVAL_MS = 30 * 60_000;
+export const CONTINUOUS_IMPROVEMENT_MIN_INTERVAL_MS = 5 * 60_000;
+export const CONTINUOUS_IMPROVEMENT_MAX_INTERVAL_MS = 24 * 60 * 60_000;
 const HASH_LIMIT = 50;
 
 type ContinuousImprovementDecision = {
@@ -98,8 +100,8 @@ function hashText(text: string): string {
 
 function buildMetadata(current: unknown, runtime: IAgentRuntime): TaskMetadata {
 	const intervalMs = Math.max(
-		5 * 60_000,
-		Math.min(24 * 60 * 60_000, numberSetting(runtime, "CONTINUOUS_IMPROVEMENT_INTERVAL_MS", DEFAULT_INTERVAL_MS)),
+		CONTINUOUS_IMPROVEMENT_MIN_INTERVAL_MS,
+		Math.min(CONTINUOUS_IMPROVEMENT_MAX_INTERVAL_MS, numberSetting(runtime, "CONTINUOUS_IMPROVEMENT_INTERVAL_MS", CONTINUOUS_IMPROVEMENT_DEFAULT_INTERVAL_MS)),
 	);
 	return {
 		...(isRecord(current) ? current : {}),

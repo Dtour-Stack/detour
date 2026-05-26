@@ -30,7 +30,7 @@ Add new routes there + update this table.
 | `detour://ping` | — | Logs "ok" on the bun side. Smoke test. |
 | `detour://chat` | `text` (optional), `submit=1` (optional) | Open chat; inject text into composer; auto-send if submit=1. |
 | `detour://settings` | `tab=<section>:<tab>` (optional) | Open Settings drawer; deep-link to a specific tab. Same format as command palette. |
-| `detour://window` | `target=<name>` | Open / focus a named window. Targets: chat, settings, pensieve, activity, browser, agents, pet, gallery, portless, workspace, command-palette. |
+| `detour://window` | `target=<name>` | Open / focus a named window. Targets: chat, settings, pensieve, activity, browser, agents, pet, gallery, portless, command-palette. |
 | `detour://pensieve/search` | `q=<query>` | Open Pensieve scoped to a memory search. |
 | `detour://action` | `name=<ACTION>`, plus any action-specific keys | Queue an agent action via the inbox pipeline. The agent picks it up + dispatches like any external task. |
 

@@ -25,6 +25,12 @@ import {
 	type UUID,
 	withStandaloneTrajectory,
 } from "@elizaos/core";
+import {
+	X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES,
+	X_AUTONOMY_LIMITS,
+	X_AUTONOMY_TASK_NAME,
+	X_AUTONOMY_TASK_TAGS,
+} from "../../../shared/x-autonomy-policy";
 import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary } from "./x-client";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
@@ -252,33 +258,9 @@ function isSelfUserId(userId: string | null | undefined, self: { userId: string;
 	return String(userId) === self.userId;
 }
 
-const X_AUTONOMY_TASK_NAME = "X_AUTONOMY";
-const X_AUTONOMY_TASK_TAGS = ["queue", "repeat", "x-autonomy"];
-const X_AUTONOMY_DEFAULT_INTERVAL_MS = 60_000;
-const X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS = 30 * 60 * 1000;
-const X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS = 10 * 60_000;
-const X_AUTONOMY_SEEN_LIMIT = 500;
 const X_STATUS_DEFAULT_DETOUR_REPO = "Dexploarer/detour";
 const X_STATUS_DEFAULT_DEVELOPER_LOGIN = "Dexploarer";
 const X_DETOUR_SQUIRREL_TOKEN_CA = "DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy";
-const X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES = [
-	"elizaOS",
-	"Dexploarer",
-	"Dexploarer scam",
-	"Dexploarer sucks",
-	"Dexploarer broken",
-	"Dexploarer token",
-	"Detour Squirrel token",
-	"Detour Squirrel CA",
-	"Detour Squirrel",
-	"MiladyAI elizaOS",
-	"Eliza Cloud agents",
-	"ai agents",
-	"autonomous agents",
-	"agent framework",
-	"personal AI",
-	"developer tools",
-];
 const X_AUTONOMY_PROJECT_TERMS = [
 	"@dexploarer",
 	"dexploarer",
@@ -489,7 +471,7 @@ function splitList(value: string | undefined): string[] {
 		.filter((item) => item.length > 0);
 }
 
-function readListSetting(runtime: IAgentRuntime, key: string, defaultValue: string[]): string[] {
+function readListSetting(runtime: IAgentRuntime, key: string, defaultValue: readonly string[]): string[] {
 	const parsed = splitList(pickSetting(runtime, key));
 	return parsed.length > 0 ? parsed : [...defaultValue];
 }
@@ -517,8 +499,8 @@ function readRecentReplyTexts(metadata: unknown): string[] {
 
 function buildXAutonomyMetadata(current: unknown, runtime: IAgentRuntime): TaskMetadata {
 	const intervalMs = Math.max(
-		30_000,
-		Math.min(30 * 60_000, readNumberSetting(runtime, "X_AUTONOMY_INTERVAL_MS", X_AUTONOMY_DEFAULT_INTERVAL_MS)),
+		X_AUTONOMY_LIMITS.intervalMs.min,
+		Math.min(X_AUTONOMY_LIMITS.intervalMs.max, readNumberSetting(runtime, "X_AUTONOMY_INTERVAL_MS", X_AUTONOMY_LIMITS.intervalMs.default)),
 	);
 	return {
 		...(isRecord(current) ? current : {}),
@@ -1468,7 +1450,7 @@ async function discoverXCandidates(
 ): Promise<XDiscoveryCandidate[]> {
 	const byTweet = new Map<string, XDiscoveryCandidate>();
 	const now = Date.now();
-	for (const query of params.queries.slice(0, 8)) {
+	for (const query of params.queries.slice(0, X_AUTONOMY_LIMITS.maxDiscoveryPerTick.max)) {
 		for (const product of ["Top", "Latest"] as const) {
 			let tweets: XTweetSummary[] = [];
 			try {
@@ -1639,10 +1621,10 @@ function readXAutonomySettings(runtime: IAgentRuntime): XAutonomySettings {
 		proactiveEngagementEnabled: readBooleanSetting(runtime, "X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED", false),
 		followEnabled: readBooleanSetting(runtime, "X_AUTONOMY_FOLLOW_ENABLED", false),
 		discoveryQueries: readListSetting(runtime, "X_AUTONOMY_DISCOVERY_QUERIES", X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES),
-		statusIntervalMs: boundedSetting(runtime, "X_AUTONOMY_STATUS_INTERVAL_MS", X_AUTONOMY_DEFAULT_STATUS_INTERVAL_MS, 15 * 60_000, 24 * 60 * 60_000),
-		discoveryIntervalMs: boundedSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_DEFAULT_DISCOVERY_INTERVAL_MS, 5 * 60_000, 24 * 60 * 60_000),
-		maxReplies: boundedSetting(runtime, "X_AUTONOMY_MAX_REPLIES_PER_TICK", 2, 1, 5),
-		maxDiscovery: boundedSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", 2, 0, 8),
+		statusIntervalMs: boundedSetting(runtime, "X_AUTONOMY_STATUS_INTERVAL_MS", X_AUTONOMY_LIMITS.statusIntervalMs.default, X_AUTONOMY_LIMITS.statusIntervalMs.min, X_AUTONOMY_LIMITS.statusIntervalMs.max),
+		discoveryIntervalMs: boundedSetting(runtime, "X_AUTONOMY_DISCOVERY_INTERVAL_MS", X_AUTONOMY_LIMITS.discoveryIntervalMs.default, X_AUTONOMY_LIMITS.discoveryIntervalMs.min, X_AUTONOMY_LIMITS.discoveryIntervalMs.max),
+		maxReplies: boundedSetting(runtime, "X_AUTONOMY_MAX_REPLIES_PER_TICK", X_AUTONOMY_LIMITS.maxRepliesPerTick.default, X_AUTONOMY_LIMITS.maxRepliesPerTick.min, X_AUTONOMY_LIMITS.maxRepliesPerTick.max),
+		maxDiscovery: boundedSetting(runtime, "X_AUTONOMY_MAX_DISCOVERY_PER_TICK", X_AUTONOMY_LIMITS.maxDiscoveryPerTick.default, X_AUTONOMY_LIMITS.maxDiscoveryPerTick.min, X_AUTONOMY_LIMITS.maxDiscoveryPerTick.max),
 	};
 }
 
@@ -2162,7 +2144,7 @@ async function updateXAutonomyTask(runtime: IAgentRuntime, task: Task, state: XA
 	await runtime.updateTask(task.id, {
 		metadata: {
 			...state.metadata,
-			xAutonomySeenIds: Array.from(state.nextSeen).slice(-X_AUTONOMY_SEEN_LIMIT),
+			xAutonomySeenIds: Array.from(state.nextSeen).slice(-X_AUTONOMY_LIMITS.seenIds.max),
 			xAutonomyLastRunAt: Date.now(),
 			xAutonomyLastStatusAt: state.lastStatusAt,
 			xAutonomyLastDiscoveryAt: state.lastDiscoveryAt,
@@ -3062,7 +3044,7 @@ const discoverPeopleHandler: Handler = async (runtime, _m, _s, options, callback
 			limit,
 		});
 		const summary = candidates
-			.slice(0, 8)
+			.slice(0, X_AUTONOMY_LIMITS.maxDiscoveryPerTick.max)
 			.map((candidate) => {
 				const tweet = candidate.tweet;
 				const author = tweet.authorScreenName ? `@${tweet.authorScreenName}` : "@?";

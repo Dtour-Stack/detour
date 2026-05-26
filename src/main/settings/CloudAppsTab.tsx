@@ -53,18 +53,11 @@ export function CloudAppsTab() {
 					<h3 style={{ margin: 0 }}>Cloud Apps</h3>
 					<p className="hint" style={{ margin: "4px 0 0" }}>
 						Client apps registered to your ElizaOS Cloud organization. Each one
-						has its own API key and (optional) GitHub repo. Open the Workspace to
-						scaffold + edit + git-track agent-built apps and pages.
+						has its own API key and (optional) GitHub repo. Ask the agent to
+						scaffold, edit, preview, and git-track apps and pages.
 					</p>
 				</div>
 				<div style={{ display: "flex", gap: 8 }}>
-					<button
-						type="button"
-						className="btn small"
-						onClick={() => rpc.request.workspaceOpen({}).catch(() => {})}
-					>
-						Open Workspace
-					</button>
 					<button
 						type="button"
 						className="btn ghost small"

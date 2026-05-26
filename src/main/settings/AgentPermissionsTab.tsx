@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AgentConfig, AgentHfSyncPolicy, AgentHfSyncState, AgentVaultMode } from "../../shared/index";
 import type { AgentHfDumpJob } from "../../shared/rpc/config";
+import { UI_DELAY_MS, UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
 const MODES: { id: AgentVaultMode; label: string; help: string }[] = [
@@ -66,7 +67,7 @@ export function AgentPermissionsTab() {
 			}).catch((err) => {
 				setHfError(err instanceof Error ? err.message : String(err));
 			});
-		}, 1500);
+		}, UI_POLL_INTERVAL_MS.agentHfJob);
 		return () => window.clearInterval(id);
 	}, [hfJob?.id, hfJob?.status]);
 
@@ -76,7 +77,7 @@ export function AgentPermissionsTab() {
 			await rpc.request.configSetAgent(next);
 			setCfg(next);
 			setSavedAt(Date.now());
-			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > 2000 ? null : t)), 2200);
+			setTimeout(() => setSavedAt((t) => (t && Date.now() - t > UI_DELAY_MS.saveFlashVisible ? null : t)), UI_DELAY_MS.saveFlash);
 		} finally {
 			setSaving(false);
 		}

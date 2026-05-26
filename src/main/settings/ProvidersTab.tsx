@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProviderId, ProviderInfo, ProviderQuotaCap } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { onAuthFlowUpdate } from "../rpc-listeners/auth";
 import { onProviderChanged, onProviderQuotaChanged } from "../rpc-listeners/providers";
@@ -160,7 +161,7 @@ export function ProvidersTab() {
 		const offQuota = onProviderQuotaChanged((payload) => {
 			setCaps(payload.caps);
 		});
-		const tick = setInterval(() => setNow(Date.now()), 30_000);
+		const tick = setInterval(() => setNow(Date.now()), UI_POLL_INTERVAL_MS.providerClock);
 		return () => {
 			offFlow();
 			offProvider();

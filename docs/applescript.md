@@ -63,68 +63,6 @@ open 'detour://settings?tab=configuration:local-ai'
 See `docs/shortcuts-pack.md` for ready-made templates. The "Open URL"
 action is all you need.
 
-## Native AppleScript via DetourBridge
-
-Detour ships an embedded Swift companion app, `DetourBridge.app`,
-that gives the agent a real `NSScriptCommand` surface. It lives at
-`/Applications/Detour.app/Contents/Resources/DetourBridge.app` and
-is registered with LaunchServices automatically on first Detour
-launch. macOS auto-launches the bridge when an AppleScript event
-arrives; it forwards each command to Detour via the `detour://`
-URL scheme and exits on idle after 60 seconds.
-
-```applescript
--- This works today. No load script, no URL juggling.
-tell application id "ai.detour.bridge"
-    ping
-    ask agent "what's on my calendar today?"
-    draft prompt "Email the team about "
-    search memory "memory arbiter"
-    open window "activity"
-    open setting "configuration:local-ai"
-    run action "CALENDAR_LIST_TODAY"
-end tell
-```
-
-### Why "Detour Bridge", not "Detour"?
-
-Electrobun's launcher (the binary that boots Detour) has no
-`NSScriptCommand` bridge. To make `tell application "Detour" to ...`
-work, we would have to fork Electrobun. The companion bundle is the
-honest path: it's tiny (≈80 KB Swift binary), faceless (LSUIElement=YES,
-no Dock icon), and entirely transparent — every command is just a
-`detour://` URL under the hood, which means features added to the URL
-scheme show up in AppleScript automatically.
-
-### Script Editor library
-
-`Detour.sdef` is bundled inside `DetourBridge.app/Contents/Resources/`.
-Open Script Editor → File → Open Dictionary → Detour Bridge to browse
-the available commands with parameter shapes.
-
-### Building the bridge from source
-
-`build-assets/applescript-bridge/` holds the Swift source, Info.plist,
-sdef, and `build.sh`. `swiftc` ships with Xcode Command Line Tools
-(`xcode-select --install` if missing). The bridge is rebuilt on every
-Detour build via `scripts/post-build-applescript-bridge.ts` and
-embedded into the .app — there's no manual step for end users.
-
-If you want to test the bridge against a dev build without packaging
-Detour:
-
-```sh
-bash build-assets/applescript-bridge/build.sh
-
-# Register with LaunchServices so AppleScript can find it
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
-    -f build-assets/applescript-bridge/DetourBridge.app
-
-# Smoke test
-osascript -e 'tell application id "ai.detour.bridge" to ping'
-# → true
-```
-
 ## Reference — `detour://` routes
 
 See `docs/shortcuts-pack.md` for the full table. Summary:
@@ -175,8 +113,7 @@ agent fires at the alarm time.
 3. Add the corresponding `<command>` to `build-assets/applescript/Detour.sdef`.
 4. Document in `docs/shortcuts-pack.md` route table.
 
-Keep helpers + sdef aligned so future Swift wiring is a drop-in
-replacement, not a redesign.
+Keep helpers + sdef aligned with the URL scheme.
 
 ## Limitations
 

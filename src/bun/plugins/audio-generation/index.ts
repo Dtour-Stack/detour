@@ -13,25 +13,11 @@ import type {
 	State,
 } from "@elizaos/core";
 import { saveGeneratedMediaBytes } from "../../core/generated-media";
+import { AUDIO_RUNTIME_SETTING_KEYS, type AudioRuntimeSettingKey } from "../../../shared/settings-registry";
 
 const ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1";
 const DEFAULT_TTS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
 const DEFAULT_OUTPUT_FORMAT = "mp3_44100_128";
-
-const AUDIO_RUNTIME_SETTING_KEYS = [
-	"ELEVENLABS_API_KEY",
-	"ELEVENLABS_BASE_URL",
-	"ELEVENLABS_VOICE_ID",
-	"ELEVENLABS_MODEL_ID",
-	"ELEVENLABS_STS_MODEL_ID",
-	"ELEVENLABS_STT_MODEL_ID",
-	"ELEVENLABS_SOUND_MODEL_ID",
-	"ELEVENLABS_MUSIC_MODEL_ID",
-	"ELEVENLABS_OUTPUT_FORMAT",
-	"ELEVENLABS_MUSIC_OUTPUT_FORMAT",
-] as const;
-
-type AudioRuntimeSettingKey = typeof AUDIO_RUNTIME_SETTING_KEYS[number];
 
 type AudioParams = Record<string, unknown>;
 

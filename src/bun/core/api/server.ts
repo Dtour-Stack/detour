@@ -274,12 +274,9 @@ export class ApiServer {
 			config?: import("../config-service").ConfigService;
 		},
 		/**
-		 * Build the tray snapshot consumed by the Swift tray companion.
-		 * core/index.ts wires this in with access to all the services
-		 * the snapshot needs (runtime, llama, localChat, companion,
-		 * memoryArbiter, activity, config). Optional — if missing,
-		 * GET /api/tray-state returns 503 and the Swift tray falls back
-		 * to a minimal "just running" menu.
+		 * Build the tray snapshot consumed by compact local status surfaces.
+		 * core/index.ts wires this in with access to runtime, llama,
+		 * localChat, companion, memoryArbiter, activity, and config.
 		 */
 		private readonly trayStateBuilder?: () => Promise<TraySnapshotWire>,
 	) {}
@@ -522,12 +519,9 @@ export class ApiServer {
 			}
 			return null;
 		},
-		// Tray-state snapshot polled by the Swift tray companion
-		// (build-assets/tray-bridge/) every 4s. Contains everything the
-		// rich NSMenu needs to render: provider, memory budget, the
-		// three local-AI tiers, the user's quick-action slots, and
-		// recent trajectories. Keep this small + fast — it's polled
-		// often. Read-only; tray clicks go back through detour:// URLs.
+		// Tray-state snapshot for compact local status surfaces. Contains
+		// provider, memory budget, local-AI tiers, quick-action slots, and
+		// recent trajectories. Keep this small + fast.
 		async (ctx) => {
 			const { req, path, json, error } = ctx;
 			if (req.method !== "GET" || path !== "/api/tray-state") return null;
@@ -544,25 +538,23 @@ export class ApiServer {
 				);
 			}
 		},
-		// Local-AI control surface for the Swift tray (and any other
-		// trusted client on 127.0.0.1). POST /api/local-ai/{chat|companion}
+		// Local-AI control surface for trusted clients on 127.0.0.1.
+		// POST /api/local-ai/{chat|companion}
 		// /{start|stop}. start() with a `preset` body kicks off a model
 		// download if the GGUF isn't already on disk — the same code path
 		// the React Local AI tab uses, just exposed over HTTP so the
-		// native tray menu can fire it without going through RPC.
+		// local automation can fire it without going through typed RPC.
 		//
 		// 127.0.0.1 only — we never bind to 0.0.0.0 (see start() at the
 		// bottom of this file). No auth on these because the tray runs
 		// as the same user as Detour itself.
 			(ctx) => this.handleLocalAiControl(ctx),
 		// URL-scheme dispatch — in-process equivalent of the open-url event
-		// listener. Swiftun's tray + AppleScript code POSTs `detour://…`
-		// URLs here so they always land in THIS bun process, even while
-		// LaunchServices still has a stale `ai.detour.app` (Electrobun)
-		// registration competing for the scheme. External callers
-		// (Shortcuts.app, raw `open detour://…`) keep going through the
-		// OS-level URL handler. 127.0.0.1 only — same trust model as
-		// /api/local-ai/* and /api/tray-state.
+		// listener. Local automation can POST `detour://…` URLs here so
+		// they land in this Bun process. External callers (Shortcuts.app,
+		// raw `open detour://…`) keep going through the OS-level URL
+		// handler. 127.0.0.1 only — same trust model as /api/local-ai/*
+		// and /api/tray-state.
 		async (ctx) => {
 			const { req, path, json, error } = ctx;
 			if (req.method !== "POST" || path !== "/api/url-scheme/dispatch") return null;

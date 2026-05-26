@@ -31,7 +31,6 @@ const SLOT_CHOICES: { id: TraySlot; label: string; icon: string }[] = [
 	{ id: "settings", label: "Settings", icon: "⚙" },
 	{ id: "command-palette", label: "Palette", icon: "⌘" },
 	{ id: "portless", label: "Portless", icon: "↔" },
-	{ id: "workspace", label: "Workspace", icon: "🧰" },
 ];
 
 function slotMeta(id: TraySlot) {

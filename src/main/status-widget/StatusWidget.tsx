@@ -19,9 +19,10 @@ import type {
 	LlamaServerStatusWire,
 } from "../../shared/rpc/llama";
 import type { ProviderId, ProviderInfo } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 
-const POLL_MS = 4_000;
+const POLL_MS = UI_POLL_INTERVAL_MS.status;
 
 interface State {
 	providers: ProviderInfo[];

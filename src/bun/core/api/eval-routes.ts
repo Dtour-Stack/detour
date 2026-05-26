@@ -32,6 +32,7 @@ import type { ConfigService } from "../config-service";
 import { logger } from "@elizaos/core";
 import { extractSimpleView } from "../../../main/activity/trajectory-extractors";
 import { narrate } from "../agent-narrator";
+import { EVAL_WRITABLE_SETTING_KEYS } from "../../../shared/settings-registry";
 
 type Json = (data: unknown, status?: number) => Response;
 type ErrorJson = (message: string, status?: number) => Response;
@@ -545,24 +546,7 @@ async function handleSettingsWrite(ctx: EvalRequestContext): Promise<Response> {
 	const key = typeof body.key === "string" ? body.key.trim() : "";
 	const value = typeof body.value === "string" ? body.value : "";
 	if (!key) return error("missing 'key'", 400);
-	const allowed = new Set([
-		"LOCAL_MLX_IMAGE_ENABLED",
-		"LOCAL_MLX_IMAGE_PRESET",
-		"LOCAL_MLX_IMAGE_NEGATIVE_PROMPT",
-		"LOCAL_MLX_STT_ENABLED",
-		"LOCAL_MLX_STT_PRESET",
-		"LOCAL_MLX_STT_LANGUAGE",
-		"LOCAL_MLX_TTS_ENABLED",
-		"LOCAL_MLX_TTS_PRESET",
-		"LOCAL_MLX_TTS_VOICE",
-		"LOCAL_MLX_VISION_ENABLED",
-		"LOCAL_MLX_VISION_PRESET",
-		"DETOUR_MODEL_IMAGE_PROVIDER",
-		"DETOUR_MODEL_IMAGE_DESCRIPTION_PROVIDER",
-		"DETOUR_MODEL_TRANSCRIPTION_PROVIDER",
-		"DETOUR_MODEL_TEXT_TO_SPEECH_PROVIDER",
-		"DETOUR_MODEL_VIDEO_GENERATION_PROVIDER",
-	]);
+	const allowed: ReadonlySet<string> = new Set(EVAL_WRITABLE_SETTING_KEYS);
 	if (!allowed.has(key)) return error(`setting '${key}' not allowed via eval API`, 403);
 	process.env[key] = value;
 	return json({ ok: true, key, value });

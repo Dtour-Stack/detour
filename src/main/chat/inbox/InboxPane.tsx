@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { InboxItem } from "../../../bun/core/inbox";
+import { UI_POLL_INTERVAL_MS } from "../../../shared/timing";
 import { rpc } from "../../rpc";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -64,7 +65,7 @@ export function InboxPane() {
 
 	useEffect(() => {
 		void load();
-		const id = setInterval(() => void load(), 3_000);
+		const id = setInterval(() => void load(), UI_POLL_INTERVAL_MS.inbox);
 		return () => clearInterval(id);
 	}, [load]);
 

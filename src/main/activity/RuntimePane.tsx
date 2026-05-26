@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { ActivityRuntimeRegistryItem, ActivityRuntimeSnapshot } from "../../shared/index";
+import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { usePoller } from "./usePoller";
 
@@ -30,7 +31,7 @@ function ItemRow({ item }: { item: ActivityRuntimeRegistryItem }) {
 
 export function RuntimePane() {
 	const fetcher = useCallback(() => rpc.request.activityRuntime({}), []);
-	const { data, error } = usePoller<ActivityRuntimeSnapshot>(fetcher, 5000);
+	const { data, error } = usePoller<ActivityRuntimeSnapshot>(fetcher, UI_POLL_INTERVAL_MS.default);
 
 	if (error) return <div className="banner error">{error}</div>;
 	if (!data) return <div className="hint">Loading runtime snapshot…</div>;

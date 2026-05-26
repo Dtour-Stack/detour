@@ -34,9 +34,9 @@ const WINDOW_COMMANDS: Array<{
 	{ id: "chat", title: "Open Detour", subtitle: "Inbox, agent chat, message feed, and connector status.", kicker: "Window" },
 	{ id: "settings", title: "Open configuration", subtitle: "Providers, vault, models, character, and appearance.", kicker: "Window" },
 	{ id: "pensieve", title: "Open Pensieve", subtitle: "Memories, knowledge, templates, relationships, and graphs.", kicker: "Window" },
-	{ id: "activity", title: "Open Activity", subtitle: "Runtime, logs, trajectories, tasks, and autonomy.", kicker: "Window" },
+	{ id: "activity", title: "Open Activity", subtitle: "Runtime, logs, trajectories, subagents, tasks, and autonomy.", kicker: "Window" },
 	{ id: "browser", title: "Open agent browser", subtitle: "Inspect, automate, and use saved login flows.", kicker: "Window" },
-	{ id: "agents", title: "Open coding agents", subtitle: "Workspace sessions, logs, previews, and project files.", kicker: "Window" },
+	{ id: "agents", title: "Open coding agents", subtitle: "Running coding subagents, logs, previews, and task state.", kicker: "Window" },
 	{ id: "gallery", title: "Open gallery", subtitle: "Generated pictures, videos, and audio.", kicker: "Window" },
 ];
 

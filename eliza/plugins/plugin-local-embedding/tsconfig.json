@@ -8,6 +8,7 @@
       "DOM.Iterable"
     ],
     "target": "ESNext",
+    "ignoreDeprecations": "6.0",
     "module": "Preserve",
     "moduleResolution": "Bundler",
     "strict": false,

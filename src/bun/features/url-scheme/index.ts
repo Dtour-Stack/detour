@@ -38,121 +38,9 @@
 
 import Electrobun from "electrobun/bun";
 import { logger } from "@elizaos/core";
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { broadcaster } from "../../core/rpc/registry";
 import type { Feature } from "../../kernel/registry";
 import type { WindowOpenTarget } from "../../../shared/index";
-
-/**
- * Locate the embedded DetourBridge.app inside our own bundle. macOS
- * needs to register it with LaunchServices once so AppleScript can
- * dispatch to it by bundle ID. We do this fire-and-forget on first
- * run — repeat calls are idempotent.
- *
- * Returns null in dev (when running source directly) — `lsregister`
- * would point at a bundle we haven't built yet.
- */
-function findBundledBridge(): string | null {
-	if (!process.execPath) return null;
-	const candidate = join(
-		dirname(process.execPath),
-		"..",
-		"Resources",
-		"app",
-		"DetourBridge.app",
-	);
-	// Electrobun packages our copy map under Resources/app; postBuild
-	// embeds the bridge alongside the bun output. We also accept the
-	// legacy Resources/DetourBridge.app location for safety.
-	const legacy = join(
-		dirname(process.execPath),
-		"..",
-		"Resources",
-		"DetourBridge.app",
-	);
-	if (existsSync(candidate)) return candidate;
-	if (existsSync(legacy)) return legacy;
-	return null;
-}
-
-/**
- * Locate an embedded SwiftUI companion bundle inside our own .app.
- * Used to route `detour://window?target=…` and `detour://settings`
- * into native windows when the corresponding companion is bundled.
- * Returns null in dev-source mode (no bundle yet) so the React
- * surface stays as fallback.
- *
- * Companions today:
- *   - DetourSettings.app  (Settings — native SwiftUI shell)
- *   - DetourActivity.app  (trajectories / logs / runtime)
- *   - DetourPensieve.app  (memory / search / relationships)
- *
- * Add to BUNDLED_COMPANIONS when shipping new companions.
- */
-const BUNDLED_COMPANIONS: Record<string, string> = {
-	settings: "DetourSettings.app",
-	activity: "DetourActivity.app",
-	pensieve: "DetourPensieve.app",
-	chat: "DetourChat.app",
-	browser: "DetourBrowser.app",
-	gallery: "DetourGallery.app",
-	workspace: "DetourWorkspace.app",
-};
-
-function findBundledCompanion(target: string): string | null {
-	const name = BUNDLED_COMPANIONS[target];
-	if (!name || !process.execPath) return null;
-	const candidates = [
-		join(dirname(process.execPath), "..", "Resources", "app", name),
-		join(dirname(process.execPath), "..", "Resources", name),
-	];
-	for (const c of candidates) if (existsSync(c)) return c;
-	return null;
-}
-
-function findBundledSettings(): string | null {
-	return findBundledCompanion("settings");
-}
-
-function spawnCompanion(appPath: string, binaryName: string): boolean {
-	const binary = join(appPath, "Contents", "MacOS", binaryName);
-	if (!existsSync(binary)) return false;
-	try {
-		spawn(binary, [], { stdio: "ignore", detached: true }).unref();
-		return true;
-	} catch (err) {
-		logger.warn({ src: "url-scheme", binaryName, err }, "[UrlScheme] companion spawn failed");
-		return false;
-	}
-}
-
-function registerBridgeWithLaunchServices(): void {
-	const bridgePath = findBundledBridge();
-	if (!bridgePath) {
-		logger.info({ src: "url-scheme" }, "[UrlScheme] DetourBridge.app not bundled; skipping LS registration");
-		return;
-	}
-	// `lsregister` lives at a deep system path; -f forces re-registration
-	// (idempotent if already registered to the same bundle path).
-	const lsregister =
-		"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
-	if (!existsSync(lsregister)) {
-		logger.warn({ src: "url-scheme" }, "[UrlScheme] lsregister not found; skipping bridge registration");
-		return;
-	}
-	const child = spawn(lsregister, ["-f", bridgePath], {
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	child.once("close", (code) => {
-		if (code === 0) {
-			logger.info({ src: "url-scheme", bridgePath }, "[UrlScheme] registered DetourBridge.app");
-		} else {
-			logger.warn({ src: "url-scheme", code }, "[UrlScheme] lsregister failed");
-		}
-	});
-}
 
 const VALID_TARGETS = new Set<WindowOpenTarget>([
 	"chat",
@@ -165,7 +53,6 @@ const VALID_TARGETS = new Set<WindowOpenTarget>([
 	"pet",
 	"gallery",
 	"portless",
-	"workspace",
 ]);
 
 function parseUrl(raw: string): URL | null {
@@ -192,15 +79,10 @@ function asBool(value: string | null | undefined): boolean {
 
 /**
  * Global dispatcher registered at feature init. The API server's
- * `POST /api/url-scheme/dispatch` route reads this so the Swift tray
- * + AppleScript can dispatch detour:// URLs straight into the running
- * bun without bouncing through LaunchServices (which may resolve the
- * scheme to a stale Electrobun bundle while we're mid-cutover).
- *
- * Self-dispatched URLs (Swiftun → Swiftun's bun) avoid the dual-
- * registration race entirely. External callers (Shortcuts.app, raw
- * `open detour://…` from terminal) still come in via the OS-level
- * URL handler.
+ * `POST /api/url-scheme/dispatch` route reads this so local automation
+ * can dispatch detour:// URLs straight into the running Bun process.
+ * External callers (Shortcuts.app, raw `open detour://…` from terminal)
+ * still come in via the OS-level URL handler.
  */
 type UrlSchemeDispatcher = (rawUrl: string) => boolean;
 const DISPATCHER_KEY = Symbol.for("detour.url-scheme.dispatch");
@@ -214,36 +96,31 @@ export function getUrlSchemeDispatcher(): UrlSchemeDispatcher | null {
 export const urlSchemeFeature: Feature = {
 	id: "url-scheme",
 	init(deps) {
-		try {
-			registerBridgeWithLaunchServices();
-		} catch (err) {
-			console.warn("[url-scheme] bridge registration failed:", err);
-		}
 		const dispatch: UrlSchemeDispatcher = (raw: string): boolean => {
 			if (!raw.startsWith("detour:")) return false;
-				const url = parseUrl(raw);
-				if (!url) {
-					logger.warn({ src: "url-scheme", raw }, "[UrlScheme] could not parse URL");
-					return false;
-				}
+			const url = parseUrl(raw);
+			if (!url) {
+				logger.warn({ src: "url-scheme", raw }, "[UrlScheme] could not parse URL");
+				return false;
+			}
 			const route = (url.host || "").toLowerCase();
 			const sub = url.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
 			const params = url.searchParams;
-				try {
-					handleRoute(route, sub, params, deps);
-					return true;
-				} catch (err) {
-					logger.warn({ src: "url-scheme", route, sub, err }, "[UrlScheme] handler failed");
-					return false;
-				}
-			};
+			try {
+				handleRoute(route, sub, params, deps);
+				return true;
+			} catch (err) {
+				logger.warn({ src: "url-scheme", route, sub, err }, "[UrlScheme] handler failed");
+				return false;
+			}
+		};
 		(globalThis as unknown as DispatcherHost)[DISPATCHER_KEY] = dispatch;
 		Electrobun.events.on("open-url", (e: { data: { url: string } }) => {
-				const raw = e?.data?.url ?? "";
-				if (!raw.startsWith("detour:")) return;
-				logger.info({ src: "url-scheme", raw }, "[UrlScheme] external open-url");
-				dispatch(raw);
-			});
+			const raw = e?.data?.url ?? "";
+			if (!raw.startsWith("detour:")) return;
+			logger.info({ src: "url-scheme", raw }, "[UrlScheme] external open-url");
+			dispatch(raw);
+		});
 	},
 };
 
@@ -285,40 +162,13 @@ function handleChatRoute(_sub: string, params: URLSearchParams, deps: UrlRouteDe
 
 function handleSettingsRoute(_sub: string, params: URLSearchParams, deps: UrlRouteDeps): void {
 	const tab = asString(params.get("tab"));
-	if (openSettingsCompanion(tab)) return;
 	deps.events.emit("ui:open-settings", {});
 	broadcaster.broadcast("uiOpenSettings", tab ? { tab } : {});
-}
-
-const SWIFT_SETTINGS_TABS = new Set([
-	"",
-	"configuration:providers",
-	"configuration:local-ai",
-	"configuration:tray",
-]);
-
-function openSettingsCompanion(tab: string | undefined): boolean {
-	const bridgePath = findBundledSettings();
-	if (!bridgePath || (tab && !SWIFT_SETTINGS_TABS.has(tab))) return false;
-	const binary = join(bridgePath, "Contents", "MacOS", "DetourSettings");
-	if (!existsSync(binary)) return false;
-	try {
-		spawn(binary, [], { stdio: "ignore", detached: true }).unref();
-		return true;
-	} catch (err) {
-		logger.warn({ src: "url-scheme", err }, "[UrlScheme] DetourSettings spawn failed; falling through");
-		return false;
-	}
 }
 
 function handleWindowRoute(_sub: string, params: URLSearchParams): void {
 	const target = asString(params.get("target"));
 	if (!target) return;
-	if (target in BUNDLED_COMPANIONS) {
-		const appPath = findBundledCompanion(target);
-		const binName = BUNDLED_COMPANIONS[target]?.replace(/\.app$/, "");
-		if (appPath && binName && spawnCompanion(appPath, binName)) return;
-	}
 	if (VALID_TARGETS.has(target as WindowOpenTarget)) {
 		broadcaster.broadcast(`uiOpen${capitalize(target)}` as never, {});
 	}

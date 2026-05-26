@@ -1,26 +1,18 @@
 import { useEffect, useState } from "react";
+import {
+	AUDIO_SETTING_DEFINITIONS,
+	type AudioRuntimeSettingKey,
+	type SettingDefinition,
+} from "../../shared/settings-registry";
 import { rpc } from "../rpc";
 
-type AudioField = {
-	key: string;
+type AudioField = SettingDefinition & {
+	key: AudioRuntimeSettingKey;
 	label: string;
 	placeholder: string;
-	sensitive: boolean;
-	wide?: boolean;
 };
 
-const ELEVENLABS_FIELDS: AudioField[] = [
-	{ key: "ELEVENLABS_API_KEY", label: "API key", placeholder: "Paste ElevenLabs API key", sensitive: true },
-	{ key: "ELEVENLABS_VOICE_ID", label: "Voice ID", placeholder: "JBFqnCBsd6RMkjVDRZzb", sensitive: false },
-	{ key: "ELEVENLABS_MODEL_ID", label: "TTS model", placeholder: "eleven_multilingual_v2", sensitive: false },
-	{ key: "ELEVENLABS_STS_MODEL_ID", label: "Voice changer model", placeholder: "eleven_multilingual_sts_v2", sensitive: false },
-	{ key: "ELEVENLABS_STT_MODEL_ID", label: "Speech-to-text model", placeholder: "scribe_v1", sensitive: false },
-	{ key: "ELEVENLABS_SOUND_MODEL_ID", label: "Sound model", placeholder: "eleven_text_to_sound_v2", sensitive: false },
-	{ key: "ELEVENLABS_MUSIC_MODEL_ID", label: "Music model", placeholder: "music_v1", sensitive: false },
-	{ key: "ELEVENLABS_OUTPUT_FORMAT", label: "Output format", placeholder: "mp3_44100_128", sensitive: false },
-	{ key: "ELEVENLABS_MUSIC_OUTPUT_FORMAT", label: "Music output", placeholder: "mp3_44100_128", sensitive: false },
-	{ key: "ELEVENLABS_BASE_URL", label: "Base URL", placeholder: "https://api.elevenlabs.io/v1", sensitive: false, wide: true },
-];
+const ELEVENLABS_FIELDS: readonly AudioField[] = AUDIO_SETTING_DEFINITIONS;
 
 type StoredState = Record<string, { exists: boolean; value: string }>;
 
@@ -84,7 +76,7 @@ function ProviderCard({
 	name,
 	status,
 }: {
-	fields: AudioField[];
+	fields: readonly AudioField[];
 	name: string;
 	status: StoredState;
 }) {

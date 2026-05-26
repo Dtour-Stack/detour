@@ -1,12 +1,6 @@
-/**
- * Agent-projects workspace handlers — file tree / read / write / git
- * primitives backing the #workspace view. Auto-stage on save is the
- * default; commits are explicit (no auto-commit on save) so the user
- * can batch related edits.
- */
-
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { logger } from "@elizaos/core";
 import { Utils } from "electrobun/bun";
 import type {
 	AgentProjectFileNode,
@@ -318,8 +312,8 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 			const trimmed = message.trim();
 			if (trimmed.length === 0) throw new Error("commit message required");
 			const args = [
-				"-c", "user.email=workspace@detour.local",
-				"-c", "user.name=Detour Workspace",
+				"-c", "user.email=projects@detour.local",
+				"-c", "user.name=Detour Projects",
 				"commit", "-m", trimmed,
 			];
 			const r = await spawnGit(dir, args);
@@ -355,15 +349,15 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 			try {
 				dir = projectDir(slug);
 			} catch (err) {
-				console.warn("[agent-projects] reveal: invalid slug", slug, err instanceof Error ? err.message : err);
+				logger.warn({ src: "agent-projects", slug, err: err instanceof Error ? err.message : String(err) }, "[AgentProjects] reveal invalid slug");
 				throw err;
 			}
 			if (!existsSync(dir)) {
-				console.warn("[agent-projects] reveal: project dir missing", { slug, dir });
+				logger.warn({ src: "agent-projects", slug, dir }, "[AgentProjects] reveal project dir missing");
 				throw new Error(`project not found on disk: ${slug} (looked at ${dir})`);
 			}
 			const opened = Utils.openPath(dir);
-			console.log("[agent-projects] reveal", { slug, dir, opened });
+			logger.info({ src: "agent-projects", slug, dir, opened }, "[AgentProjects] reveal");
 			if (!opened) {
 				throw new Error(`Utils.openPath returned false for ${dir} — Finder may have rejected the path`);
 			}
@@ -411,15 +405,6 @@ export function agentProjectsRequests(_deps: RpcDeps) {
 		agentProjectStopPreview: async ({ slug }: { slug: string }) => {
 			await _deps.previewServers.stop(slug);
 			return { ok: true as const };
-		},
-
-		// Settings UI calls this to open the Workspace window. The kernel
-		// listens on the broadcast bus for `uiOpenWorkspace` (see
-		// kernel/app.ts:registerWindow listener) and emits the
-		// `ui:open-workspace` event that workspaceFeature handles.
-		workspaceOpen: async (_params: Record<string, never>): Promise<{ ok: true }> => {
-			_deps.broadcaster.broadcast("uiOpenWorkspace", {});
-			return { ok: true };
 		},
 
 		workspaceDetectIDEs: async (_params: Record<string, never>): Promise<{ ides: WorkspaceIDEAvailability[] }> => {

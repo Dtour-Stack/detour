@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CodexPetActivity, CodexPetAnimationState, CodexPetSummary, WindowOpenTarget } from "../../shared/index";
+import { UI_DELAY_MS, UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { onUiOpenPet } from "../rpc-listeners/chat";
 
@@ -84,14 +85,14 @@ export function PetWindow() {
 
 	useEffect(() => {
 		if (!manualState) return;
-		const timer = setTimeout(() => setManualState(null), 9000);
+		const timer = setTimeout(() => setManualState(null), UI_DELAY_MS.petManualStateReset);
 		return () => clearTimeout(timer);
 	}, [manualState]);
 
 	useEffect(() => {
 		const timer = setInterval(() => {
 			setIdleIndex((index) => (index + 1) % IDLE_ANIMATION_STATES.length);
-		}, 12_000);
+		}, UI_DELAY_MS.petIdleAnimation);
 		return () => clearInterval(timer);
 	}, []);
 
@@ -125,7 +126,7 @@ export function PetWindow() {
 				.catch(() => {});
 		};
 		void refreshActive().then(refreshActivity);
-		const activityTimer = setInterval(refreshActivity, 2500);
+		const activityTimer = setInterval(refreshActivity, UI_POLL_INTERVAL_MS.petActivity);
 		// uiOpenPet fires after spawnPet — re-fetch active so the
 		// view picks up the newly spawned summary without origin's
 		// payload-on-message coupling.

@@ -1,7 +1,7 @@
 /**
  * Agent-projects core — shared scaffolders + metadata helpers used by
  * both the agent plugin (`src/bun/plugins/agent-projects/`) and the
- * RPC handler that backs the workspace UI's "New space" button.
+ * agent-project RPC handler.
  *
  * Single source of truth for what an agent-built project looks like
  * on disk. Both entry paths (agent action + UI button) end up calling
@@ -434,8 +434,8 @@ function scaffoldElectrobun(dir: string, meta: ProjectMeta, templateName: string
 
 /**
  * Create a new GitHub repo under the agent's PAT identity and push the
- * project's git history to it. Used by both the RPC handler (workspace
- * UI) and the plugin action (chat-driven). Caller supplies the PAT —
+ * project's git history to it. Used by both the RPC handler and the
+ * plugin action. Caller supplies the PAT —
  * we don't go to vault here so the helper stays unit-testable.
  */
 export async function publishProjectToGitHub({
@@ -554,12 +554,12 @@ export function detectProjectKind(absDir: string): { type: ProjectType; template
 		} catch { /* fall through */ }
 	}
 	if (existsSync(join(absDir, "index.html"))) return { type: "page", template: "static" };
-	// Default for an unknown dir — treat as a generic app workspace.
+	// Default for an unknown dir — treat as a generic app project.
 	return { type: "app", template: "carrot" };
 }
 
 /**
- * Register an existing on-disk directory as a workspace project. Writes
+ * Register an existing on-disk directory as an agent project. Writes
  * a `project.json` sidecar into the source dir + creates a symlink at
  * `$DETOUR_AGENT_SANDBOX/projects/<slug>` pointing at the source so
  * every existing handler (file tree, git, read/write) operates on the
@@ -651,8 +651,7 @@ export async function importAgentProject({
 
 /**
  * Scaffold a new agent project on disk. Called by both the agent
- * plugin's AGENT_PROJECT_NEW handler and the workspace UI's "New space"
- * button (via the agentProjectCreate RPC).
+ * plugin's AGENT_PROJECT_NEW handler and the agentProjectCreate RPC.
  *
  * Returns the freshly written ProjectMeta. Throws on validation
  * errors and on filesystem failures (after attempting to clean up the
