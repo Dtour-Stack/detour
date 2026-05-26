@@ -19,7 +19,7 @@
 - Local agent session capture is managed by XHawk. Keep `.xhawk/`, `.agents/`, `.codex/`, `.cursor/`, `.gemini/`, and local Claude settings out of commits unless a file is intentionally allowlisted.
 - `xh skill install` should report installed for Claude Code, Codex, Gemini CLI, Cursor, and OpenCode. Re-run it after adding a new coding agent on this machine.
 - Project Git hooks live in `.githooks/`; this worktree should have `core.hooksPath=.githooks`. Run `bun run verify:agents` after moving or recloning the checkout.
-- Swift/macOS setup is checked with `bun run verify:swift`; run `bun run verify:swift:build` after Swift or SwiftPM package changes.
+- Agent setup is checked with `bun run verify:agents`; run `bun run build:app` after packaging or desktop-shell changes.
 - The Codex prompt-submit hook should remain local in `.codex/hooks.json`; do not move machine-specific auth, hook, or session-capture files into tracked source.
 
 <!-- VERCEL BEST PRACTICES START -->

@@ -4,7 +4,6 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 bun run scripts/verify-codex-setup.ts --hook
-bun run verify:swift
 
 TESTS=$(find src -name "*.test.ts" -not -path "*/node_modules/*")
 if [[ -z "$TESTS" ]]; then
