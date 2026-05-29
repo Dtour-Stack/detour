@@ -68,6 +68,46 @@
 	--border: rgba(0, 0, 0, 0.08);
 }
 
+/* ─── Skeleton loading state (branded shimmer sweep) ───────────────────
+ * Drives src/main/Skeleton.tsx. The moving highlight tints with --accent so
+ * the sweep is on-brand instead of generic grey. Honors reduced motion.
+ */
+@keyframes detour-skeleton-sweep {
+	0%   { background-position: 200% 0; }
+	100% { background-position: -200% 0; }
+}
+
+.skeleton {
+	display: inline-block;
+	width: 100%;
+	border-radius: var(--radius-sm);
+	background-color: var(--bg-elevated);
+	background-image: linear-gradient(
+		90deg,
+		transparent 0%,
+		color-mix(in srgb, var(--accent) 16%, var(--bg-card)) 40%,
+		color-mix(in srgb, var(--accent) 28%, var(--bg-card)) 50%,
+		color-mix(in srgb, var(--accent) 16%, var(--bg-card)) 60%,
+		transparent 100%
+	);
+	background-size: 200% 100%;
+	background-repeat: no-repeat;
+	animation: detour-skeleton-sweep 1.5s ease-in-out infinite;
+	line-height: 1;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.skeleton-text { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+	.skeleton {
+		animation: none;
+		background-image: none;
+		opacity: 0.6;
+	}
+}
+
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100vh; }
 body {

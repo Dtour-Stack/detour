@@ -6,6 +6,7 @@ import { KnowledgeUploadDropzone } from "./KnowledgeUploadDropzone";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryTree } from "./MemoryTree";
 import { NewMemoryDialog } from "./NewMemoryDialog";
+import { Skeleton, SkeletonText } from "../../Skeleton";
 
 const ALL_TYPES = [
 	{ value: "", label: "All types" },
@@ -151,8 +152,19 @@ export function MemoriesPane({ scope = "all" }: { scope?: MemoriesScope }) {
 						/>
 					)}
 					{error && <div className="banner error">{error}</div>}
-					{loading && items.length === 0 && <div className="hint" style={{ padding: 12 }}>Loading…</div>}
-					<div className="pensieve-list">
+					{/* initial-load placeholder is rendered as skeleton rows inside .pensieve-list below */}
+					<div className="pensieve-list" aria-busy={loading && items.length === 0}>
+							{loading && items.length === 0 &&
+								Array.from({ length: 6 }, (_, i) => (
+									<div key={`sk-${i}`} className="pensieve-list-row" aria-hidden="true" style={{ pointerEvents: "none" }}>
+										<div className="pensieve-list-row-header">
+											<Skeleton width={46} height={14} radius={4} delayMs={i * -120} />
+											<Skeleton width={88} height={14} radius={4} delayMs={i * -120} />
+											<Skeleton width={56} height={12} radius={4} delayMs={i * -120} style={{ marginLeft: "auto" }} />
+										</div>
+										<div className="pensieve-list-row-preview"><SkeletonText lines={2} lastLineWidth="45%" /></div>
+									</div>
+								))}
 						{items.map((m) => (
 							<button
 								key={m.id}
