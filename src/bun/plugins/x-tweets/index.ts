@@ -37,6 +37,7 @@ import {
 import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary } from "./x-client";
 import { buildResearchContext } from "./research";
 import { shouldAttachImage, imagePromptFromDraft } from "./post-image";
+import { scoreDraft, passesTaste, TASTE_THRESHOLD } from "./taste-gate";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -1065,7 +1066,18 @@ async function decideXAutonomyAction(
 		prompt: "Analyze the notification and tweet, then output the decision in TOON format.",
 		system: prompt,
 	} as any);
-	return parseToonKeyValue<XAutonomyDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+	const decision = parseToonKeyValue<XAutonomyDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+	const decisionAction = String(decision.action ?? "").trim().toLowerCase();
+	const draftReplyText = (decision.reply_text ?? "").trim();
+	if (decisionAction === "reply" && draftReplyText.length > 0) {
+		const tasteThreshold = readNumberSetting(runtime, "X_TASTE_THRESHOLD", TASTE_THRESHOLD);
+		const verdict = await scoreDraft(runtime, draftReplyText, params.tweetText);
+		if (!passesTaste(verdict, tasteThreshold)) {
+			logger.info({ src: "x-tweets:taste", score: verdict.score, harm: verdict.harm, reason: verdict.reason }, "taste gate blocked autonomy reply");
+			return { action: "ignore", reason: `taste gate blocked: ${verdict.reason}` };
+		}
+	}
+	return decision;
 }
 
 async function decideXRequiredReply(
@@ -1682,7 +1694,18 @@ async function decideXDiscoveryAction(
 		prompt: "Analyze the discovered tweet and generate the decision in TOON format.",
 		system: prompt,
 	} as any);
-	return parseToonKeyValue<XDiscoveryDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+	const discoveryDecision = parseToonKeyValue<XDiscoveryDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
+	const discoveryAction = String(discoveryDecision.action ?? "").trim().toLowerCase();
+	const discoveryReplyText = (discoveryDecision.reply_text ?? "").trim();
+	if (discoveryAction === "reply" && discoveryReplyText.length > 0) {
+		const tasteThreshold = readNumberSetting(runtime, "X_TASTE_THRESHOLD", TASTE_THRESHOLD);
+		const verdict = await scoreDraft(runtime, discoveryReplyText, tweet.text);
+		if (!passesTaste(verdict, tasteThreshold)) {
+			logger.info({ src: "x-tweets:taste", score: verdict.score, harm: verdict.harm, reason: verdict.reason }, "taste gate blocked discovery reply");
+			return { action: "ignore", reason: `taste gate blocked: ${verdict.reason}` };
+		}
+	}
+	return discoveryDecision;
 }
 
 async function logXAutonomy(
@@ -2260,6 +2283,14 @@ async function processXStatusPost(
 	}
 	if (isRepetitiveXText(text, state.recentReplyTexts)) {
 		rememberHandled(state, { action: "post_status_skip", lane, reason: "repetitive status suppressed", text });
+		state.lastStatusAt = Date.now();
+		return;
+	}
+	const statusTasteThreshold = readNumberSetting(runtime, "X_TASTE_THRESHOLD", TASTE_THRESHOLD);
+	const statusVerdict = await scoreDraft(runtime, text, context);
+	if (!passesTaste(statusVerdict, statusTasteThreshold)) {
+		logger.info({ src: "x-tweets:taste", score: statusVerdict.score, harm: statusVerdict.harm, reason: statusVerdict.reason }, "taste gate blocked autonomous status post");
+		rememberHandled(state, { action: "post_status_skip", lane, reason: `taste gate blocked: ${statusVerdict.reason}` });
 		state.lastStatusAt = Date.now();
 		return;
 	}
