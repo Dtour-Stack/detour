@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { IAgentRuntime } from "@elizaos/core";
-import { decideXAutonomyAction, replyEligibility } from "./index";
+import { decideXAutonomyAction, replyEligibility, pickStatusLane } from "./index";
 import type { XTweetSummary } from "./x-client";
 
 const TOKEN_CA = "DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy";
@@ -81,5 +81,43 @@ describe("token guidance (b): CA injected only on a direct token question", () =
     const prompt = systems[0]!;
     expect(prompt).toContain("Token/roadmap lane:");
     expect(prompt).toContain(TOKEN_CA);
+  });
+});
+
+describe("autonomous status lane (c): always generic, never shill lanes", () => {
+  // pickStatusLane must return "generic" regardless of recent post count,
+  // ensuring the autonomous path never proactively posts token/project/dev-activity.
+  const dummyState = (recentCount: number) => ({
+    metadata: {},
+    nextSeen: new Set<string>(),
+    handled: [],
+    recentReplyTexts: Array.from({ length: recentCount }, (_, i) => `post ${i}`),
+    lastStatusAt: 0,
+    lastDiscoveryAt: 0,
+    viewerScreenName: "detour_squirrel",
+  });
+
+  for (const count of [0, 1, 2, 3, 4, 5, 10, 99]) {
+    test(`returns "generic" when recentReplyTexts.length = ${count}`, () => {
+      expect(pickStatusLane(dummyState(count))).toBe("generic");
+    });
+  }
+
+  test("never returns token_status from autonomous lane", () => {
+    for (let i = 0; i < 20; i++) {
+      expect(pickStatusLane(dummyState(i))).not.toBe("token_status");
+    }
+  });
+
+  test("never returns detour_project from autonomous lane", () => {
+    for (let i = 0; i < 20; i++) {
+      expect(pickStatusLane(dummyState(i))).not.toBe("detour_project");
+    }
+  });
+
+  test("never returns dexploarer_activity from autonomous lane", () => {
+    for (let i = 0; i < 20; i++) {
+      expect(pickStatusLane(dummyState(i))).not.toBe("dexploarer_activity");
+    }
   });
 });

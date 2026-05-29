@@ -1986,10 +1986,11 @@ async function discoveryFollow(
 	return { ...base, action: "discover_follow", success: result.success, error: result.error };
 }
 
-function pickStatusLane(state: XAutonomyState): XStatusLane {
-	const posts = state.recentReplyTexts.filter((text) => text.length > 0).length;
-	const lanes: XStatusLane[] = ["token_status", "detour_project", "generic", "token_status", "dexploarer_activity"];
-	return lanes[posts % lanes.length]!;
+export function pickStatusLane(_state: XAutonomyState): XStatusLane {
+	// Autonomous status posts are world-commentary only.
+	// Proactive token_status / detour_project / dexploarer_activity are owner-initiated
+	// via X_POST_TOKEN_STATUS / X_POST_DETOUR_STATUS / X_POST_DEXPLOARER_STATUS.
+	return "generic";
 }
 
 async function buildStatusContext(runtime: IAgentRuntime, lane: XStatusLane, task: Task): Promise<string> {
@@ -2016,10 +2017,19 @@ async function processXStatusPost(
 	const context = await buildStatusContext(runtime, lane, task);
 	const decision = await safeXStatusDecision(runtime, { viewerScreenName, lane, context, recentReplyTexts: state.recentReplyTexts });
 	const text = sanitizeXOutputText(decision.text, 260);
+	const statusTasteThreshold = readNumberSetting(runtime, "X_TASTE_THRESHOLD", TASTE_THRESHOLD);
 	if (!readModelBoolean(decision.should_post) || text.length === 0) {
 		const fallback = sanitizeXOutputText(fallbackXStatusText(lane, context), 260);
 		if (fallback.length === 0 || isRepetitiveXText(fallback, state.recentReplyTexts)) {
 			rememberHandled(state, { action: "post_status_skip", lane, reason: decision.reason ?? "model declined" });
+			state.lastStatusAt = Date.now();
+			return;
+		}
+		// Gate the fallback through taste before posting - no ungated autonomous post.
+		const fallbackVerdict = await scoreDraft(runtime, fallback, context);
+		if (!passesTaste(fallbackVerdict, statusTasteThreshold)) {
+			logger.info({ src: "x-tweets:taste", score: fallbackVerdict.score, harm: fallbackVerdict.harm, reason: fallbackVerdict.reason }, "taste gate blocked autonomous status fallback");
+			rememberHandled(state, { action: "post_status_skip", lane, reason: `taste gate blocked fallback: ${fallbackVerdict.reason}` });
 			state.lastStatusAt = Date.now();
 			return;
 		}
@@ -2041,7 +2051,6 @@ async function processXStatusPost(
 		state.lastStatusAt = Date.now();
 		return;
 	}
-	const statusTasteThreshold = readNumberSetting(runtime, "X_TASTE_THRESHOLD", TASTE_THRESHOLD);
 	const statusVerdict = await scoreDraft(runtime, text, context);
 	if (!passesTaste(statusVerdict, statusTasteThreshold)) {
 		logger.info({ src: "x-tweets:taste", score: statusVerdict.score, harm: statusVerdict.harm, reason: statusVerdict.reason }, "taste gate blocked autonomous status post");
