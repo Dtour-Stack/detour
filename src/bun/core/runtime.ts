@@ -75,7 +75,6 @@ import {
 	MEDIA_GENERATION_SETTING_KEYS,
 	X_RUNTIME_SETTING_KEYS,
 } from "../../shared/settings-registry";
-import { readChromeXCookies } from "./chrome-cookies";
 import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
 import { macAutomatePlugin } from "../plugins/mac-automate/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
@@ -1501,25 +1500,17 @@ export class RuntimeService {
 		} catch (err) {
 			logger.warn({ src: "runtime" }, " x-creds load failed:", err instanceof Error ? err.message : err);
 		}
-		// When an X_CHROME_PROFILE is configured, the agent's X identity follows
-		// that Chrome profile's logged-in x.com session — its cookies override any
-		// vault X_AUTH_TOKEN/X_CT0 (which may belong to a different account).
-		const chromeProfile = settings.X_CHROME_PROFILE ?? process.env.X_CHROME_PROFILE;
-		if (chromeProfile) {
-			const chromeCookies = readChromeXCookies(chromeProfile);
-			if (chromeCookies) {
-				settings.X_AUTH_TOKEN = chromeCookies.authToken;
-				process.env.X_AUTH_TOKEN = chromeCookies.authToken;
-				settings.X_CT0 = chromeCookies.ct0;
-				process.env.X_CT0 = chromeCookies.ct0;
-				logger.info({ src: "runtime", profile: chromeProfile }, "X cookies sourced from Chrome profile");
-			} else {
-				logger.warn(
-					{ src: "runtime", profile: chromeProfile },
-					"X_CHROME_PROFILE set but Chrome cookie read failed — falling back to vault X cookies",
-				);
-			}
-		}
+		// X auth is vault-only. X_AUTH_TOKEN / X_CT0 come from the vault loop
+		// above and nothing else. We deliberately do NOT read cookies out of the
+		// user's real macOS Chrome profile: doing so required the "Chrome Safe
+		// Storage" master key — which can decrypt the user's ENTIRE cookie jar —
+		// just to fetch two X cookies the vault already holds. The agent has the
+		// cookies; it has no business holding the keys to everything else.
+		//
+		// Account-correctness (acting as the pinned X_ACCOUNT_USER_ID, never a
+		// personal login) is enforced independently by the x-tweets `withClient`
+		// whoami guard, which refuses to act on an account mismatch regardless of
+		// where the cookies originated — so vault-sourced cookies are safe.
 	}
 
 	private async loadAudioSettings(settings: Record<string, string>): Promise<void> {

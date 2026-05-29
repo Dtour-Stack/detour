@@ -267,7 +267,7 @@ function pickNumber(opts: Record<string, unknown> | undefined, keys: string[]): 
 	return pickValue(opts, keys, numberOption);
 }
 
-function withClient<T>(
+async function withClient<T>(
 	runtime: IAgentRuntime,
 	callback: HandlerCallback | undefined,
 	action: string,
@@ -276,7 +276,26 @@ function withClient<T>(
 	const { client, error } = buildClient(runtime);
 	if (!client) {
 		void emit(callback, error ?? "X auth not configured.", action);
-		return Promise.resolve({ success: false, error: error ?? "X auth not configured." });
+		return { success: false, error: error ?? "X auth not configured." };
+	}
+	// Account guard: if a specific X account is pinned (X_ACCOUNT_USER_ID),
+	// verify the loaded cookies actually authenticate as THAT account before
+	// doing anything. Stops the agent acting as the wrong account if the Chrome
+	// profile's active login flipped (cached, so it's one lookup per session).
+	const expectedUserId = pickSetting(runtime, "X_ACCOUNT_USER_ID");
+	if (expectedUserId) {
+		const self = await selfViewer(client);
+		if (!self) {
+			const msg = "X account check failed — couldn't resolve the authenticated account. Not acting to avoid posting as the wrong account.";
+			void emit(callback, msg, action);
+			return { success: false, error: msg };
+		}
+		if (self.userId !== expectedUserId) {
+			const msg = `Wrong X account loaded (@${self.screenName}, id ${self.userId}); expected id ${expectedUserId}. Refusing to act. Switch the Chrome profile's active x.com login back to the agent's account.`;
+			logger.warn({ src: "x-tweets", action, got: self.userId, expected: expectedUserId }, "refusing — wrong X account");
+			void emit(callback, msg, action);
+			return { success: false, error: msg };
+		}
 	}
 	return fn(client);
 }
@@ -2370,6 +2389,21 @@ async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Pr
 	try {
 		const viewer = await client.viewer();
 		state.viewerScreenName = viewer.screenName;
+		// Account guard: never run autonomy (posts/replies/follows) as the wrong
+		// account. If a specific account is pinned and the loaded cookies resolve
+		// to a different one (e.g. the Chrome profile's active login flipped),
+		// skip the entire tick.
+		const expectedUserId = pickSetting(runtime, "X_ACCOUNT_USER_ID");
+		if (expectedUserId && String(viewer.userId) !== expectedUserId) {
+			logger.warn(
+				{ src: "x-autonomy", got: String(viewer.userId), screenName: viewer.screenName, expected: expectedUserId },
+				"X autonomy skipped — wrong account loaded (refusing to act as @" + viewer.screenName + ")",
+			);
+			rememberHandled(state, { action: "wrong_account", success: false, error: `loaded @${viewer.screenName} (${viewer.userId}), expected ${expectedUserId}` });
+			await completeXAutonomyTrajectoryStep(runtime, settings, state);
+			await updateXAutonomyTask(runtime, task, state);
+			return;
+		}
 		const notifications = await client.getNotifications();
 		await processXNotifications(runtime, client, viewer.screenName, notifications, settings, state);
 		await processXMentionSearch(runtime, client, viewer.screenName, settings, state);
