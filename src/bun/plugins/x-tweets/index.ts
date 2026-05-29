@@ -36,6 +36,7 @@ import {
 } from "../../../shared/x-autonomy-policy";
 import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary } from "./x-client";
 import { buildResearchContext } from "./research";
+import { shouldAttachImage, imagePromptFromDraft } from "./post-image";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -2615,6 +2616,37 @@ const postHandler: Handler = async (runtime, _m, _s, options, callback) => {
 			mediaIds = upload.mediaIds;
 			if (upload.errors.length > 0) {
 				logger.warn({ src: "x-tweets", action: "X_POST", errors: upload.errors }, "some media uploads failed; posting with what attached");
+			}
+		} else if (shouldAttachImage(text, runtime.actions ?? [])) {
+			const imgAction = (runtime.actions ?? []).find((a) => a.name === "GENERATE_IMAGE");
+			if (imgAction) {
+				try {
+					const imgResult = await imgAction.handler(
+						runtime,
+						_m,
+						undefined,
+						{ prompt: imagePromptFromDraft(text) },
+						async () => [],
+					);
+					const imageUrl: string =
+						(imgResult as Record<string, unknown> | undefined)?.data &&
+						typeof ((imgResult as Record<string, unknown>).data as Record<string, unknown>)?.imageUrl === "string"
+							? String(((imgResult as Record<string, unknown>).data as Record<string, unknown>).imageUrl)
+							: (imgResult as Record<string, unknown> | undefined)?.values &&
+							  typeof ((imgResult as Record<string, unknown>).values as Record<string, unknown>)?.imageUrl === "string"
+							? String(((imgResult as Record<string, unknown>).values as Record<string, unknown>).imageUrl)
+							: "";
+					if (imageUrl) {
+						const upload = await resolveAndUploadMedia(client, [imageUrl]);
+						mediaIds = upload.mediaIds;
+						if (upload.errors.length > 0) {
+							logger.warn({ src: "x-tweets", action: "X_POST", errors: upload.errors }, "generated image upload failed; posting text-only");
+							mediaIds = [];
+						}
+					}
+				} catch {
+					mediaIds = [];
+				}
 			}
 		}
 		const r = await client.tweet(text, mediaIds.length > 0 ? { mediaIds } : {});
