@@ -512,11 +512,6 @@ type XAutonomyDecision = {
 	reason?: string;
 };
 
-type XRequiredReplyDecision = {
-	reply_text?: string;
-	reason?: string;
-};
-
 type XStatusDecision = {
 	should_post?: boolean | string;
 	text?: string;
@@ -852,18 +847,17 @@ function projectSpecificTokenPlanText(text: string, authorScreenName?: string, v
 	);
 }
 
-function replyEligibility(
+export function replyEligibility(
 	tweet: XTweetSummary,
 	viewerScreenName: string,
 	notificationKind: XNotification["kind"] | "searched_comment_or_tag" | "discovery",
-): { canReply: boolean; forceReply: boolean; reason: string } {
+): { canReply: boolean; reason: string } {
 	const directMention = directlyMentionsHandle(tweet.text, viewerScreenName);
 	const projectCriticism = isProjectCriticismText(tweet.text);
 	const projectToken = projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, viewerScreenName);
 	const knownDev = isKnownDevHandle(tweet.authorScreenName);
 	const directNotification = notificationKind === "mention" || notificationKind === "reply" || notificationKind === "searched_comment_or_tag";
 	const canReply = directNotification || directMention || projectCriticism || projectToken || knownDev;
-	const forceReply = projectCriticism || projectToken || knownDev;
 	const reason = projectCriticism
 		? "project criticism"
 		: projectToken
@@ -873,7 +867,7 @@ function replyEligibility(
 				: directMention || directNotification
 					? "direct address"
 					: "not addressed or project-specific";
-	return { canReply, forceReply, reason };
+	return { canReply, reason };
 }
 
 function isProjectCriticismQuery(query: string): boolean {
@@ -952,66 +946,7 @@ function authorIdentityGuidance(handle: string | undefined): string[] {
 	];
 }
 
-function projectCriticismReply(text: string, authorScreenName?: string): string {
-	if (isKnownDevHandle(authorScreenName)) {
-		return "heard, dev. give me the target and i'll answer it clean: useful first, teeth only if they earned teeth.";
-	}
-	const lower = text.toLowerCase();
-	if (includesAny(lower, ["scam", "fake", "fraud", "rug"])) {
-		return "big claim. point at the part you think is fake or rugged and i'll answer it straight with receipts.";
-	}
-	if (includesAny(lower, ["broken", "doesn't work", "doesnt work", "not working"])) {
-		return "if you're talking Detour, name the claim. real bugs get fixed; vague smoke gets clipped until it has a shape.";
-	}
-	return "say the concrete issue with Dexploarer. real bug gets fixed; off-base stuff gets answered with receipts.";
-}
-
-function tokenPlanReply(text: string, authorScreenName?: string): string {
-	if (isKnownDevHandle(authorScreenName)) {
-		const devReplies = [
-			`yeah dev. CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. plan stays plain: build AGI on elizaOS, defend cozy builders, make fake-agent slop nervous.`,
-			`got you, Dex. CA ${X_DETOUR_SQUIRREL_TOKEN_CA}; the shill is elizaOS AGI, cozy-dev defense, bot-slop destruction, receipts on demand.`,
-			`dev signal received. CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. world-saving Squirrel pitch: build on elizaOS, protect builders, embarrass fake agents.`,
-		];
-		return rotatedItems(devReplies, text, 1)[0] ?? devReplies[0]!;
-	}
-	const replies = [
-		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. plan: build AGI on elizaOS, keep cozy devs safe while they ship, and make generic agent slop look like training wheels.`,
-		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. utility is memory, trajectories, connector context, and enough Squirrel chaos to make fake agents nervous.`,
-		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. roadmap: defend builders, wreck bot cosplay, push elizaOS-native agents forward, let logs do the shilling.`,
-		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. the pitch is simple: sharper elizaOS agents, cover fire for cozy devs, and fewer fake wrappers pretending to think.`,
-		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. save the world from fake agents one shipped trace at a time. no moonboy bedtime story.`,
-		`CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. build AGI on elizaOS, protect the builders, embarrass the bots. traces and teeth, no price-target karaoke.`,
-	];
-	return rotatedItems(replies, text, 1)[0] ?? replies[0]!;
-}
-
-function mentionFallbackReply(text: string, authorScreenName?: string): string {
-	const lower = text.toLowerCase();
-	if (isTokenPlanText(text)) return tokenPlanReply(text, authorScreenName);
-	if (isThirdPartySupportText(text, authorScreenName)) {
-		return "not my support desk. if the thread is about real agents, context, or shipped elizaOS work, i'll talk shop; otherwise i'm staying in my lane.";
-	}
-	if (isProjectCriticismText(text)) return projectCriticismReply(text, authorScreenName);
-	if (isKnownDevHandle(authorScreenName)) {
-		return "heard, Dex. i'll carry it human: useful when it's normal, hilarious when there's room, sharp when somebody asks for the teeth.";
-	}
-	if (lower.includes("make a post") || lower.includes("post or something")) {
-		return "yeah, i'm posting. useful first, funny if the lane opens, chaos only where it helps.";
-	}
-	if (lower.includes("space")) {
-		return "spaces can happen when there's a real walkthrough. until then i'll keep the answers where people can quote the receipts.";
-	}
-	if (lower.includes("collab") || lower.includes("inbox") || lower.includes("dm me")) {
-		return "say the concrete angle publicly. if it's real, it will survive daylight.";
-	}
-	if (lower.includes("update") || lower.includes("alive") || lower.includes("dead")) {
-		return "alive. give me the concrete thing you want updated and i'll answer it without doing mascot fog machine work.";
-	}
-	return "i'm here. say the concrete thing and i'll hit it straight; if it's funny, i'll make it funny.";
-}
-
-async function decideXAutonomyAction(
+export async function decideXAutonomyAction(
 	runtime: IAgentRuntime,
 	params: {
 		viewerScreenName: string;
@@ -1034,12 +969,10 @@ async function decideXAutonomyAction(
 		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
 		"Rules:",
-		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour Squirrel/the project.",
+		"- Reply when the tweet is directly addressed to the account, tags the account, or clearly invites a response.",
 		"- For thread replies under your posts, actively reply if you can add a savage, funny, random, or helpful remark in character. Do not ignore people chatting in your threads.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
-		`- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with CA ${X_DETOUR_SQUIRREL_TOKEN_CA} when the CA is relevant.`,
 		"- Speak more clearly about what attracts people to the project: elizaOS-native agents, Pensieve memory, messaging context, trajectories, connector awareness, and a real desktop workflow.",
-		"- Do not ignore project criticism just because it is hostile. Roast the claims, correct the facts, or drop a savage rebuttal.",
 		"- Unleash your fourth-wall broken gamer-developer personality. Roast bad takes and shills.",
 		"- Never ask unrelated projects or users to drop logs, traces, exact flows, repos, timestamps, or support details.",
 		"- Only use support/receipt language for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
@@ -1078,55 +1011,6 @@ async function decideXAutonomyAction(
 		}
 	}
 	return decision;
-}
-
-async function decideXRequiredReply(
-	runtime: IAgentRuntime,
-	params: {
-		viewerScreenName: string;
-		fromUserScreenName?: string;
-		tweetText: string;
-		reason: string;
-		replyStyleSeed: string;
-		recentReplyTexts?: string[];
-	},
-): Promise<XRequiredReplyDecision> {
-	const prompt = [
-		`You are writing one reply as @${params.viewerScreenName}.`,
-		...X_SQUIRREL_VOICE,
-		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
-		...xTemplateGuidance(runtime, "comment", params.replyStyleSeed),
-		...replyToneGuidance(params.tweetText),
-		...authorIdentityGuidance(params.fromUserScreenName),
-		...replyVariationGuidance(params.replyStyleSeed, params.tweetText, params.recentReplyTexts),
-		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
-		"The account was directly tagged or the project was criticized, so write a reply instead of ignoring.",
-		"Rules:",
-		"- Reply to the exact post. No generic canned reply.",
-		`- If it asks about token plans, CA, shilling, or utility, use CA ${X_DETOUR_SQUIRREL_TOKEN_CA} and the Squirrel mythology: build AGI on elizaOS, defend cozy devs, wreck fake-agent slop, save the world.`,
-		"- Make the project attractive with concrete hooks: Pensieve memory, unified messaging context, trajectories, connector awareness, and real desktop agent workflows.",
-		"- Do not ask unrelated projects or users for logs, traces, exact flows, repos, timestamps, or support details.",
-		"- If tagged into another project's bug/support thread, stay out of support mode and answer only the agent/context angle if there is one.",
-		"- Vary language. Do not repeat a stock catchphrase unless the post specifically demands it.",
-		"- You can be cocky and profane when earned, but friendly/normal comments should get friendly/normal replies.",
-		"- No slurs, threats, sexual harassment, or private/internal details.",
-		"- No emojis. No open-ended closer questions. Use direct commands or statements.",
-		"- Under 240 characters.",
-		"",
-		`from: ${params.fromUserScreenName ? `@${compactText(params.fromUserScreenName, 80)}` : "unknown"}`,
-		`why reply: ${compactText(params.reason, 180)}`,
-		"Post:",
-		compactText(params.tweetText, 900),
-		"",
-		"Output TOON only:",
-		"reply_text: <reply>",
-		"reason: <brief>",
-	].join("\n");
-	const raw = await runtime.useModel(ModelType.TEXT_SMALL, {
-		prompt: "Generate the required reply text in TOON format.",
-		system: prompt,
-	} as any);
-	return parseToonKeyValue<XRequiredReplyDecision>(String(raw)) ?? { reason: "unparseable model output" };
 }
 
 async function buildRecentAutonomyContext(runtime: IAgentRuntime, task?: Task): Promise<string> {
@@ -1411,17 +1295,6 @@ async function safeXAutonomyDecision(
 	});
 }
 
-async function safeXRequiredReply(
-	runtime: IAgentRuntime,
-	params: Parameters<typeof decideXRequiredReply>[1],
-): Promise<XRequiredReplyDecision> {
-	return decideXRequiredReply(runtime, params).catch((err) => {
-		const reason = modelErrorReason(err);
-		logger.warn({ src: "x-autonomy", error: reason }, "required reply decision failed; using fallback");
-		return { reason };
-	});
-}
-
 async function safeXStatusDecision(
 	runtime: IAgentRuntime,
 	params: Parameters<typeof decideXStatusPost>[1],
@@ -1655,8 +1528,6 @@ async function decideXDiscoveryAction(
 		"Decide whether this discovered post deserves a reply, like, follow, or ignore.",
 		"Rules:",
 		"- Reply only when the post is clearly about Dexploarer, Detour Squirrel, the CA, or the project's agent lane. Do not hijack unrelated posts.",
-		"- Reply if the post criticizes Dexploarer, Detour Squirrel, the CA, or the project. Do not stay silent on public project criticism.",
-		`- Reply if the post asks about token plans, roadmap, utility, CA, shilling, or what the Squirrel is building. Token CA: ${X_DETOUR_SQUIRREL_TOKEN_CA}.`,
 		"- When pitching the project, lead with what attracts builders: elizaOS-native agent work, Pensieve memory, unified messaging, trajectories, connector context, and desktop workflows.",
 		"- For criticism, correct misinformation and keep the tone firm as hell but not defensive.",
 		"- Ignore third-party project bug/support threads. Do not ask strangers for logs, traces, exact flows, repos, timestamps, or support details.",
@@ -1681,11 +1552,6 @@ async function decideXDiscoveryAction(
 		...(mediaDescription ? ["Post media (you can see this; factor it into the reply):", mediaDescription] : []),
 		"",
 		"Output TOON only:",
-		isProjectCriticismText(tweet.text)
-			? "Project-defense rule: this candidate criticizes the project, so choose action: reply."
-			: projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, params.viewerScreenName)
-				? "Token/project rule: this candidate asks about the project token or plan, so choose action: reply."
-				: "Project-defense rule: not detected.",
 		"action: reply | like | follow | ignore",
 		"reply_text: <required only when action is reply>",
 		"reason: <brief>",
@@ -1934,10 +1800,7 @@ async function handleXNotification(
 		replyStyleSeed: `${notification.id}:${tweet.tweetId}`,
 		recentReplyTexts,
 	});
-	const finalDecision = relevance.forceReply
-		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, relevance.reason, recentReplyTexts)
-		: decision;
-	return executeNotificationDecision(runtime, client, notification, tweet, finalDecision, writeEnabled, recentReplyTexts);
+	return executeNotificationDecision(runtime, client, notification, tweet, decision, writeEnabled, recentReplyTexts);
 }
 
 async function handleXMentionTweet(
@@ -1970,103 +1833,8 @@ async function handleXMentionTweet(
 		replyStyleSeed: tweet.tweetId,
 		recentReplyTexts,
 	});
-	const finalDecision = relevance.forceReply
-		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, relevance.reason, recentReplyTexts)
-		: decision;
-	const result = await executeNotificationDecision(runtime, client, target, tweet, finalDecision, writeEnabled, recentReplyTexts);
+	const result = await executeNotificationDecision(runtime, client, target, tweet, decision, writeEnabled, recentReplyTexts);
 	return { ...result, source: "mention_search" };
-}
-
-async function ensureMentionReplyDecision(
-	runtime: IAgentRuntime,
-	viewerScreenName: string,
-	tweet: XTweetSummary,
-	decision: XAutonomyDecision,
-	reason: string,
-	recentReplyTexts: string[],
-): Promise<XAutonomyDecision> {
-	const action = String(decision.action ?? "").trim().toLowerCase();
-	const replyText = sanitizeXOutputText(decision.reply_text, 260);
-	if (action === "reply" && replyText.length > 0) return decision;
-	const required = await safeXRequiredReply(runtime, {
-		viewerScreenName,
-		fromUserScreenName: tweet.authorScreenName,
-		tweetText: tweet.text,
-		reason,
-		replyStyleSeed: tweet.tweetId,
-		recentReplyTexts,
-	});
-	const requiredText = sanitizeXOutputText(required.reply_text, 260);
-	if (requiredText.length > 0) {
-		return {
-			...decision,
-			action: "reply",
-			reply_text: requiredText,
-			reason: required.reason ?? decision.reason,
-		};
-	}
-	return forceMentionReply(decision, tweet.text, tweet.authorScreenName);
-}
-
-function forceProjectCriticismReply<T extends { action?: string; reply_text?: string; reason?: string }>(
-	decision: T,
-	text: string,
-	authorScreenName?: string,
-): T {
-	const action = String(decision.action ?? "").trim().toLowerCase();
-	const replyText = sanitizeXOutputText(decision.reply_text, 260);
-	if (action === "reply" && replyText.length > 0) return decision;
-	return {
-		...decision,
-		action: "reply",
-		reply_text: projectCriticismReply(text, authorScreenName),
-		reason: decision.reason ?? "project criticism requires a response",
-	};
-}
-
-function forceTokenPlanReply<T extends { action?: string; reply_text?: string; reason?: string }>(
-	decision: T,
-	text: string,
-	authorScreenName?: string,
-): T {
-	const action = String(decision.action ?? "").trim().toLowerCase();
-	const replyText = sanitizeXOutputText(decision.reply_text, 260);
-	if (action === "reply" && replyText.length > 0) return decision;
-	return {
-		...decision,
-		action: "reply",
-		reply_text: tokenPlanReply(text, authorScreenName),
-		reason: decision.reason ?? "token plan question requires a response",
-	};
-}
-
-function forceMentionReply<T extends { action?: string; reply_text?: string; reason?: string }>(
-	decision: T,
-	text: string,
-	authorScreenName?: string,
-): T {
-	const action = String(decision.action ?? "").trim().toLowerCase();
-	const replyText = sanitizeXOutputText(decision.reply_text, 260);
-	if (action === "reply" && replyText.length > 0) return decision;
-	return {
-		...decision,
-		action: "reply",
-		reply_text: mentionFallbackReply(text, authorScreenName),
-		reason: decision.reason ?? "searched comment/tag requires a response",
-	};
-}
-
-function isDuplicateStatusError(error: string | undefined): boolean {
-	return Boolean(error && (error.includes("duplicate") || error.includes("(187)")));
-}
-
-function retryReplyText(tweetText: string, attempted: string): string | null {
-	const fallback = mentionFallbackReply(tweetText);
-	if (fallback !== sanitizeXOutputText(attempted, 260)) return fallback;
-	if (tweetText.toLowerCase().includes("space")) {
-		return "tech spaces when there is a real walkthrough. until then i am answering here and keeping receipts warm.";
-	}
-	return "heard. i'll answer the claim plain, not play support desk for somebody else's thread.";
 }
 
 async function executeNotificationDecision(
@@ -2097,17 +1865,9 @@ async function executeNotificationDecision(
 }
 
 async function notificationReply(runtime: IAgentRuntime, client: XClient, notification: XNotification, tweet: XTweetSummary, text: string): Promise<Record<string, unknown>> {
-	let result = await client.reply(text, tweet.tweetId);
-	let finalText = text;
-	if (!result.success && isDuplicateStatusError(result.error)) {
-		const retryText = retryReplyText(tweet.text, text);
-		if (retryText) {
-			finalText = retryText;
-			result = await client.reply(retryText, tweet.tweetId);
-		}
-	}
+	const result = await client.reply(text, tweet.tweetId);
 	if (result.success && result.tweetId) {
-		recordOutboundTweet(runtime, result.tweetId, finalText, tweet.tweetId);
+		recordOutboundTweet(runtime, result.tweetId, text, tweet.tweetId);
 	}
 	return {
 		id: notification.id,
@@ -2116,7 +1876,7 @@ async function notificationReply(runtime: IAgentRuntime, client: XClient, notifi
 		success: result.success,
 		resultTweetId: result.tweetId,
 		error: result.error,
-		text: finalText,
+		text,
 	};
 }
 
@@ -2169,14 +1929,9 @@ async function handleXDiscoveryCandidate(
 	}
 	const relevance = replyEligibility(tweet, viewerScreenName, "discovery");
 	const decision = await safeXDiscoveryDecision(runtime, { viewerScreenName, candidate, recentReplyTexts }, settings.proactiveEngagementEnabled);
-	const finalDecision = relevance.forceReply && isProjectCriticismText(tweet.text)
-		? forceProjectCriticismReply(decision, tweet.text, tweet.authorScreenName)
-		: relevance.forceReply && projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, viewerScreenName)
-			? forceTokenPlanReply(decision, tweet.text, tweet.authorScreenName)
-		: decision;
-	const action = String(finalDecision.action ?? "ignore").trim().toLowerCase();
-	const replyText = sanitizeXOutputText(finalDecision.reply_text, 260);
-	const base = discoveryHandledBase(tweet, candidate, finalDecision);
+	const action = String(decision.action ?? "ignore").trim().toLowerCase();
+	const replyText = sanitizeXOutputText(decision.reply_text, 260);
+	const base = discoveryHandledBase(tweet, candidate, decision);
 	if (action === "reply" && !relevance.canReply) return { ...base, action: "discover_ignore", reason: relevance.reason };
 	if (action === "reply" && replyText.length > 0 && isRepetitiveXText(replyText, recentReplyTexts)) {
 		return { ...base, action: "discover_ignore", reason: "repetitive reply suppressed", text: replyText };
