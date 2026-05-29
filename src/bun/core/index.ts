@@ -5,6 +5,9 @@ import { clearSkillsDirCache } from "@elizaos/skills";
 import { ActivityService } from "./activity";
 import { AgentHfSyncService } from "./agent-hf-sync-service";
 import { TrajectoryLearningService } from "./trajectory-learning-service";
+import { XRadarService } from "./x-radar-service";
+import { XStyleService } from "./x-style-service";
+import { XFeedbackService } from "./x-feedback-service";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
 import { BackendOps } from "./backend-ops";
@@ -547,6 +550,15 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		trajectories: activity.trajectories,
 	});
 	trajectoryLearning.start();
+	// X persona Phase 2 background services (setInterval, NOT cron -- cron fires
+	// LLM agent turns). Each owns its own timer + fail-safe tick and shares the
+	// live runtime accessor (runtime.peek()) plus the Pensieve memory service.
+	const xRadar = new XRadarService({ runtime, memories: pensieve.memories });
+	xRadar.start();
+	const xStyle = new XStyleService({ runtime, memories: pensieve.memories });
+	xStyle.start();
+	const xFeedback = new XFeedbackService({ runtime });
+	xFeedback.start();
 	const gateway = new ChannelGatewayService();
 	const agentMail = new AgentMailService(vault, config, gateway);
 	const superteamEarn = new SuperteamEarnService(vault, config);
@@ -783,6 +795,10 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			discordObservations.stop();
 			improvement.stop();
 			agentHfSync.stop();
+			trajectoryLearning.stop();
+			xRadar.stop();
+			xStyle.stop();
+			xFeedback.stop();
 			dream.stop();
 			activity.stop();
 			pensieve.stop();

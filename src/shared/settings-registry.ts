@@ -77,6 +77,12 @@ export const X_RUNTIME_SETTING_KEYS = [
 	"X_AUTONOMY_MAX_REPLIES_PER_TICK",
 	"X_AUTONOMY_MAX_DISCOVERY_PER_TICK",
 	"X_AUTONOMY_DISCOVERY_QUERIES",
+	// Phase 2 persona background services (setInterval, not cron). Intervals in
+	// ms; X_STYLE_EXEMPLARS is a comma-separated list of exemplar handles.
+	"X_RADAR_INTERVAL_MS",
+	"X_STYLE_INTERVAL_MS",
+	"X_FEEDBACK_INTERVAL_MS",
+	"X_STYLE_EXEMPLARS",
 ] as const;
 
 export type XRuntimeSettingKey = (typeof X_RUNTIME_SETTING_KEYS)[number];
