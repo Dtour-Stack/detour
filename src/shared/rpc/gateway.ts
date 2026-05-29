@@ -14,12 +14,34 @@
  * no current view consumes it.
  */
 
-import type {
-	GatewayChannel,
-	GatewayDirection,
-	GatewayMessage,
-	IdentityCandidate,
-} from "../../bun/core/channels/gateway";
+// Single source of truth for the gateway wire shapes. The bun-side gateway
+// service imports these back from here (shared is a leaf — it must not depend
+// on bun).
+export type GatewayDirection = "in" | "out" | "deleted" | "interaction";
+export type GatewayChannel = "discord" | "telegram" | "imessage" | "chat" | "agentmail" | "twitter" | "unknown";
+
+export interface GatewayMessage {
+	readonly id: string;
+	readonly time: number;
+	readonly direction: GatewayDirection;
+	readonly channel: GatewayChannel;
+	readonly source: string;
+	readonly roomId: string;
+	readonly entityId: string;
+	readonly externalHandle?: string;
+	readonly text: string;
+	readonly meta?: Record<string, unknown>;
+}
+
+export interface IdentityCandidate {
+	readonly key: string;
+	readonly channel: GatewayChannel;
+	readonly externalHandle: string;
+	readonly entityIds: string[];
+	readonly firstSeen: number;
+	readonly lastSeen: number;
+	readonly messageCount: number;
+}
 
 export type GatewayFeedOptions = {
 	channel?: GatewayChannel;

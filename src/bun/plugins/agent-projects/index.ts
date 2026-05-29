@@ -58,6 +58,7 @@ import {
 	type ProjectMeta,
 } from "../../core/agent-projects-core";
 import { getPreviewRegistry } from "../../core/preview-server-registry";
+import { getBuildCoordinator } from "../../core/build-coordinator";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ function getApiKey(runtime: IAgentRuntime): string | null {
 
 // ── AGENT_PROJECT_NEW ──────────────────────────────────────────────────
 
-const newHandler: Handler = async (runtime, _message, _state, options, callback) => {
+const newHandler: Handler = async (runtime, message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const name = pickString(opts, ["name"]);
 	const description = pickString(opts, ["description"]);
@@ -147,12 +148,28 @@ const newHandler: Handler = async (runtime, _message, _state, options, callback)
 	if (!description) return fail("AGENT_PROJECT_NEW requires `description` (1-2 sentences explaining what it does).");
 	if (!type) return fail('AGENT_PROJECT_NEW requires `type`: "app" or "page".');
 
+	// Anti-spam: one build at a time per room (+ short cooldown after). If
+	// someone keeps asking while a build is running, tell them to chill instead
+	// of spawning a second build.
+	const roomId = typeof message?.roomId === "string" ? message.roomId : "";
+	const coordinator = getBuildCoordinator();
+	const claim = coordinator.tryStart(roomId, name);
+	if (!claim.ok) {
+		const chill = claim.reason === "busy"
+			? `chill the fuck out — already building "${claim.label}" (${claim.secondsAgo}s in). one at a time. i'll ping when it's live.`
+			: `just shipped "${claim.label}" ${claim.secondsAgo}s ago. give it a sec before the next one.`;
+		await emit(callback, chill, "AGENT_PROJECT_NEW");
+		return ok(chill, { caller: caller(runtime), rejected: true, reason: claim.reason });
+	}
+
 	let meta: ProjectMeta;
 	try {
 		meta = await createAgentProject({ name, description, type, template });
 	} catch (err) {
+		coordinator.finish(roomId); // release the lock on scaffold failure
 		return fail(`Scaffold failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
+	coordinator.note(roomId);
 	const slug = meta.slug;
 	const dir = projectDir(slug);
 	const usedTemplate = meta.template ?? (type === "app" ? "carrot" : "static");
@@ -492,18 +509,21 @@ export const agentProjectPreviewAction: Action = {
 	],
 } as Action;
 
-const publicPreviewHandler: Handler = async (runtime, _message, _state, options, callback) => {
+const publicPreviewHandler: Handler = async (runtime, message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const slug = pickString(opts, ["slug"]);
 	if (!slug) return fail("AGENT_PROJECT_PUBLIC_PREVIEW requires `slug`.");
 	const meta = readProjectMeta(slug);
 	if (!meta) return fail(`No project found at slug=${slug}.`);
+	const roomId = typeof message?.roomId === "string" ? message.roomId : "";
+	getBuildCoordinator().note(roomId); // build's still alive — refresh the lock
 	try {
 		const reg = await getPreviewRegistry();
 		const state = await reg.startPublic(slug);
 		if (!state.publicUrl) return fail(state.publicUrlError ?? "ngrok did not return a public URL.");
 		const summary = `Public preview live at ${state.publicUrl} (local=${state.url}, slug=${slug}, port=${state.port}, provider=ngrok). Send this URL to the user.`;
 		await emit(callback, summary, "AGENT_PROJECT_PUBLIC_PREVIEW");
+		getBuildCoordinator().finish(roomId); // preview is live → build done, open cooldown
 		return ok(summary, {
 			caller: caller(runtime),
 			slug,
@@ -636,13 +656,14 @@ export const agentProjectPublishGitHubAction: Action = {
 
 // ── AGENT_PROJECT_DEPLOY ───────────────────────────────────────────────
 
-const deployHandler: Handler = async (runtime, _message, _state, options, callback) => {
+const deployHandler: Handler = async (runtime, message, _state, options, callback) => {
 	const opts = options as Record<string, unknown> | undefined;
 	const slug = pickString(opts, ["slug"]);
 	const appUrlOverride = pickString(opts, ["app_url", "appUrl"]);
 	if (!slug) return fail("AGENT_PROJECT_DEPLOY requires `slug`.");
 	const meta = readProjectMeta(slug);
 	if (!meta) return fail(`No project found at slug=${slug}.`);
+	const roomId = typeof message?.roomId === "string" ? message.roomId : "";
 
 	const apiKey = getApiKey(runtime);
 	if (!apiKey) return fail("Not signed in to ElizaOS Cloud. Have the user run Cloud → ElizaOS Cloud → Connect.");
@@ -675,6 +696,7 @@ const deployHandler: Handler = async (runtime, _message, _state, options, callba
 
 		const summary = `Deployed "${meta.name}" to ElizaOS Cloud (id=${appId}). Bundle upload still needs to happen via the dashboard at /dashboard/apps/${appId}.`;
 		await emit(callback, summary, "AGENT_PROJECT_DEPLOY");
+		getBuildCoordinator().finish(roomId); // deployed → build done, open cooldown
 		return ok(summary, {
 			caller: caller(runtime),
 			slug,

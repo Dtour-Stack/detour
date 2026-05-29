@@ -126,7 +126,7 @@ const STATE_REQUIREMENTS: Record<string, readonly string[]> = {
 	],
 };
 
-function codexHome(): string {
+export function codexHome(): string {
 	const value = process.env.CODEX_HOME?.trim();
 	return value ? resolve(value) : CODEX_HOME_DEFAULT;
 }

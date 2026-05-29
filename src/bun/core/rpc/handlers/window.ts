@@ -1,6 +1,8 @@
 import { runWindowCommand } from "../window-controller-registry";
 import type { RpcDeps } from "../types";
 import type { WindowOpenTarget } from "../../../../shared/index";
+import { WINDOW_OPEN_MESSAGE } from "../../../../shared/window-targets";
+import type { ChatMessages } from "../../../../shared/rpc/chat";
 
 /**
  * Window control for the chat popup. The chat feature registers a
@@ -22,19 +24,6 @@ import type { WindowOpenTarget } from "../../../../shared/index";
  * land.
  */
 
-const WINDOW_OPEN_MESSAGE: Record<WindowOpenTarget, keyof import("../../../../shared/rpc/chat").ChatMessages> = {
-	chat: "uiOpenChat",
-	"command-palette": "uiOpenCommandPalette",
-	settings: "uiOpenSettings",
-	pensieve: "uiOpenPensieve",
-	activity: "uiOpenActivity",
-	browser: "uiOpenBrowser",
-	agents: "uiOpenAgents",
-	pet: "uiOpenPet",
-	gallery: "uiOpenGallery",
-	portless: "uiOpenPortless",
-};
-
 export function windowRequests(deps: RpcDeps) {
 	return {
 		windowHide: async (_params: Record<string, never>): Promise<{ ok: true }> => {
@@ -54,7 +43,7 @@ export function windowRequests(deps: RpcDeps) {
 			return { ok: true };
 		},
 		windowOpen: async (params: { target: WindowOpenTarget }): Promise<{ ok: true }> => {
-			const messageName = WINDOW_OPEN_MESSAGE[params.target];
+			const messageName = WINDOW_OPEN_MESSAGE[params.target] as keyof ChatMessages | undefined;
 			if (messageName) {
 				deps.broadcaster.broadcast(messageName, {});
 			}

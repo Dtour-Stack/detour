@@ -1,0 +1,15 @@
+{
+  "name": "detour-plugins",
+  "owner": {
+    "name": "dexploarer"
+  },
+  "plugins": [
+    {
+      "name": "detour-subagents",
+      "source": "./detour-subagents",
+      "description": "Codebase-integrity subagents. First: plumber (topology/wiring-integrity guard) + the plumber-setup skill that provisions a ratcheting flow-check and topology baseline.",
+      "version": "0.1.0",
+      "keywords": ["subagents", "architecture", "topology", "code-review"]
+    }
+  ]
+}

@@ -26,6 +26,8 @@ function basePolicy(): AgentHfSyncPolicy {
 		everyNewTrajectories: 50,
 		minIntervalMinutes: 1,
 		failureCooldownMinutes: 1,
+		pruneAfterSync: true,
+		retentionCount: 200,
 	};
 }
 
@@ -81,6 +83,7 @@ function makeService(args: {
 				limit: 1,
 				offset: 0,
 			}),
+			prune: async () => ({ trajectoriesDeleted: 0, vacuumed: false }),
 		},
 		sync: async (_runtime, options) => ({
 			destination: options.destination ?? policy.destination,

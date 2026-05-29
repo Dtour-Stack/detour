@@ -20,21 +20,11 @@ import {
 	type TraySlot,
 	type TrayStatusLabelMode,
 } from "../../shared/index";
+import { TRAY_SLOT_CHOICES, traySlotMeta } from "../../shared/window-targets";
 import { rpc } from "../rpc";
 
-const SLOT_CHOICES: { id: TraySlot; label: string; icon: string }[] = [
-	{ id: "chat", label: "Chat", icon: "💬" },
-	{ id: "pensieve", label: "Pensieve", icon: "🧠" },
-	{ id: "activity", label: "Activity", icon: "📊" },
-	{ id: "browser", label: "Browser", icon: "🌐" },
-	{ id: "gallery", label: "Gallery", icon: "🖼" },
-	{ id: "settings", label: "Settings", icon: "⚙" },
-	{ id: "command-palette", label: "Palette", icon: "⌘" },
-	{ id: "portless", label: "Portless", icon: "↔" },
-];
-
 function slotMeta(id: TraySlot) {
-	return SLOT_CHOICES.find((s) => s.id === id) ?? { id, label: id, icon: "•" };
+	return traySlotMeta(id);
 }
 
 export function TrayTab() {
@@ -68,7 +58,7 @@ export function TrayTab() {
 			const current = prefs.slots[index];
 			const taken = new Set(prefs.slots);
 			// Find the next choice not already pinned elsewhere in the grid.
-			const choices = SLOT_CHOICES.map((c) => c.id);
+			const choices = [...TRAY_SLOT_CHOICES];
 			const startAt = current ? choices.indexOf(current) : -1;
 			for (let i = 1; i <= choices.length; i += 1) {
 				const candidate = choices[(startAt + i) % choices.length]!;
@@ -202,7 +192,7 @@ export function TrayTab() {
 					})}
 				</div>
 				<div style={{ fontSize: 10, opacity: 0.45, marginTop: 8 }}>
-					Available: {SLOT_CHOICES.map((c) => c.label).join(", ")}
+					Available: {TRAY_SLOT_CHOICES.map((slot) => slotMeta(slot).label).join(", ")}
 				</div>
 			</section>
 

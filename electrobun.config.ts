@@ -101,15 +101,14 @@ export default {
 			// `views://main/index.html#activity` would 404 looking for a
 			// file literally named index.html#activity). All HTMLs reference
 			// the same index.js + index.css siblings.
+			// Tool views (activity/pensieve/browser/gallery/portless) and
+			// settings are tabs/drawers inside the hub now — only genuinely
+			// separate windows still need a shell.
 			"src/main/index.html": "views/main/index.html",
-			"src/main/activity.html": "views/main/activity.html",
-			"src/main/pensieve.html": "views/main/pensieve.html",
-			"src/main/browser.html": "views/main/browser.html",
 			"src/main/pet.html": "views/main/pet.html",
-			"src/main/portless.html": "views/main/portless.html",
-			"src/main/gallery.html": "views/main/gallery.html",
 			"src/main/tray-popover.html": "views/main/tray-popover.html",
 			"src/main/status-widget.html": "views/main/status-widget.html",
+			"src/main/capsule.html": "views/main/capsule.html",
 			// AppleScript helpers route through the detour:// URL scheme.
 			"build-assets/applescript/Detour.sdef": "Detour.sdef",
 			"build-assets/applescript/DetourHelpers.applescript": "DetourHelpers.applescript",

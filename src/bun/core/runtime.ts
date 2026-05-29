@@ -5,6 +5,7 @@ import {
 	type Character,
 	type Content,
 	createCharacter,
+	logger,
 	type Memory,
 	type Plugin,
 	provisionAgent,
@@ -15,7 +16,7 @@ import sqlPlugin from "@elizaos/plugin-sql";
 import { v4 as uuidv4 } from "uuid";
 import type { ProviderId } from "../../shared/index";
 import type { VaultService } from "./vault";
-import type { AuthService } from "./auth";
+
 import { listAccounts, saveAccount, refreshAnthropicToken, type AccountCredentialRecord } from "@elizaos/agent/auth";
 import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // Note: plugin-local-embedding (eliza's bundled choice) drags in node-llama-cpp,
@@ -25,6 +26,7 @@ import { embeddingStubPlugin } from "./embedding-stub-plugin";
 // otherwise embedding-stub keeps the runtime alive with zero vectors.
 import { embeddingOpenAIPlugin } from "../plugins/embedding-openai/index";
 import { localChatPlugin } from "../plugins/local-chat/index";
+import { devInferencePlugin } from "../plugins/dev-inference/index";
 import { decodeCodexJwt } from "../plugins/codex-chatgpt/index";
 import { codexHatchAction, codexPetAction, codexPetsPlugin } from "../plugins/codex-pets/index";
 import {
@@ -34,6 +36,7 @@ import {
 	findCodexSkill,
 } from "./codex-skills";
 import { pensieveToolsPlugin } from "../plugins/pensieve-tools/index";
+import { contactDossierPlugin } from "../plugins/contact-dossier/index";
 import {
 	browserFillLoginAction,
 	browserInspectAction,
@@ -45,6 +48,10 @@ import {
 } from "../plugins/vault-tools/index";
 import { xTweetsPlugin } from "../plugins/x-tweets/index";
 import { codingToolsPlugin } from "@elizaos/plugin-coding-tools";
+// Eliza optional capabilities — registered conditionally in basePlugins so
+// they stay inert (and quiet) until their key/config is present.
+import webSearchPlugin from "@elizaos-plugins/plugin-web-search";
+import mcpPlugin from "@elizaos/plugin-mcp";
 import { cloudAppsPlugin } from "../plugins/cloud-apps/index";
 import { agentProjectsPlugin } from "../plugins/agent-projects/index";
 import { capabilitiesPlugin } from "../plugins/capabilities/index";
@@ -55,6 +62,8 @@ import { detourIMessageMediaPlugin } from "../plugins/imessage-media/index";
 import { portlessToolsPlugin } from "../plugins/portless-tools/index";
 import { agentSkillsPlugin } from "../plugins/agent-skills/index";
 import { agentPublicLogPlugin } from "../plugins/agent-public-log/index";
+import { trajectoryLessonsPlugin } from "../plugins/trajectory-lessons/index";
+import { openQuestionsPlugin } from "../plugins/open-questions/index";
 import { phantomWalletToolsPlugin } from "../plugins/phantom-wallet-tools/index";
 import { gmgnToolsPlugin } from "../plugins/gmgn-tools/index";
 import { audioGenerationPlugin } from "../plugins/audio-generation/index";
@@ -66,6 +75,7 @@ import {
 	MEDIA_GENERATION_SETTING_KEYS,
 	X_RUNTIME_SETTING_KEYS,
 } from "../../shared/settings-registry";
+import { readChromeXCookies } from "./chrome-cookies";
 import { computerScreenshotAction, desktopControlPlugin } from "../plugins/desktop-control/index";
 import { macAutomatePlugin } from "../plugins/mac-automate/index";
 // Orchestrator ships from the eliza submodule. Guarded import — node-pty
@@ -95,8 +105,9 @@ try {
 							try {
 								return await (target.start as NonNullable<ServiceCtor["start"]>).call(target, rt);
 							} catch (err) {
-								console.warn(
-									`[runtime] orchestrator service ${target.serviceType ?? target.name ?? "?"} start failed (boot continuing without it):`,
+								logger.warn(
+									{ src: "runtime", service: target.serviceType ?? target.name ?? "?" },
+									"orchestrator service start failed (boot continuing without it): %s",
 									err instanceof Error ? err.message : err,
 								);
 								return null;
@@ -111,7 +122,7 @@ try {
 		agentOrchestratorPlugin = { ...raw, services: wrappedServices };
 	}
 } catch (err) {
-	console.warn("[runtime] orchestrator plugin unavailable:", err instanceof Error ? err.message : err);
+	logger.warn({ src: "runtime" }, " orchestrator plugin unavailable:", err instanceof Error ? err.message : err);
 	agentOrchestratorPlugin = null;
 }
 import { broadcaster } from "./rpc/registry";
@@ -165,7 +176,7 @@ async function detectSystemCodexAuth(): Promise<{ accessToken: string; accountId
 		if (!accessToken || !accountId) return null;
 		return { accessToken, accountId };
 	} catch (err) {
-		console.warn("[runtime] failed to read system Codex auth:", err instanceof Error ? err.message : err);
+		logger.warn({ src: "runtime" }, " failed to read system Codex auth:", err instanceof Error ? err.message : err);
 		return null;
 	}
 }
@@ -178,6 +189,38 @@ const WORLD_ID = stringToUuid("tray-app:default-world");
 // IGNORE, which is why chat sends were producing trajectories with 0 LLM
 // calls while the inbox/cron path (which uses a stable system entity) worked.
 const USER_ID = stringToUuid("tray-app:default-user");
+
+/** Options for `sendMessage` that enable per-source room routing. */
+export interface SendMessageOpts {
+	/** Logical source identifier (e.g. "eval", "chat", "cron:x-mentions"). */
+	source?: string;
+	/** Conversation id — same id routes to the same room for context continuity. */
+	conversationId?: string;
+}
+
+/**
+ * Per-source room routing: different sources (eval, chat, cron) each get
+ * their own ElizaOS room so `DefaultMessageService.handleMessage` can
+ * process them concurrently. The inbox already does this (inbox:room:${kind})
+ * and the AutonomyService creates its own autonomousRoomId. This extends
+ * the pattern to the RuntimeService.sendMessage path.
+ *
+ * Rooms are cached so repeated calls with the same source reuse the same
+ * room (preserving conversation history within a source).
+ */
+const sourceRoomCache = new Map<string, UUID>();
+function roomForSource(source: string | undefined): UUID {
+	if (!source || source === "chat") return ROOM_ID;
+	const cached = sourceRoomCache.get(source);
+	if (cached) return cached;
+	const id = stringToUuid(`tray-app:room:${source}`);
+	sourceRoomCache.set(source, id);
+	return id;
+}
+function entityForSource(source: string | undefined): UUID {
+	if (!source || source === "chat") return USER_ID;
+	return stringToUuid(`tray-app:entity:${source}`);
+}
 type NativeSlashDispatch =
 	| { kind: "action"; action: Action; options: Record<string, string | boolean> }
 	| { kind: "reply"; text: string }
@@ -363,6 +406,50 @@ export function tagLlmPluginPriorities(plugins: Plugin[]): Plugin[] {
 	}));
 }
 
+// ── Embedding dimension resolution ───────────────────────────────
+/**
+ * Resolve embedding vector dimension based on the active embedding
+ * provider. Safe default is 384 (bge-small-en-v1.5 native) which also
+ * works for cloud providers that support the `dimensions` truncation
+ * param (e.g. OpenAI text-embedding-3-small). Users override via the
+ * OPENAI_EMBEDDING_DIMENSIONS env var for full-resolution vectors.
+ *
+ * When a cloud provider's native dim differs from 384, a warning is
+ * logged so the user knows they can opt into full-resolution embeddings
+ * by setting the env var and re-embedding memories.
+ */
+const EMBEDDING_PROVIDER_NATIVE_DIMS: Record<string, number> = {
+	"local-bge": 384,
+	openai: 1536,
+	openrouter: 1536,
+};
+
+function resolveEmbeddingDimension(): string {
+	// Explicit user override always wins.
+	const explicit = process.env.OPENAI_EMBEDDING_DIMENSIONS;
+	if (typeof explicit === "string" && explicit.length > 0) {
+		const parsed = Number.parseInt(explicit, 10);
+		if (Number.isFinite(parsed) && parsed > 0) return String(parsed);
+	}
+	const provider = process.env.DETOUR_MODEL_TEXT_EMBEDDING_PROVIDER;
+	if (!provider || provider === "local-bge") return "384";
+	const nativeDim = EMBEDDING_PROVIDER_NATIVE_DIMS[provider];
+	if (nativeDim && nativeDim !== 384) {
+		logger.warn(
+			{ src: "runtime", provider, nativeDim },
+			`embedding provider native dim=${nativeDim}; using 384 for PGlite compat. Set OPENAI_EMBEDDING_DIMENSIONS=${nativeDim} and re-embed memories for full-resolution vectors.`,
+		);
+	}
+	return "384";
+}
+
+const ANTHROPIC_REFRESH_TIMEOUT_MS = 5_000;
+
+/** Timeout constants — centralized for easy tuning. */
+const TELEGRAM_SERVICE_LOAD_TIMEOUT_MS = 60_000;
+const DISCORD_SERVICE_LOAD_TIMEOUT_MS = 10_000;
+const TASK_DIRTY_PUMP_INTERVAL_MS = 2_000;
+
 type ProviderAttempt = {
 	id: string;
 	label: string;
@@ -386,6 +473,8 @@ export class RuntimeService {
 	 * `current`). Replaces the old `buildPromise` coalescer.
 	 */
 	private buildSerializeTail: Promise<unknown> = Promise.resolve();
+	/** Task service mark-dirty pump interval — cleared on stopCurrentRuntime. */
+	private markDirtyInterval: ReturnType<typeof setInterval> | null = null;
 
 	private enqueueSerializedBuild<T>(fn: () => Promise<T>): Promise<T> {
 		const job = this.buildSerializeTail.then(() => fn());
@@ -421,14 +510,10 @@ export class RuntimeService {
 
 	constructor(
 		private readonly vault: VaultService,
-		// auth dep is currently sourced via the singleton listAccounts() helper;
-		// keeping the constructor slot lets callers pass it for future scoping.
-		_auth?: AuthService,
 		private readonly channels?: import("./channels").ChannelsService,
 		private gateway?: import("./channels/gateway").ChannelGatewayService,
 		private readonly config?: ConfigService,
 	) {
-		void _auth;
 		// Plug Detour into plugin-anthropic's multi-account pool shim. The
 		// plugin's 429 handler reports rate-limits + the OAuth fetch picks
 		// the next account through this shim — without it, Claude Pro caps
@@ -480,7 +565,7 @@ export class RuntimeService {
 		getProviderQuotaService().setActiveCredential(state.providerId, activeAccountId);
 		for (const hook of this.afterBuildHooks) {
 			try { await hook(state); } catch (err) {
-				console.warn("[runtime] afterBuild hook failed:", err instanceof Error ? err.message : err);
+				logger.warn({ src: "runtime" }, " afterBuild hook failed:", err instanceof Error ? err.message : err);
 			}
 		}
 		return state;
@@ -494,22 +579,18 @@ export class RuntimeService {
 	 * by attaching the handler directly to the live Telegraf bot.
 	 */
 	private async wireTelegramPairCommand(runtime: import("@elizaos/core").IAgentRuntime): Promise<void> {
-		const r = runtime as unknown as {
-			getServiceLoadPromise?: (t: string) => Promise<unknown>;
-			getService?: (t: string) => unknown;
-		};
 		// Wait for telegram + owner-bind to be live. Telegraf's startup
 		// backoff (2+4+8+16 = 30s on 409-conflict retries) means we may need
 		// a long timeout after a recent restart that left the bot's
 		// long-poll lease still active on Telegram's side. 60s gives enough
 		// headroom for the full retry cycle on a clean network.
 		const tlg = await Promise.race([
-			r.getServiceLoadPromise?.("telegram") ?? Promise.resolve(null),
-			new Promise((res) => setTimeout(() => res(null), 60_000)),
+			runtime.getServiceLoadPromise("telegram").catch(() => null),
+			new Promise((res) => setTimeout(() => res(null), TELEGRAM_SERVICE_LOAD_TIMEOUT_MS)),
 		]);
-		const verifySvc = r.getService?.("OWNER_BIND_VERIFY");
+		const verifySvc = runtime.getService("OWNER_BIND_VERIFY");
 		if (!tlg || !verifySvc) {
-			console.warn("[runtime] /eliza_pair wire skipped — telegram or owner-bind not loaded in 60s");
+			logger.warn({ src: "runtime" }, "/eliza_pair wire skipped — telegram or owner-bind not loaded in time");
 			return;
 		}
 		// Telegraf bot lives at TelegramService.bot. We don't have telegraf
@@ -519,7 +600,7 @@ export class RuntimeService {
 			| { command: (n: string, h: (ctx: unknown) => Promise<void>) => void }
 			| undefined;
 		if (!bot || typeof bot.command !== "function") {
-			console.warn("[runtime] /eliza_pair wire skipped — bot.command unavailable");
+			logger.warn({ src: "runtime" }, "/eliza_pair wire skipped — bot.command unavailable");
 			return;
 		}
 		// Inline handler — eliza's handleElizaPairCommand isn't re-exported
@@ -527,7 +608,7 @@ export class RuntimeService {
 		// resolve deep imports. Reuse our OwnerBindService directly.
 		const ownerBindSvc = this.ownerBind;
 		bot.command("eliza_pair", async (ctx: unknown) => {
-			console.log("[eliza_pair] command handler FIRED");
+			logger.debug({ src: "runtime" }, "eliza_pair command handler fired");
 			try {
 				const c = ctx as {
 					message?: { text?: string; from?: { id?: number; username?: string; first_name?: string } };
@@ -537,7 +618,7 @@ export class RuntimeService {
 				const parts = text.split(/\s+/);
 				const code = parts[1]?.trim();
 				const from = c.message?.from;
-				console.log(`[eliza_pair] text=${JSON.stringify(text)} code=${code} from=${from?.username ?? from?.id}`);
+				logger.debug({ src: "runtime", code, from: from?.username ?? from?.id }, "eliza_pair attempt");
 				if (!code || !/^\d{6}$/.test(code)) {
 					await c.reply("usage: /eliza_pair <6-digit-code> — generate a code in Detour first.");
 					return;
@@ -567,7 +648,7 @@ export class RuntimeService {
 				try { await (ctx as { reply: (s: string) => Promise<unknown> }).reply(`error: ${msg}`); } catch { /* ignore */ }
 			}
 		});
-		console.log("[runtime] /eliza_pair command wired into Telegraf bot (inline handler)");
+		logger.info({ src: "runtime" }, "/eliza_pair command wired into Telegraf bot");
 		// Diag: log every inbound message so we can see if Telegraf is even
 		// receiving anything. (Use bot.use to wrap; runs before command handlers.)
 		const botUse = (bot as unknown as { use?: (mw: (ctx: unknown, next: () => Promise<unknown>) => Promise<unknown>) => void }).use;
@@ -576,31 +657,27 @@ export class RuntimeService {
 				const c = ctx as { updateType?: string; message?: { text?: string; from?: { username?: string; id?: number } } };
 				const text = c.message?.text ?? "";
 				const from = c.message?.from?.username ?? c.message?.from?.id ?? "?";
-				console.log(`[telegram] inbound update=${c.updateType ?? "?"} from=${from} text=${JSON.stringify(text.slice(0, 60))}`);
+				logger.debug({ src: "runtime", updateType: c.updateType ?? "?", from }, "telegram inbound");
 				return next();
 			});
-			console.log("[runtime] telegram diag middleware installed");
+			logger.debug({ src: "runtime" }, "telegram diag middleware installed");
 		}
 	}
 
 	private async wireDiscordPairCommand(runtime: import("@elizaos/core").IAgentRuntime): Promise<void> {
-		const r = runtime as unknown as {
-			getServiceLoadPromise?: (t: string) => Promise<unknown>;
-			getService?: (t: string) => unknown;
-		};
 		const dsc = await Promise.race([
-			r.getServiceLoadPromise?.("discord") ?? Promise.resolve(null),
-			new Promise((res) => setTimeout(() => res(null), 10_000)),
+			runtime.getServiceLoadPromise("discord").catch(() => null),
+			new Promise((res) => setTimeout(() => res(null), DISCORD_SERVICE_LOAD_TIMEOUT_MS)),
 		]);
-		const verifySvc = r.getService?.("OWNER_BIND_VERIFY");
+		const verifySvc = runtime.getService("OWNER_BIND_VERIFY");
 		if (!dsc || !verifySvc) {
-			console.warn("[runtime] /eliza-pair (discord) wire skipped — discord or owner-bind not loaded in 10s");
+			logger.warn({ src: "runtime" }, "/eliza-pair (discord) wire skipped — discord or owner-bind not loaded in time");
 			return;
 		}
 		// Discord pairing wiring lives inside its own service — no clean
 		// post-hoc hook for now. The eliza pairing service usually wires it
 		// up correctly because Discord client init order differs from Telegraf.
-		console.log("[runtime] discord pairing left to eliza's DiscordOwnerPairingService (no race observed)");
+		logger.debug({ src: "runtime" }, "discord pairing left to eliza's DiscordOwnerPairingService");
 	}
 
 	/**
@@ -618,11 +695,15 @@ export class RuntimeService {
 	}
 
 	private async stopCurrentRuntime(): Promise<void> {
+		if (this.markDirtyInterval) {
+			clearInterval(this.markDirtyInterval);
+			this.markDirtyInterval = null;
+		}
 		if (!this.current) return;
 		try {
 			await this.current.runtime.stop();
 		} catch (err) {
-			console.error("Failed to stop runtime cleanly:", err);
+			logger.error({ src: "runtime", err: err instanceof Error ? err.message : String(err) }, "failed to stop runtime cleanly");
 		}
 		this.current = null;
 	}
@@ -679,6 +760,7 @@ export class RuntimeService {
 	async sendMessage(
 		text: string,
 		onDelta: (delta: string) => void,
+		msgOpts?: SendMessageOpts,
 	): Promise<void> {
 		let state = await this.getOrBuild();
 		if (!state) throw new Error("No LLM provider configured. Add an API key in Settings.");
@@ -706,21 +788,26 @@ export class RuntimeService {
 			);
 		}
 		if (activeCap && localChatAvailable) {
-			console.log(
-				`[runtime] active provider capped (${activeCap.accountLabel}) — routing through Detour's local-chat (${process.env.DETOUR_LOCAL_CHAT_URL})`,
+			logger.info(
+				{ src: "runtime", cappedAccount: activeCap.accountLabel, localChatUrl: process.env.DETOUR_LOCAL_CHAT_URL },
+				"active provider capped — routing through local-chat",
 			);
 		}
+		// Resolve the room for this source. Chat UI and unspecified sources
+		// use the default ROOM_ID; eval/cron/conversationId each get their
+		// own room so they process concurrently.
+		const routeSource = msgOpts?.conversationId ?? msgOpts?.source;
 		const slashEarly = nativeSlashCommand(text);
 		if (slashEarly?.kind === "prompt") {
 			// Skill-rendered prompt: route through the regular chat
 			// pipeline (LLM + tools) by replacing the user's text
 			// and falling out of the slash branch.
-			this.maybeCaptureGoal(slashEarly.text);
-			await this.deliverMessage(state, slashEarly.text, onDelta, /* asNativeSlash */ false);
+			this.maybeCaptureGoal(slashEarly.text, routeSource);
+			await this.deliverMessage(state, slashEarly.text, onDelta, /* asNativeSlash */ false, routeSource);
 			return;
 		}
-		this.maybeCaptureGoal(text);
-		await this.deliverMessage(state, text, onDelta);
+		this.maybeCaptureGoal(text, routeSource);
+		await this.deliverMessage(state, text, onDelta, /* asNativeSlash */ true, routeSource);
 	}
 
 	/**
@@ -731,13 +818,14 @@ export class RuntimeService {
 	 * 1 is acceptable; blocking the first reply by 2-5s while we extract
 	 * is not. Failure is logged but never propagated.
 	 */
-	private maybeCaptureGoal(text: string): void {
+	private maybeCaptureGoal(text: string, source?: string): void {
 		const service = this.goalService;
 		if (!service) return;
-		void service.ensureGoalForTurn(String(ROOM_ID), text).catch((err) => {
-			console.warn(
-				"[runtime] goal extraction failed:",
-				err instanceof Error ? err.message : err,
+		const goalRoomId = roomForSource(source);
+		void service.ensureGoalForTurn(String(goalRoomId), text).catch((err) => {
+			logger.warn(
+				{ src: "runtime", err: err instanceof Error ? err.message : err },
+				"goal extraction failed",
 			);
 		});
 	}
@@ -778,9 +866,9 @@ export class RuntimeService {
 		} catch (err) {
 			// Every credential is blocked — let the caller throw the
 			// actionable error in sendMessage's pre-flight branch.
-			console.warn(
-				"[runtime] cap-driven rebuild exhausted all attempts:",
-				err instanceof Error ? err.message : err,
+			logger.warn(
+				{ src: "runtime", err: err instanceof Error ? err.message : err },
+				"cap-driven rebuild exhausted all attempts",
 			);
 			return state;
 		}
@@ -791,6 +879,7 @@ export class RuntimeService {
 		text: string,
 		onDelta: (delta: string) => void,
 		asNativeSlash: boolean = true,
+		routeSource?: string,
 	): Promise<void> {
 		const service = state.runtime.messageService;
 		if (!service) {
@@ -798,28 +887,30 @@ export class RuntimeService {
 				"Agent runtime has no messageService — check that @elizaos/plugin-sql initialised correctly.",
 			);
 		}
+		// Resolve per-source room/entity. Chat UI and unspecified sources
+		// use the default ROOM_ID/USER_ID. Eval, cron, conversationId each
+		// get their own room so ElizaOS's handleMessage processes them
+		// concurrently (latestResponseIds is keyed per agentId+roomId).
+		const activeRoomId = roomForSource(routeSource);
+		const activeEntityId = entityForSource(routeSource);
+		const sourceLabel = routeSource ?? "tray-app";
+		// ensureConnection.channelId accepts any string — use the source for routing.
+		// gateway.recordChatReply.channel is a typed GatewayChannel union — always "chat"
+		// since all messages through this path originate from the tray-app chat surface.
+		const channelId = routeSource ?? "chat";
+		const gatewayChannel = "chat" as const;
 		// Ensure the entity/room/world exist before posting the memory —
 		// eliza's messageService drops messages whose room isn't registered.
 		// Mirror the inbox path's ensureConnection call exactly, including
 		// type as the literal string "DM".
 		try {
-			await (state.runtime as unknown as {
-				ensureConnection?: (opts: {
-					entityId: string;
-					roomId: string;
-					worldId?: string;
-					userName?: string;
-					source?: string;
-					channelId?: string;
-					type?: string;
-				}) => Promise<void>;
-			}).ensureConnection?.({
-				entityId: USER_ID,
-				roomId: ROOM_ID,
+			await state.runtime.ensureConnection({
+				entityId: activeEntityId,
+				roomId: activeRoomId,
 				worldId: WORLD_ID,
-				userName: "User",
-				source: "tray-app",
-				channelId: "chat",
+				userName: routeSource ? `User:${routeSource}` : "User",
+				source: sourceLabel,
+				channelId: channelId,
 				type: "DM",
 			});
 		} catch (err) {
@@ -835,10 +926,10 @@ export class RuntimeService {
 		// works (inbox trajectories show 10+ LLM calls). Mirror that shape.
 		const message: Memory = {
 			id: uuidv4() as UUID,
-			entityId: USER_ID,
+			entityId: activeEntityId,
 			agentId: state.runtime.agentId,
-			roomId: ROOM_ID,
-			content: { text, source: "tray-app", attachments: [] },
+			roomId: activeRoomId,
+			content: { text, source: sourceLabel, attachments: [] },
 			createdAt: Date.now(),
 		};
 		// asNativeSlash=false means the caller already rendered a
@@ -873,10 +964,10 @@ export class RuntimeService {
 			if (this.gateway && emitted.length > 0) {
 				this.gateway.recordChatReply({
 					text: emitted,
-					roomId: String(ROOM_ID),
+					roomId: String(activeRoomId),
 					entityId: String(state.runtime.agentId),
-					channel: "chat",
-					source: "tray-app",
+					channel: gatewayChannel,
+					source: sourceLabel,
 				});
 			}
 			return;
@@ -907,10 +998,10 @@ export class RuntimeService {
 		if (this.gateway && emitted.length > 0) {
 			this.gateway.recordChatReply({
 				text: emitted,
-				roomId: String(ROOM_ID),
+				roomId: String(activeRoomId),
 				entityId: String(state.runtime.agentId),
-				channel: "chat",
-				source: "tray-app",
+				channel: gatewayChannel,
+				source: sourceLabel,
 			});
 		}
 	}
@@ -974,10 +1065,9 @@ export class RuntimeService {
 		// "the agent is using OpenRouter when I picked Claude" bugs are
 		// answerable from logs alone. Pairs with the priority assignment
 		// in `llmPluginsForAttempt`.
-		console.log(
-			`[runtime] LLM plugin layout for build (active=${attempt.providerId}/${attempt.runtimeProvider}): ${llmPlugins
-				.map((p) => `${p.name}@${p.priority ?? 0}`)
-				.join(", ")}`,
+		logger.info(
+			{ src: "runtime", active: `${attempt.providerId}/${attempt.runtimeProvider}`, plugins: llmPlugins.map((p) => `${p.name}@${p.priority ?? 0}`).join(", ") },
+			"LLM plugin layout for build",
 		);
 		const character = await this.buildCharacter();
 		const channelResolved = options.channels
@@ -985,6 +1075,7 @@ export class RuntimeService {
 			: { plugins: [], settings: {} as Record<string, string> };
 		const settings = await this.buildRuntimeSettings(channelResolved.settings);
 		this.mergeEmbeddingSettingsIntoCharacter(character, settings);
+		this.mergeMcpSettingsIntoCharacter(character);
 		const runtime = new AgentRuntime({
 			character,
 			plugins: this.basePlugins(llmPlugins),
@@ -1030,9 +1121,9 @@ export class RuntimeService {
 						installDiscordMessageManagerGuard(runtime);
 						this.wirePairingCommands(runtime);
 						this.scheduleDiscordCatchUp(runtime);
-						console.log(`[runtime] channel plugins attached (lazy): ${channelResolved.plugins.map((p) => p.name).join(", ") || "(none)"}`);
+						logger.info({ src: "runtime", plugins: channelResolved.plugins.map((p) => p.name).join(", ") || "(none)" }, "channel plugins attached (lazy)");
 					} catch (err) {
-						console.warn("[runtime] lazy channel plugin attach failed:", err instanceof Error ? err.message : err);
+						logger.warn({ src: "runtime" }, " lazy channel plugin attach failed:", err instanceof Error ? err.message : err);
 					}
 				})();
 			}
@@ -1151,9 +1242,9 @@ export class RuntimeService {
 				await routeOrFallback(text, "swarm-coordinator");
 			});
 
-			console.log("[runtime] orchestrator bridges wired (chat + ws + swarm-complete)");
+			logger.info({ src: "runtime" }, " orchestrator bridges wired (chat + ws + swarm-complete)");
 		} catch (err) {
-			console.warn("[runtime] orchestrator bridge wiring failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime" }, " orchestrator bridge wiring failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
@@ -1178,7 +1269,7 @@ export class RuntimeService {
 			? await this.channels.resolvePlugins()
 			: { plugins: [], settings: {} as Record<string, string> };
 		if (resolved.plugins.length > 0) {
-			console.log(`[runtime] loading ${resolved.plugins.length} channel plugin(s): ${resolved.plugins.map((p) => p.name).join(", ")}`);
+			logger.info({ src: "runtime", count: resolved.plugins.length, plugins: resolved.plugins.map((p) => p.name).join(", ") }, "loading channel plugins");
 		}
 		return resolved;
 	}
@@ -1186,8 +1277,16 @@ export class RuntimeService {
 	private async buildRuntimeSettings(channelSettings: Record<string, string>): Promise<Record<string, string>> {
 		const settings: Record<string, string> = {
 			...channelSettings,
-			EMBEDDING_DIMENSION: "384",
-			OPENAI_EMBEDDING_DIMENSIONS: "384",
+			EMBEDDING_DIMENSION: resolveEmbeddingDimension(),
+			OPENAI_EMBEDDING_DIMENSIONS: resolveEmbeddingDimension(),
+			// Explicitly pass the embedding provider + local model settings so
+			// that runtime.getSetting() returns them directly instead of falling
+			// through to process.env — the elizaOS ModelConfigSchema Zod enum
+			// rejects unknown values and the env-var lookup sometimes picks up
+			// stale or mis-cased entries.
+			...(process.env.EMBEDDING_PROVIDER ? { EMBEDDING_PROVIDER: process.env.EMBEDDING_PROVIDER } : {}),
+			...(process.env.LOCAL_EMBEDDING_MODEL ? { LOCAL_EMBEDDING_MODEL: process.env.LOCAL_EMBEDDING_MODEL } : {}),
+			...(process.env.LOCAL_EMBEDDING_DIMENSIONS ? { LOCAL_EMBEDDING_DIMENSIONS: process.env.LOCAL_EMBEDDING_DIMENSIONS } : {}),
 			// Extra providers pulled into the first-pass response state on
 			// every chat turn. Eliza's `composeResponseState` defaults to
 			// just CORE [ENTITIES, CHARACTER, RECENT_MESSAGES, ACTIONS,
@@ -1223,6 +1322,7 @@ export class RuntimeService {
 				"AUDIO_GENERATION_STATUS",
 				"AGENT_SKILL_CATALOG",
 				"USER_ACTIVITY_CONTEXT",
+				"CONTACT_DOSSIER",
 				"FACTS",
 				"RELATIONSHIPS",
 			].join(","),
@@ -1317,6 +1417,14 @@ export class RuntimeService {
 	private static readonly EMBEDDING_SETTING_KEYS = EMBEDDING_RUNTIME_SETTING_KEYS;
 
 	private mergeEmbeddingSettingsIntoCharacter(character: Character, settings: Record<string, string>): void {
+		// Merge the standard embedding keys plus EMBEDDING_PROVIDER itself —
+		// the EMBEDDING_RUNTIME_SETTING_KEYS only list the OPENAI_EMBEDDING_*
+		// keys but validateModelConfig also reads EMBEDDING_PROVIDER from
+		// getSetting() which checks character.settings BEFORE this.settings.
+		const EXTRA_EMBED_KEYS = ["EMBEDDING_PROVIDER", "LOCAL_EMBEDDING_MODEL", "LOCAL_EMBEDDING_DIMENSIONS"] as const;
+		// Also merge X cookies and iMessage enable flag so they win over
+		// stale/encrypted values persisted in the DB agent row.
+		const CRITICAL_VAULT_KEYS = ["X_AUTH_TOKEN", "X_CT0", "X_USER_AGENT", "X_AUTONOMY_ENABLED", "IMESSAGE_ENABLED"] as const;
 		const base =
 			character.settings && typeof character.settings === "object" && !Array.isArray(character.settings)
 				? { ...character.settings }
@@ -1327,7 +1435,55 @@ export class RuntimeService {
 				(base as Record<string, string>)[key] = v;
 			}
 		}
+		for (const key of EXTRA_EMBED_KEYS) {
+			const v = settings[key] ?? process.env[key];
+			if (typeof v === "string" && v.length > 0) {
+				(base as Record<string, string>)[key] = v;
+			}
+		}
+		for (const key of CRITICAL_VAULT_KEYS) {
+			const v = settings[key];
+			if (typeof v === "string" && v.length > 0) {
+				(base as Record<string, string>)[key] = v;
+			}
+		}
 		character.settings = base;
+	}
+
+	/**
+	 * Pipe the MCP server config (env/vault `MCP_SERVERS`, a JSON string) into
+	 * `character.settings.mcp` as an object, which is where plugin-mcp's
+	 * `McpService` looks (`getSetting("mcp")` expects an object, not a string,
+	 * and Detour's runtime settings are all strings). Accepts either the full
+	 * `{ "servers": { … } }` shape or just the bare servers map. No-ops when
+	 * unset or invalid JSON so the MCP plugin (registered only when MCP_SERVERS
+	 * is present) simply has no servers.
+	 */
+	private mergeMcpSettingsIntoCharacter(character: Character): void {
+		const raw = process.env.MCP_SERVERS;
+		if (!raw) return;
+		try {
+			const parsed = JSON.parse(raw) as unknown;
+			const servers =
+				parsed && typeof parsed === "object" && !Array.isArray(parsed) && "servers" in parsed
+					? (parsed as { servers: unknown }).servers
+					: parsed;
+			if (!servers || typeof servers !== "object" || Array.isArray(servers)) {
+				logger.warn({ src: "runtime" }, "MCP_SERVERS has no usable `servers` object — MCP plugin will have no servers");
+				return;
+			}
+			const base =
+				character.settings && typeof character.settings === "object" && !Array.isArray(character.settings)
+					? { ...character.settings }
+					: {};
+			(base as Record<string, unknown>).mcp = { servers };
+			character.settings = base;
+		} catch (err) {
+			logger.warn(
+				{ src: "runtime", err: err instanceof Error ? err.message : err },
+				"MCP_SERVERS is not valid JSON — MCP plugin will have no servers",
+			);
+		}
 	}
 
 	private async loadXSettings(settings: Record<string, string>): Promise<void> {
@@ -1343,7 +1499,26 @@ export class RuntimeService {
 				}
 			}
 		} catch (err) {
-			console.warn("[runtime] x-creds load failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime" }, " x-creds load failed:", err instanceof Error ? err.message : err);
+		}
+		// When an X_CHROME_PROFILE is configured, the agent's X identity follows
+		// that Chrome profile's logged-in x.com session — its cookies override any
+		// vault X_AUTH_TOKEN/X_CT0 (which may belong to a different account).
+		const chromeProfile = settings.X_CHROME_PROFILE ?? process.env.X_CHROME_PROFILE;
+		if (chromeProfile) {
+			const chromeCookies = readChromeXCookies(chromeProfile);
+			if (chromeCookies) {
+				settings.X_AUTH_TOKEN = chromeCookies.authToken;
+				process.env.X_AUTH_TOKEN = chromeCookies.authToken;
+				settings.X_CT0 = chromeCookies.ct0;
+				process.env.X_CT0 = chromeCookies.ct0;
+				logger.info({ src: "runtime", profile: chromeProfile }, "X cookies sourced from Chrome profile");
+			} else {
+				logger.warn(
+					{ src: "runtime", profile: chromeProfile },
+					"X_CHROME_PROFILE set but Chrome cookie read failed — falling back to vault X cookies",
+				);
+			}
 		}
 	}
 
@@ -1360,7 +1535,7 @@ export class RuntimeService {
 				}
 			}
 		} catch (err) {
-			console.warn("[runtime] audio settings load failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime" }, " audio settings load failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
@@ -1377,7 +1552,7 @@ export class RuntimeService {
 				}
 			}
 		} catch (err) {
-			console.warn("[runtime] media generation settings load failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime" }, " media generation settings load failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
@@ -1407,10 +1582,22 @@ export class RuntimeService {
 			...llmPlugins,
 			embeddingOpenAIPlugin,
 			localChatPlugin,
+			// dev-only: when DETOUR_DEV_INFERENCE=1 it wins text routing at
+			// priority 150; otherwise inert. Text-only — embeddings stay put.
+			devInferencePlugin,
 			embeddingStubPlugin,
 			vaultToolsPlugin,
 			pensieveToolsPlugin,
+			contactDossierPlugin,
 			codingToolsPlugin,
+			// Web search (Tavily) — fast factual lookups via the SEARCH "web"
+			// category. Off unless TAVILY_API_KEY is set (its service throws
+			// without one).
+			...(process.env.TAVILY_API_KEY ? [webSearchPlugin] : []),
+			// MCP client — agent gains tools from configured MCP servers.
+			// Off unless MCP_SERVERS is set; the JSON is piped into
+			// character.settings.mcp by mergeMcpSettingsIntoCharacter.
+			...(process.env.MCP_SERVERS ? [mcpPlugin] : []),
 			codexPetsPlugin,
 			codexSkillsPlugin,
 			discordMentionAliasPlugin,
@@ -1427,6 +1614,8 @@ export class RuntimeService {
 			portlessToolsPlugin,
 			agentSkillsPlugin,
 			agentPublicLogPlugin,
+			trajectoryLessonsPlugin,
+			openQuestionsPlugin,
 			phantomWalletToolsPlugin,
 			gmgnToolsPlugin,
 			audioGenerationPlugin,
@@ -1447,33 +1636,29 @@ export class RuntimeService {
 	private async waitForOwnerBind(runtime: AgentRuntime): Promise<void> {
 		if (!this.ownerBind) return;
 		try {
-			await (runtime as unknown as {
-				getServiceLoadPromise?: (t: string) => Promise<unknown>;
-			}).getServiceLoadPromise?.("OWNER_BIND_VERIFY");
-			console.log("[runtime] OWNER_BIND_VERIFY started — channel plugins safe to load");
+			await runtime.getServiceLoadPromise("OWNER_BIND_VERIFY");
+			logger.info({ src: "runtime" }, " OWNER_BIND_VERIFY started — channel plugins safe to load");
 		} catch (err) {
-			console.warn("[runtime] OWNER_BIND_VERIFY start failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime" }, " OWNER_BIND_VERIFY start failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
 	private async registerChannelPlugins(runtime: AgentRuntime, plugins: Plugin[]): Promise<void> {
 		for (const channelPlugin of plugins) {
 			try {
-				await (runtime as unknown as {
-					registerPlugin: (p: import("@elizaos/core").Plugin) => Promise<void>;
-				}).registerPlugin(channelPlugin);
+				await runtime.registerPlugin(channelPlugin);
 			} catch (err) {
-				console.warn(`[runtime] failed to register channel plugin ${channelPlugin.name}:`, err instanceof Error ? err.message : err);
+				logger.warn({ src: "runtime", plugin: channelPlugin.name, err: err instanceof Error ? err.message : err }, "failed to register channel plugin");
 			}
 		}
 	}
 
 	private wirePairingCommands(runtime: AgentRuntime): void {
 		void this.wireTelegramPairCommand(runtime).catch((err) =>
-			console.warn("[runtime] /eliza_pair wire failed:", err instanceof Error ? err.message : err),
+			logger.warn({ src: "runtime" }, " /eliza_pair wire failed:", err instanceof Error ? err.message : err),
 		);
 		void this.wireDiscordPairCommand(runtime).catch((err) =>
-			console.warn("[runtime] /eliza-pair wire failed:", err instanceof Error ? err.message : err),
+			logger.warn({ src: "runtime" }, " /eliza-pair wire failed:", err instanceof Error ? err.message : err),
 		);
 	}
 
@@ -1481,26 +1666,21 @@ export class RuntimeService {
 		try {
 			await provisionAgent(runtime, { runMigrations: false });
 		} catch (err) {
-			console.warn("[runtime] provisionAgent failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime" }, " provisionAgent failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
 	private startTaskServiceTimer(runtime: AgentRuntime): void {
 		try {
-			const taskSvc = (runtime as unknown as {
-				getService?: (t: string) => {
-					startTimer?: () => void;
-					markDirty?: () => void;
-				} | null;
-			}).getService?.("task");
+			const taskSvc = runtime.getService("task") as { startTimer?: () => void; markDirty?: () => void } | null;
 			taskSvc?.startTimer?.();
 			if (taskSvc?.markDirty) {
-				const tick = setInterval(() => taskSvc.markDirty?.(), 2_000);
-				(tick as unknown as { unref?: () => void }).unref?.();
+				this.markDirtyInterval = setInterval(() => taskSvc.markDirty?.(), TASK_DIRTY_PUMP_INTERVAL_MS);
+				(this.markDirtyInterval as unknown as { unref?: () => void }).unref?.();
 			}
-			console.log("[runtime] task service timer started + 2s mark-dirty pump");
+			logger.info({ src: "runtime" }, "task service timer started");
 		} catch (err) {
-			console.warn("[runtime] task timer start failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime", err: err instanceof Error ? err.message : err }, "task timer start failed");
 		}
 	}
 
@@ -1533,7 +1713,7 @@ export class RuntimeService {
 			openrouter: await this.providerApiKey("openrouter", "OPENROUTER_API_KEY"),
 			elizacloud: await this.providerApiKey("elizacloud", "ELIZAOS_CLOUD_API_KEY"),
 		};
-		console.log(`[runtime] provider order=[${order.join(",")}] direct-keys: openai=${!!directKeys.openai} anthropic=${!!directKeys.anthropic} openrouter=${!!directKeys.openrouter} elizacloud=${!!directKeys.elizacloud}`);
+		logger.info({ src: "runtime", order, openai: !!directKeys.openai, anthropic: !!directKeys.anthropic, openrouter: !!directKeys.openrouter, elizacloud: !!directKeys.elizacloud }, "provider order resolved");
 		const pushFor = async (provider: ProviderId): Promise<void> => {
 			if (provider === "openai") attempts.push(...await this.openAiAttempts(directKeys.openai));
 			else if (provider === "anthropic") attempts.push(...this.anthropicAttempts(directKeys.anthropic));
@@ -1563,8 +1743,9 @@ export class RuntimeService {
 				if (p === "elizacloud" && !directKeys.elizacloud) continue;
 				if (p === "anthropic" && !directKeys.anthropic) continue;
 				if (p === "openai" && !directKeys.openai) continue;
-				console.log(
-					`[runtime] active provider chain produced no usable attempts; falling back to ${p} (has direct API key in vault)`,
+				logger.info(
+					{ src: "runtime", fallbackProvider: p },
+					"active provider chain produced no usable attempts; falling back to direct API key",
 				);
 				await pushFor(p);
 				if (attempts.length > 0) break;
@@ -1609,8 +1790,9 @@ export class RuntimeService {
 			// discoverable credential (OAuth > API key) so the runtime boots.
 			activeProvider = await this.autoSelectActiveProviderFromAccounts();
 			if (!activeProvider) return [];
-			console.log(
-				`[runtime] no active provider set in vault; auto-selected ${activeProvider} from discovered OAuth/API credentials for this build`,
+			logger.info(
+				{ src: "runtime", autoSelected: activeProvider },
+				"no active provider set in vault; auto-selected from discovered OAuth/API credentials",
 			);
 		}
 		const fallback = await this.vault.getProviderFallbackOrder();
@@ -1642,6 +1824,10 @@ export class RuntimeService {
 		};
 		if (has("anthropic-subscription")) return "anthropic";
 		if (has("openai-codex")) return "openai";
+		// File-based Codex CLI auth (~/.codex/auth.json) isn't in the
+		// account store — check it explicitly so users who only have
+		// Codex CLI configured can boot the runtime.
+		if (await detectSystemCodexAuth()) return "openai";
 		if (has("anthropic-api")) return "anthropic";
 		if (has("openai-api")) return "openai";
 		// API-key-only providers — check the vault / env directly.
@@ -1699,7 +1885,7 @@ export class RuntimeService {
 				prepare: () => {
 					process.env.CODEX_OAUTH_TOKEN = systemCodex.accessToken;
 					process.env.CODEX_CHATGPT_ACCOUNT_ID = systemCodex.accountId;
-					console.log(`[runtime] using system Codex CLI auth (account_id=${systemCodex.accountId})`);
+					logger.debug({ src: "runtime", accountId: systemCodex.accountId.slice(0, 8) + "…" }, "using system Codex CLI auth");
 				},
 			});
 		}
@@ -1724,15 +1910,15 @@ export class RuntimeService {
 						prepare: () => {
 							process.env.CODEX_OAUTH_TOKEN = token;
 							process.env.CODEX_CHATGPT_ACCOUNT_ID = acctId;
-							console.log(`[runtime] using openai-codex account "${account.label}" (id=${account.id})`);
+							logger.debug({ src: "runtime", label: account.label, id: account.id.slice(0, 8) + "…" }, "using openai-codex account");
 						},
 					});
 				} else {
-					console.warn(`[runtime] codex token has no chatgpt_account_id claim (id=${account.id})`);
+					logger.warn({ src: "runtime", id: account.id.slice(0, 8) + "…" }, "codex token has no chatgpt_account_id claim");
 				}
 			}
 		} catch (err) {
-			console.warn("[runtime] codex OAuth probe failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime", err: err instanceof Error ? err.message : err }, "codex OAuth probe failed");
 		}
 		// Stacked OpenAI API-key accounts (multi-key) — each entry on the
 		// `openai-api` table becomes its own attempt with a stable id, so
@@ -1752,21 +1938,15 @@ export class RuntimeService {
 						process.env.OPENAI_API_KEY = key;
 						delete process.env.CODEX_OAUTH_TOKEN;
 						delete process.env.CODEX_CHATGPT_ACCOUNT_ID;
-						console.log(`[runtime] using openai-api account "${account.label}" (id=${account.id})`);
+						logger.debug({ src: "runtime", label: account.label, id: account.id.slice(0, 8) + "…" }, "using openai-api account");
 					},
 				});
 			}
 		} catch (err) {
-			console.warn("[runtime] openai-api probe failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime", err: err instanceof Error ? err.message : err }, "openai-api probe failed");
 		}
-		// Legacy single-slot OPENAI_API_KEY from the vault — kept as the
-		// last OpenAI attempt for back-compat with users who set the key
-		// before multi-key landed. Skips when the same key already appears
-		// in the multi-key table so we don't double-attempt the same value.
-		if (apiKey) {
-			const dedup = attempts.some((a) => a.id.startsWith("openai:api:"));
-			if (!dedup) attempts.push(this.apiAttempt("openai", "openai", "OPENAI_API_KEY", apiKey, "OpenAI API key (primary)"));
-		}
+		// Legacy single-slot OPENAI_API_KEY dedup block removed — no users
+		// have keys in the old format.
 		return attempts;
 	}
 
@@ -1785,9 +1965,7 @@ export class RuntimeService {
 				const exp = c?.expires;
 				if (typeof exp === "number" && exp > 0 && exp <= Date.now()) {
 					const refresh = typeof c?.refresh === "string" ? "(will attempt refresh on use)" : "(no refresh token — re-pair in Settings → Providers)";
-					console.log(
-						`[runtime] anthropic-subscription account "${a.label}" (id=${a.id}) access token expired at ${new Date(exp).toISOString()} ${refresh}`,
-					);
+					logger.info({ src: "runtime", label: a.label, id: a.id.slice(0, 8) + "…", expiredAt: new Date(exp).toISOString() }, `anthropic-subscription access token expired ${refresh}`);
 				}
 			}
 			// Include expired-but-refreshable accounts. The prepare() step
@@ -1822,8 +2000,16 @@ export class RuntimeService {
 						const exp = c.expires;
 						const expired = typeof exp === "number" && exp > 0 && exp <= Date.now();
 						if (expired && typeof c.refresh === "string" && c.refresh.length > 0) {
+							let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 							try {
-								const fresh = await refreshAnthropicToken(c.refresh);
+								const fresh = await Promise.race([
+									refreshAnthropicToken(c.refresh),
+									new Promise<never>((_, reject) => {
+										refreshTimer = setTimeout(() => reject(new Error(
+											`Anthropic OAuth refresh timed out after ${ANTHROPIC_REFRESH_TIMEOUT_MS / 1_000}s — skipping this credential`,
+										)), ANTHROPIC_REFRESH_TIMEOUT_MS);
+									}),
+								]);
 								access = fresh.access;
 								const updated: AccountCredentialRecord = {
 									...account,
@@ -1831,14 +2017,15 @@ export class RuntimeService {
 									updatedAt: Date.now(),
 								};
 								saveAccount(updated);
-								console.log(
-									`[runtime] refreshed anthropic-subscription access token for "${account.label}" (id=${account.id})`,
-								);
+								logger.debug({ src: "runtime", label: account.label, id: account.id.slice(0, 8) + "…" }, "refreshed anthropic-subscription access token");
 							} catch (err) {
-								console.warn(
-									`[runtime] anthropic OAuth refresh failed for "${account.label}": ${err instanceof Error ? err.message : String(err)} — re-pair in Settings → Providers`,
+								logger.warn(
+									{ src: "runtime", label: account.label, err: err instanceof Error ? err.message : String(err) },
+									"anthropic OAuth refresh failed — re-pair in Settings → Providers",
 								);
 								throw err;
+							} finally {
+								clearTimeout(refreshTimer);
 							}
 						}
 						// Flip the plugin into OAuth mode. Critical: without this
@@ -1857,12 +2044,12 @@ export class RuntimeService {
 						// reader (legacy code paths, sub-agent spawns) still
 						// gets a working token while the plugin uses Bearer.
 						process.env.ANTHROPIC_OAUTH_TOKEN = access;
-						console.log(`[runtime] using anthropic-subscription account "${account.label}" (id=${account.id}); auth_mode=oauth`);
+						logger.debug({ src: "runtime", label: account.label, id: account.id.slice(0, 8) + "…", authMode: "oauth" }, "using anthropic-subscription account");
 					},
 				});
 			}
 		} catch (err) {
-			console.warn("[runtime] anthropic OAuth probe failed:", err instanceof Error ? err.message : err);
+			logger.warn({ src: "runtime", err: err instanceof Error ? err.message : err }, "anthropic OAuth probe failed");
 		}
 		// Stacked Anthropic API-key accounts (multi-key). Same pattern as
 		// OpenAI above — each entry is its own attempt with a stable id
@@ -1884,16 +2071,12 @@ export class RuntimeService {
 						delete process.env.ANTHROPIC_OAUTH_TOKEN;
 						process.env.ANTHROPIC_API_KEY = key;
 						process.env.ANTHROPIC_ACCOUNT_ID = account.id;
-						console.log(`[runtime] using anthropic-api account "${account.label}" (id=${account.id})`);
+						logger.debug({ src: "runtime", label: account.label, id: account.id.slice(0, 8) + "…" }, "using anthropic-api account");
 					},
 				});
 			}
 		} catch (err) {
-			console.warn("[runtime] anthropic-api probe failed:", err instanceof Error ? err.message : err);
-		}
-		if (apiKey) {
-			const dedup = attempts.some((a) => a.id.startsWith("anthropic:api:"));
-			if (!dedup) attempts.push(this.apiAttempt("anthropic", "anthropic", "ANTHROPIC_API_KEY", apiKey, "Anthropic API key (primary)"));
+			logger.warn({ src: "runtime", err: err instanceof Error ? err.message : err }, "anthropic-api probe failed");
 		}
 		return attempts;
 	}

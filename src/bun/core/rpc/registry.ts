@@ -13,6 +13,7 @@
  */
 
 import { activityRequests } from "./handlers/activity";
+import { agentMailRequests } from "./handlers/agentmail";
 import { authRequests } from "./handlers/auth";
 import { browserRequests } from "./handlers/browser";
 import { channelsRequests } from "./handlers/channels";
@@ -41,7 +42,13 @@ import { goalsRequests } from "./handlers/goals";
 import { dreamsRequests } from "./handlers/dreams";
 import { promptSlotsRequests } from "./handlers/prompt-slots";
 import { skillsRequests } from "./handlers/skills";
+import { superteamEarnRequests } from "./handlers/superteam-earn";
 import { walletStatsRequests } from "./handlers/wallet-stats";
+import { capsuleRequests, capsuleMessages } from "./handlers/capsule";
+import { trayPopoverRequests, trayPopoverMessages } from "./handlers/tray-popover";
+import { calendarRequests } from "./handlers/calendar";
+import { printingPressRequests } from "./handlers/printing-press";
+import { recapRequests } from "./handlers/recap";
 import type { RpcBroadcaster, RpcDeps } from "./types";
 
 type SendFn = (name: string, payload: unknown) => void;
@@ -119,6 +126,13 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...promptSlotsRequests(deps),
 			...skillsRequests(deps),
 			...walletStatsRequests(deps),
+			...agentMailRequests(deps),
+			...superteamEarnRequests(deps),
+			...calendarRequests(deps),
+			...printingPressRequests(deps),
+			...recapRequests(deps),
+			...capsuleRequests(),
+			...trayPopoverRequests(),
 		},
 		// View→bun fire-and-forget messages (the webview side of the
 		// schema). logWebview routes console/error forwarding into
@@ -127,6 +141,8 @@ export function buildRpcHandlers(deps: RpcDeps) {
 			...viewMessages(deps),
 			...chatMessages(deps),
 			...petsMessages(deps),
+			...capsuleMessages(),
+			...trayPopoverMessages(),
 		},
 	};
 }

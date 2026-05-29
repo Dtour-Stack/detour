@@ -15,7 +15,9 @@
  * second migration.
  */
 
-import type { OwnerConnector } from "../../bun/core/owner-bind";
+// Single source of truth for the connector enum. The bun-side OwnerBindService
+// imports it back from here (shared is a leaf — it must not depend on bun).
+export type OwnerConnector = "telegram" | "discord" | "wechat" | "matrix";
 
 export type OwnerBindOwner = {
 	externalId: string;

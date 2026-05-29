@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useDetourTheme } from "../useDetourTheme";
-import { SidebarIcon } from "../SidebarIcon";
 import { MemoriesPane } from "./memories/MemoriesPane";
 import { RelationshipsPane } from "./relationships/RelationshipsPane";
 import { GraphPane } from "./graph/GraphPane";
@@ -46,19 +45,15 @@ function storedSection(): Section {
 /**
  * Top-level Pensieve view: agent memory + relationships + cross-corpus graph.
  *
- * Two render modes:
- *   - standalone window (the legacy `views://main/pensieve.html` entrypoint):
- *     left-side `.settings-sidebar` nav. Same as Settings windows.
- *   - embedded inside the Detour hub (App.tsx mounts <PensieveView embedded />):
- *     section nav becomes a right-side `.embedded-right-rail`, collapsed to a
- *     thin icon strip by default and expanding to show labels on hover. This
- *     keeps the unified left rail (channels + tools) as the single source of
- *     top-level navigation.
+ * Rendered as a tab inside the Detour hub (App.tsx → renderToolView): section
+ * nav is a right-side `.embedded-right-rail` (a thin icon strip that expands to
+ * labels on hover), keeping the unified left rail (channels + tools) as the
+ * single source of top-level navigation.
  *
  * Section state is persisted to localStorage so picking a section in one mode
  * carries over when the user switches to the other.
  */
-export function PensieveView({ embedded = false }: { embedded?: boolean } = {}) {
+export function PensieveView() {
 	useDetourTheme();
 	const [section, setSection] = useState<Section>(storedSection);
 
@@ -80,54 +75,24 @@ export function PensieveView({ embedded = false }: { embedded?: boolean } = {}) 
 		</>
 	);
 
-	if (embedded) {
-		return (
-			<div className="embedded-view">
-				<main className="embedded-main">{content}</main>
-				<aside className="embedded-right-rail" aria-label="Pensieve sections">
-					<div className="embedded-right-rail-section-label">Knowledge</div>
-					{KNOWLEDGE_SECTIONS.map((s) => (
-						<button
-							key={s.id}
-							type="button"
-							className={section === s.id ? "embedded-right-rail-btn active" : "embedded-right-rail-btn"}
-							onClick={() => setSection(s.id)}
-							title={s.label}
-						>
-							<span className="embedded-right-rail-glyph">{s.label.slice(0, 2).toUpperCase()}</span>
-							<span className="embedded-right-rail-label">{s.label}</span>
-						</button>
-					))}
-				</aside>
-			</div>
-		);
-	}
-
 	return (
-		<div className="settings-shell">
-			<aside className="settings-sidebar">
-				<div className="window-brand">Pensieve</div>
-				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden title="Knowledge">
-						<SidebarIcon name="book" />
-						<span className="section-btn-label">Knowledge</span>
-					</div>
-					<div className="sub-nav">
-						{KNOWLEDGE_SECTIONS.map((s) => (
-							<button
-								key={s.id}
-								type="button"
-								className={section === s.id ? "sub-nav-btn active" : "sub-nav-btn"}
-								onClick={() => setSection(s.id)}
-							>
-								{s.label}
-							</button>
-						))}
-					</div>
-				</div>
-				<div style={{ flex: 1 }} />
+		<div className="embedded-view">
+			<main className="embedded-main">{content}</main>
+			<aside className="embedded-right-rail" aria-label="Pensieve sections">
+				<div className="embedded-right-rail-section-label">Knowledge</div>
+				{KNOWLEDGE_SECTIONS.map((s) => (
+					<button
+						key={s.id}
+						type="button"
+						className={section === s.id ? "embedded-right-rail-btn active" : "embedded-right-rail-btn"}
+						onClick={() => setSection(s.id)}
+						title={s.label}
+					>
+						<span className="embedded-right-rail-glyph">{s.label.slice(0, 2).toUpperCase()}</span>
+						<span className="embedded-right-rail-label">{s.label}</span>
+					</button>
+				))}
 			</aside>
-			<main className="settings-main settings-main-flush">{content}</main>
 		</div>
 	);
 }

@@ -72,12 +72,26 @@ function serviceClassName(svc: ChannelServiceRecord): string {
 	return (svc.constructor as { name?: string } | undefined)?.name ?? "?";
 }
 
+function probeTwitterLive(runtime: IAgentRuntime, svc: ChannelServiceRecord): { status: ChannelLiveStatus; detail?: string } {
+	const authToken = runtime.getSetting("X_AUTH_TOKEN") || process.env.X_AUTH_TOKEN;
+	const ct0 = runtime.getSetting("X_CT0") || process.env.X_CT0;
+	if (!authToken || !ct0) {
+		return { status: "off", detail: "Credentials missing in vault" };
+	}
+	const taskWorker = runtime.getTaskWorker?.("X_AUTONOMY");
+	if (taskWorker) {
+		return { status: "online", detail: "X Autonomy active" };
+	}
+	return { status: "loaded", detail: "X Autonomy service loaded" };
+}
+
 function resolveChannelService(runtime: IAgentRuntime, id: ChannelId): ChannelServiceRecord | undefined {
 	const r = runtime as unknown as {
 		getService?: (t: string) => unknown;
 		getServicesByType?: (t: string) => unknown[];
 	};
-	return (r.getService?.(id) ?? r.getServicesByType?.(id)?.[0]) as ChannelServiceRecord | undefined;
+	const serviceId = id === "twitter" ? "x_autonomy" : id;
+	return (r.getService?.(serviceId) ?? r.getServicesByType?.(serviceId)?.[0]) as ChannelServiceRecord | undefined;
 }
 
 function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: ChannelLiveStatus; detail?: string } {
@@ -92,6 +106,8 @@ function probeChannelLive(runtime: IAgentRuntime, id: ChannelId): { status: Chan
 			return probeGithubLive(svc);
 		case "imessage":
 			return probeImessageLive(svc);
+		case "twitter":
+			return probeTwitterLive(runtime, svc);
 	}
 	return { status: "loaded" };
 }
@@ -202,7 +218,7 @@ function pickPlugin(mod: unknown, name: string): Plugin | null {
 	return candidate ?? null;
 }
 
-export type ChannelId = "discord" | "telegram" | "github" | "imessage";
+export type ChannelId = "discord" | "telegram" | "github" | "imessage" | "twitter";
 
 export interface ChannelDefinition {
 	id: ChannelId;
@@ -320,6 +336,26 @@ const CHANNEL_DEFINITIONS: ChannelDefinition[] = [
 		platform: "macos",
 		pluginPackage: "@elizaos/plugin-imessage",
 		loadPlugin: loadImessage,
+	},
+	{
+		id: "twitter",
+		label: "X (Twitter)",
+		description: "Connect X (Twitter) cookie credentials. Required: X_AUTH_TOKEN and X_CT0.",
+		requiredVaultKeys: ["X_AUTH_TOKEN", "X_CT0"],
+		optionalVaultKeys: [
+			"X_USER_AGENT",
+			"X_AUTONOMY_ENABLED",
+			"X_AUTONOMY_WRITE",
+			"X_AUTONOMY_POST_STATUS_ENABLED",
+			"X_AUTONOMY_DISCOVERY_ENABLED",
+			"X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED",
+			"X_AUTONOMY_FOLLOW_ENABLED",
+			"X_AUTONOMY_INTERVAL_MS",
+			"X_AUTONOMY_DISCOVERY_QUERIES",
+		],
+		platform: "any",
+		pluginPackage: "x-tweets",
+		loadPlugin: async () => null,
 	},
 ];
 
@@ -529,8 +565,15 @@ export class ChannelsService {
 		const settings: Record<string, string> = {};
 		for (const def of CHANNEL_DEFINITIONS) {
 			const platformAvailable = def.platform === "any" || (def.platform === "macos" && process.platform === "darwin");
-			if (!platformAvailable) continue;
-			const { ok } = await this.hasRequiredCredentials(def);
+			if (!platformAvailable) {
+				logger.info({ src: "channels:resolve", channel: def.id }, "skipped (platform unavailable)");
+				continue;
+			}
+			const { ok, missing } = await this.hasRequiredCredentials(def);
+			logger.info(
+				{ src: "channels:resolve", channel: def.id, ok, missing: missing.join(",") || "(none)", requiredKeys: def.requiredVaultKeys.join(",") },
+				"credential check",
+			);
 			if (!ok && def.requiredVaultKeys.length > 0) continue;
 			// IMESSAGE_ENABLED is now in requiredVaultKeys, so the hasAllKeys
 			// check above already gates iMessage on the user enabling it.

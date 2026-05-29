@@ -41,6 +41,7 @@ import { logger } from "@elizaos/core";
 import { broadcaster } from "../../core/rpc/registry";
 import type { Feature } from "../../kernel/registry";
 import type { WindowOpenTarget } from "../../../shared/index";
+import { WINDOW_OPEN_MESSAGE } from "../../../shared/window-targets";
 
 const VALID_TARGETS = new Set<WindowOpenTarget>([
 	"chat",
@@ -53,6 +54,7 @@ const VALID_TARGETS = new Set<WindowOpenTarget>([
 	"pet",
 	"gallery",
 	"portless",
+	"capsule",
 ]);
 
 function parseUrl(raw: string): URL | null {
@@ -170,7 +172,9 @@ function handleWindowRoute(_sub: string, params: URLSearchParams): void {
 	const target = asString(params.get("target"));
 	if (!target) return;
 	if (VALID_TARGETS.has(target as WindowOpenTarget)) {
-		broadcaster.broadcast(`uiOpen${capitalize(target)}` as never, {});
+		// Single source of truth for target→broadcast (shared with the windowOpen
+		// RPC) instead of re-deriving the message name here.
+		broadcaster.broadcast(WINDOW_OPEN_MESSAGE[target as WindowOpenTarget] as never, {});
 	}
 }
 
@@ -225,13 +229,4 @@ function actionParams(params: URLSearchParams): Record<string, string> {
 		if (key !== "name") result[key] = value;
 	}
 	return result;
-}
-
-function capitalize(s: string): string {
-	if (!s) return s;
-	// Special-case kebab → camel for "command-palette" → "CommandPalette".
-	return s
-		.split("-")
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join("");
 }

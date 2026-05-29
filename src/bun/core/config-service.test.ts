@@ -117,12 +117,12 @@ describe("ConfigService", () => {
 		expect(got.mode).toBe("read");
 	});
 
-	test("getModels defaults are gpt-5.2 across buckets", async () => {
+	test("getModels defaults are gpt-5.5 across buckets", async () => {
 		const svc = new ConfigService(makeFakeVaultService());
 		const m = await svc.getModels();
-		expect(m.codexLarge).toBe("gpt-5.2");
-		expect(m.codexSmall).toBe("gpt-5.2");
-		expect(m.codexImage).toBe("gpt-5.2");
+		expect(m.codexLarge).toBe("gpt-5.5");
+		expect(m.codexSmall).toBe("gpt-5.5");
+		expect(m.codexImage).toBe("gpt-5.5");
 		expect(m.openRouterTextLarge).toBe("openrouter/free");
 	});
 

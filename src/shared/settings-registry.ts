@@ -64,6 +64,7 @@ export const X_RUNTIME_SETTING_KEYS = [
 	"X_AUTH_TOKEN",
 	"X_CT0",
 	"X_USER_AGENT",
+	"X_CHROME_PROFILE",
 	"X_AUTONOMY_ENABLED",
 	"X_AUTONOMY_WRITE",
 	"X_AUTONOMY_POST_STATUS_ENABLED",
@@ -99,6 +100,18 @@ export const MIRRORED_ENV_KEYS = [
 	"GMGN_PRIVATE_KEY",
 	"PHANTOM_CONNECT_APP_ID",
 	"PHANTOM_CONNECT_REDIRECT_URL",
+	"AGENTMAIL_API_KEY",
+	"SUPERTEAM_EARN_API_KEY",
+	// Web search (plugin-web-search): inert until a Tavily key is present.
+	"TAVILY_API_KEY",
+	// MCP (plugin-mcp): JSON `{ "servers": { … } }` (or just the servers map).
+	// Inert until set; piped into character.settings.mcp at runtime build.
+	"MCP_SERVERS",
+	// Recap loop: email address the nightly open-questions recap is sent to
+	// (via the agentmail channel). Settable in Settings → Vault → Inventory.
+	"RECAP_EMAIL",
+	// Toggle for the Phase 2 trajectory-learning loop (default on).
+	"DETOUR_TRAJECTORY_LEARNING_ENABLED",
 ] as const;
 
 export type MirroredEnvKey = (typeof MIRRORED_ENV_KEYS)[number];

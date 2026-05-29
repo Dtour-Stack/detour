@@ -4,6 +4,7 @@ import type { WindowHandle } from "../../kernel/windows";
 import { broadcaster } from "../../core/rpc/registry";
 import { setWindowControllerForRpc } from "../../core/rpc/window-controller-registry";
 import type { WindowCommand } from "../../core/api/server";
+import { WINDOW_TARGET_META } from "../../../shared/window-targets";
 
 // Centered medium-sized chat hub. Was 480x720 tray popup pre-channels-
 // merge; now a regular framed window that hosts the agent chat plus a
@@ -37,9 +38,12 @@ export const chatFeature: Feature = {
 				currentHeight = cmd.height;
 				if (chatWindow) {
 					try {
-						(chatWindow.window as unknown as { setSize?: (w: number, h: number) => void }).setSize?.(cmd.width, cmd.height);
+						const win = chatWindow.window as unknown as Record<string, unknown>;
+						if (typeof win.setSize === "function") {
+							(win.setSize as (w: number, h: number) => void)(cmd.width, cmd.height);
+						}
 					} catch {
-						// best-effort; some Electrobun versions might not expose setSize
+						/* best-effort; some Electrobun versions might not expose setSize */
 					}
 				}
 			}
@@ -85,12 +89,10 @@ export const chatFeature: Feature = {
 			else show();
 		}
 
-		// Tray-icon click is owned by the tray-popover feature (richer
-		// menu — see src/bun/features/tray-popover/). The chat menu item
-		// stays so right-click → menu still has the canonical entry; the
-		// popover also has an "Open Chat" grid button.
+		// Tray-icon click is owned by the capsule entrypoint; the chat menu
+		// item stays so right-click still has the canonical hub entry.
 		deps.tray.addMenuItem(
-			{ label: "Open Detour", action: "chat:open", order: 10 },
+			{ label: WINDOW_TARGET_META.chat.menuLabel, action: "chat:open", order: 20 },
 			() => toggle(),
 		);
 

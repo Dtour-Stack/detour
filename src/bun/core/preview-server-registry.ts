@@ -14,7 +14,7 @@
  * removes the portless route and shuts down the listener.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import type { PortlessService } from "./portless";
 import { projectDir, readProjectMeta } from "./agent-projects-core";
@@ -177,11 +177,10 @@ export class PreviewServerRegistry {
 					if (st.isDirectory()) {
 						const index = join(target, "index.html");
 						if (!existsSync(index)) return new Response("Not Found", { status: 404 });
-						return new Response(readFileSync(index), {
-							headers: { "Content-Type": "text/html; charset=utf-8" },
-						});
+						return new Response(Bun.file(index));
 					}
-					return new Response(readFileSync(target), {
+					const file = Bun.file(target);
+					return new Response(file, {
 						headers: { "Content-Type": mimeFor(target) },
 					});
 				} catch {
@@ -197,9 +196,6 @@ export class PreviewServerRegistry {
 		}
 		const hostname = hostnameForSlug(slug, this.portless.snapshot().tld);
 		try {
-			// Cleanup: remove any legacy slug-only entry from earlier
-			// detour versions that stored hostnames without the tld.
-			try { this.portless.removeRoute(slug.toLowerCase()); } catch { /* ignore */ }
 			this.portless.addRoute(hostname, port, { force: true });
 		} catch (err) {
 			server.stop(true);
@@ -279,7 +275,7 @@ export class PreviewServerRegistry {
 
 		// 4. Register with portless.
 		const hostname = hostnameForSlug(slug, this.portless.snapshot().tld);
-		try { this.portless.removeRoute(slug.toLowerCase()); } catch { /* ignore */ }
+		try { this.portless.removeRoute(hostname); } catch { /* ignore */ }
 		this.portless.addRoute(hostname, devPort, { force: true });
 		const state: PreviewState = {
 			slug,
@@ -306,7 +302,7 @@ export class PreviewServerRegistry {
 
 		// Pipe child stderr to the host log so failures surface in the
 		// dev terminal instead of vanishing into the spawn buffer.
-		void pipeChildOutput(`[preview:${slug}]`, child);
+		void pipeChildOutput(`[preview:${slug}]`, child).catch(() => { /* best-effort */ });
 
 		return state;
 	}
@@ -329,7 +325,7 @@ export class PreviewServerRegistry {
 			try { prior.child.kill(); } catch { /* ignore */ }
 		}
 		const hostname = hostnameForSlug(slug, this.portless.snapshot().tld);
-		try { this.portless.removeRoute(slug.toLowerCase()); } catch { /* ignore */ }
+		try { this.portless.removeRoute(hostname); } catch { /* best-effort */ }
 		this.portless.addRoute(hostname, port, { force: true });
 		const state: PreviewState = {
 			slug,

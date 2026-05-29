@@ -279,7 +279,25 @@ function previousActionResults(args: DynamicPromptArgs): Array<{
 	const stateData = (args.state as { data?: Record<string, unknown> } | undefined)?.data;
 	const raw = stateData?.actionResults;
 	if (!Array.isArray(raw)) return [];
-	return raw as Array<{ name?: string; text?: string; success?: boolean }>;
+	// ElizaOS action results store the action name in several possible locations:
+	//   - r.data.actionName (the canonical location in ElizaOS core)
+	//   - r.actionName (some action implementations)
+	//   - r.name (what we originally expected)
+	//   - r.content?.actionName (memory-shaped results)
+	// Normalize everything into { name, text, success } for the guard.
+	return raw.map((r: any) => {
+		const name =
+			r?.data?.actionName ??
+			r?.actionName ??
+			r?.name ??
+			r?.content?.actionName ??
+			undefined;
+		return {
+			name: typeof name === "string" ? name : undefined,
+			text: typeof r?.text === "string" ? r.text : undefined,
+			success: r?.success,
+		};
+	});
 }
 
 async function runFreeformPlanner(
@@ -305,6 +323,26 @@ async function runFreeformPlanner(
 		const n = String(r.name ?? "").trim().toUpperCase();
 		return n.length > 0 && n !== "REPLY";
 	});
+
+	// === Diagnostic: log what we see so we can debug the loop ===
+	const stateData = (args.state as { data?: Record<string, unknown> } | undefined)?.data;
+	const stateValues = (args.state as { values?: Record<string, unknown> } | undefined)?.values;
+	const rawResults = stateData?.actionResults;
+	runtime.logger.info(
+		{
+			src: "detour:freeform-planner:guard",
+			hasStateData: !!stateData,
+			hasActionResults: !!rawResults,
+			actionResultsType: rawResults === undefined ? "undefined" : rawResults === null ? "null" : Array.isArray(rawResults) ? `array[${rawResults.length}]` : typeof rawResults,
+			priorResultCount: priorResults.length,
+			priorNonReplyCount: priorNonReply.length,
+			// Also check if values.actionResults is a non-empty string (formatted text)
+			hasValuesActionResults: typeof stateValues?.actionResults === "string" && stateValues.actionResults.length > 0,
+		},
+		"Post-action guard diagnostics",
+	);
+
+	// Primary guard: data.actionResults array
 	if (priorNonReply.length > 0) {
 		const last = priorNonReply[priorNonReply.length - 1];
 		const lastText = typeof last?.text === "string" ? last.text.trim() : "";
@@ -324,6 +362,27 @@ async function runFreeformPlanner(
 			actions: ["REPLY"],
 			providers: "",
 			text: lastText.length > 0 ? lastText : "Done.",
+			simple: true,
+		};
+	}
+
+	// Secondary guard: if values.actionResults contains formatted text,
+	// the array guard failed (perhaps the items lack a `name` field) but
+	// actions DID run. Force a REPLY to prevent looping.
+	const valuesActionResults = stateValues?.actionResults;
+	if (typeof valuesActionResults === "string" && valuesActionResults.trim().length > 20) {
+		runtime.logger.info(
+			{
+				src: "detour:freeform-planner",
+				valuesLen: valuesActionResults.length,
+			},
+			"Secondary guard: values.actionResults has text but data guard missed — forcing REPLY",
+		);
+		return {
+			thought: "Actions already ran this turn (detected via values.actionResults); wrapping up.",
+			actions: ["REPLY"],
+			providers: "",
+			text: valuesActionResults.slice(0, 2000),
 			simple: true,
 		};
 	}

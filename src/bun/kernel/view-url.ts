@@ -6,7 +6,7 @@
  *     where electrobun.config.ts copies the bundled view (electrobun dev
  *     AND build both produce this).
  *   - With DETOUR_DEV_URL set: use that as the base, hitting per-view
- *     `.html` files (e.g. `${DEV_URL}/activity.html`). Required for
+ *     `.html` files (e.g. `${DEV_URL}/capsule.html`). Required for
  *     Phantom OAuth: the WebView is served from a public HTTPS origin
  *     so Phantom's full-page redirect lands back in the same WebView
  *     with the SDK on it.
@@ -43,13 +43,14 @@ function resolveBundledIndex(): string | null {
 }
 
 /**
- * Resolve the URL for a Detour tray-window React view.
- *   resolveViewUrl()           → views://main/index.html      (chat)
- *   resolveViewUrl("activity") → views://main/activity.html
- *   resolveViewUrl("pensieve") → views://main/pensieve.html
- *   resolveViewUrl("browser")  → views://main/browser.html
- *   resolveViewUrl("portless") → views://main/portless.html
- *   resolveViewUrl("gallery")  → views://main/gallery.html
+ * Resolve the URL for a Detour tray-window React view. Only genuinely
+ * separate windows have their own shell; tool views (pensieve / activity /
+ * browser / gallery / portless) and settings are tabs/drawers inside the hub.
+ *   resolveViewUrl()              → views://main/index.html   (the hub / App)
+ *   resolveViewUrl("capsule")     → views://main/capsule.html
+ *   resolveViewUrl("pet")         → views://main/pet.html
+ *   resolveViewUrl("tray-popover")→ views://main/tray-popover.html
+ *   resolveViewUrl("status-widget")→ views://main/status-widget.html
  *
  * Each per-view HTML inlines `window.__detourView = "<view>"` before
  * loading the shared bundle (index.js / index.css), so React's entry

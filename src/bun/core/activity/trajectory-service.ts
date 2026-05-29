@@ -11,9 +11,21 @@
  * re-implement the same flatten on every render.
  */
 
+import { sql } from "drizzle-orm";
 import type { IAgentRuntime } from "@elizaos/core";
 
 const SERVICE_TYPE = "trajectories";
+
+/** Raw-SQL escape hatch, same path ActivityDbService uses. */
+interface AdapterDb {
+	execute(query: ReturnType<typeof sql.raw>): Promise<{ rows?: Record<string, unknown>[] }>;
+}
+function getAdapterDb(runtime: IAgentRuntime): AdapterDb | null {
+	const r = runtime as unknown as { adapter?: { db?: unknown } };
+	const db = r.adapter?.db;
+	if (!db || typeof (db as AdapterDb).execute !== "function") return null;
+	return db as AdapterDb;
+}
 
 export interface ActivityTrajectoryListItem {
 	id: string;
@@ -541,4 +553,104 @@ export class ActivityTrajectoryService {
 	async getMany(ids: string[]): Promise<ActivityTrajectoryDetail[]> {
 		return Promise.all(ids.map((id) => this.get(id)));
 	}
+
+	/**
+	 * Retention prune: keep only the newest `retentionCount` trajectories (by
+	 * created_at), deleting the rest plus their `trajectory_step_index` rows,
+	 * then VACUUM to free space. Trajectories are full LLM dumps and dominate DB
+	 * size; callers archive them off-machine (HF) BEFORE pruning. Plain VACUUM
+	 * reclaims space for reuse (keeping the DB bounded); a one-off VACUUM FULL
+	 * is what shrinks the file on disk. Best-effort: returns 0s if the DB
+	 * adapter or tables are unavailable.
+	 */
+	async prune(retentionCount: number): Promise<{ trajectoriesDeleted: number; vacuumed: boolean }> {
+		const runtime = this.resolveRuntime();
+		if (!runtime) return { trajectoriesDeleted: 0, vacuumed: false };
+		const db = getAdapterDb(runtime);
+		if (!db) return { trajectoriesDeleted: 0, vacuumed: false };
+		const keep = Math.max(0, Math.floor(retentionCount));
+		try {
+			const before = await db.execute(sql.raw(`SELECT count(*)::int AS c FROM trajectories`));
+			const total = Number((before.rows?.[0] as { c?: number } | undefined)?.c ?? 0);
+			const toDelete = Math.max(0, total - keep);
+			if (toDelete === 0) return { trajectoriesDeleted: 0, vacuumed: false };
+			// Step-index rows first (FK child), then the trajectories themselves.
+			await db.execute(sql.raw(
+				`WITH keep AS (SELECT id FROM trajectories ORDER BY created_at DESC LIMIT ${keep}) ` +
+				`DELETE FROM trajectory_step_index WHERE trajectory_id NOT IN (SELECT id FROM keep)`,
+			));
+			await db.execute(sql.raw(
+				`WITH keep AS (SELECT id FROM trajectories ORDER BY created_at DESC LIMIT ${keep}) ` +
+				`DELETE FROM trajectories WHERE id NOT IN (SELECT id FROM keep)`,
+			));
+			let vacuumed = false;
+			try { await db.execute(sql.raw("VACUUM")); vacuumed = true; } catch { /* adapter may forbid VACUUM in a tx — deletes still free space for reuse */ }
+			return { trajectoriesDeleted: toDelete, vacuumed };
+		} catch {
+			return { trajectoriesDeleted: 0, vacuumed: false };
+		}
+	}
+
+	/**
+	 * Recent completed trajectories not yet learned from — the input to the
+	 * Phase 2 distiller. Carries the reward signal so the distiller can sort
+	 * wins (high reward) from misfires (low/negative reward).
+	 */
+	async listForLearning(limit = 40): Promise<TrajectoryLearningRow[]> {
+		const runtime = this.resolveRuntime();
+		if (!runtime) return [];
+		const db = getAdapterDb(runtime);
+		if (!db) return [];
+		try {
+			const res = await db.execute(sql.raw(
+				`SELECT id, source, status, total_reward, ai_judge_reward, ai_judge_reasoning, step_count, llm_call_count ` +
+				`FROM trajectories WHERE (used_in_training IS NOT TRUE) AND status <> 'active' ` +
+				`ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(500, Math.floor(limit)))}`,
+			));
+			return (res.rows ?? []).map((r) => ({
+				id: String(r.id ?? ""),
+				source: String(r.source ?? ""),
+				status: String(r.status ?? ""),
+				totalReward: Number(r.total_reward ?? 0),
+				aiJudgeReward: r.ai_judge_reward == null ? null : Number(r.ai_judge_reward),
+				aiJudgeReasoning: typeof r.ai_judge_reasoning === "string" ? r.ai_judge_reasoning : null,
+				stepCount: Number(r.step_count ?? 0),
+				llmCallCount: Number(r.llm_call_count ?? 0),
+			})).filter((t) => t.id);
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Mark trajectories as learned-from: sets `used_in_training`, so the Phase 2
+	 * distiller won't reprocess them and Phase 1 retention may prune them.
+	 * Returns the number marked. IDs are validated as UUIDs before interpolation.
+	 */
+	async markLearned(ids: string[]): Promise<number> {
+		const runtime = this.resolveRuntime();
+		if (!runtime) return 0;
+		const db = getAdapterDb(runtime);
+		if (!db) return 0;
+		const safe = ids.filter((id) => /^[0-9a-fA-F-]{36}$/.test(id));
+		if (safe.length === 0) return 0;
+		try {
+			const list = safe.map((id) => `'${id}'`).join(",");
+			await db.execute(sql.raw(`UPDATE trajectories SET used_in_training = TRUE WHERE id IN (${list})`));
+			return safe.length;
+		} catch {
+			return 0;
+		}
+	}
+}
+
+export interface TrajectoryLearningRow {
+	id: string;
+	source: string;
+	status: string;
+	totalReward: number;
+	aiJudgeReward: number | null;
+	aiJudgeReasoning: string | null;
+	stepCount: number;
+	llmCallCount: number;
 }

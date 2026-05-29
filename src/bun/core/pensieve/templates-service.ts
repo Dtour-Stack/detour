@@ -16,7 +16,7 @@
  * and feeds the rendered text into composePromptFromState as a static prompt.
  */
 
-import type { IAgentRuntime } from "@elizaos/core";
+import type { IAgentRuntime, UUID } from "@elizaos/core";
 import { PensieveMemoryService, type PensieveMemorySummary } from "./memory-service";
 
 const TEMPLATE_TAG = "template";
@@ -86,7 +86,7 @@ export class PensieveTemplatesService {
 		const rows = await this.memories.list({ tag: TEMPLATE_TAG, limit: 500 });
 		const out: PensieveTemplateSummary[] = [];
 		for (const row of rows) {
-			const detail = await this.memories.get(row.id as never);
+			const detail = await this.memories.get(row.id as UUID);
 			const body = (detail?.content?.text ?? row.preview) ?? "";
 			out.push({
 				id: row.id,
@@ -103,7 +103,7 @@ export class PensieveTemplatesService {
 	}
 
 	async getTemplate(id: string): Promise<PensieveTemplateDetail | null> {
-		const detail = await this.memories.get(id as never);
+		const detail = await this.memories.get(id as UUID);
 		if (!detail) return null;
 		const body = detail.content?.text ?? "";
 		const variables = extractVariables(body);
@@ -154,7 +154,7 @@ export class PensieveTemplatesService {
 	}
 
 	async deleteTemplate(id: string): Promise<boolean> {
-		return this.memories.remove(id as never);
+		return this.memories.remove(id as UUID);
 	}
 
 	async renderTemplate(id: string, overrides: Record<string, string> = {}): Promise<PensieveTemplateRenderResult | null> {
@@ -181,7 +181,7 @@ export class PensieveTemplatesService {
 		const rows = await this.memories.list({ tag: VAR_TAG_PREFIX, limit: 500 });
 		const out: PensievePromptVariable[] = [];
 		for (const row of rows) {
-			const detail = await this.memories.get(row.id as never);
+			const detail = await this.memories.get(row.id as UUID);
 			if (!detail) continue;
 			const value = detail.content?.text ?? "";
 			const name =
@@ -225,7 +225,7 @@ export class PensieveTemplatesService {
 	async deleteVariable(name: string): Promise<boolean> {
 		const existing = await this.getVariable(name);
 		if (!existing) return false;
-		return this.memories.remove(existing.memoryId as never);
+		return this.memories.remove(existing.memoryId as UUID);
 	}
 
 	/** Pure helper exposed for tests / agent-side code. */
@@ -249,7 +249,7 @@ export class PensieveTemplatesService {
 	 * so user edits in the Pensieve UI persist across restarts.
 	 */
 	async applyTemplatesToRuntime(runtime: IAgentRuntime): Promise<{ applied: number; names: string[] }> {
-		const character = (runtime as unknown as { character?: { templates?: Record<string, string> } }).character;
+		const character = runtime.character as { templates?: Record<string, string> } | undefined;
 		if (!character) return { applied: 0, names: [] };
 		if (!character.templates) character.templates = {};
 		const list = await this.listTemplates();

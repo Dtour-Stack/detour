@@ -344,16 +344,8 @@ export class DreamService {
 	stop(): void {}
 
 	async attach(runtime: IAgentRuntime): Promise<void> {
-		const r = runtime as unknown as {
-			registerTaskWorker?: (worker: {
-				name: string;
-				execute: (runtime: IAgentRuntime, options: Record<string, unknown>, task: Task) => Promise<unknown>;
-			}) => void;
-			getTaskWorker?: (name: string) => unknown;
-		};
-		if (!r.registerTaskWorker || !r.getTaskWorker) return;
-		if (!r.getTaskWorker(DETOUR_DREAM_TASK_NAME)) {
-			r.registerTaskWorker({
+		if (!runtime.getTaskWorker(DETOUR_DREAM_TASK_NAME)) {
+			runtime.registerTaskWorker({
 				name: DETOUR_DREAM_TASK_NAME,
 				execute: async (rt, _options, task) => {
 					await this.execute(rt, task);
@@ -365,17 +357,9 @@ export class DreamService {
 	}
 
 	private async ensureTask(runtime: IAgentRuntime): Promise<void> {
-		const r = runtime as unknown as {
-			getTasks?: (params: { agentIds?: string[]; tags?: string[]; limit?: number }) => Promise<Task[]>;
-			createTask?: (task: Task) => Promise<UUID>;
-			updateTask?: (id: UUID, task: Partial<Task>) => Promise<void>;
-			deleteTask?: (id: UUID) => Promise<void>;
-			agentId?: UUID;
-		};
 		if (!booleanSetting(runtime, "DETOUR_DREAM_ENABLED", true)) return;
-		if (!r.getTasks || !r.createTask) return;
-		const tasks = await r.getTasks({
-			...(r.agentId ? { agentIds: [r.agentId] } : {}),
+		const tasks = await runtime.getTasks({
+			agentIds: runtime.agentId ? [runtime.agentId] : [],
 			tags: ["dream"],
 		});
 		const dreamTasks = tasks.filter(
@@ -383,9 +367,9 @@ export class DreamService {
 		);
 		const [primary, ...duplicates] = dreamTasks;
 		for (const duplicate of duplicates) {
-			if (duplicate.id && r.deleteTask) {
+			if (duplicate.id) {
 				try {
-					await r.deleteTask(duplicate.id);
+					await runtime.deleteTask(duplicate.id);
 				} catch (err) {
 					logger.warn(
 						{ src: "detour:dream", err: err instanceof Error ? err.message : err },
@@ -396,14 +380,14 @@ export class DreamService {
 		}
 		const metadata = buildTaskMetadata(primary?.metadata, runtime);
 		if (primary?.id) {
-			await r.updateTask?.(primary.id, {
+			await runtime.updateTask(primary.id, {
 				description: "Consolidate Pensieve memories from recent sessions",
 				tags: [...TASK_TAGS],
 				metadata,
 			});
 			return;
 		}
-		await r.createTask({
+		await runtime.createTask({
 			name: DETOUR_DREAM_TASK_NAME,
 			description: "Consolidate Pensieve memories from recent sessions",
 			tags: [...TASK_TAGS],
@@ -426,9 +410,7 @@ export class DreamService {
 		if (!booleanSetting(runtime, "DETOUR_DREAM_ENABLED", true)) return;
 		const result = await this.consolidate(runtime);
 		const metadata = isRecord(task.metadata) ? task.metadata : {};
-		await (runtime as unknown as {
-			updateTask?: (id: UUID, task: Partial<Task>) => Promise<void>;
-		}).updateTask?.(task.id as UUID, {
+		await runtime.updateTask(task.id as UUID, {
 			metadata: {
 				...metadata,
 				dreamLastRunAt: Date.now(),

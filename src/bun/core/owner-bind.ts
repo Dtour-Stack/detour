@@ -24,8 +24,10 @@
 
 import { logger, Service, type IAgentRuntime, type Plugin } from "@elizaos/core";
 import type { VaultService } from "./vault";
-
-export type OwnerConnector = "telegram" | "discord" | "wechat" | "matrix";
+// Defined in the shared RPC contract (single source of truth — shared is a
+// leaf); re-exported so existing bun-side consumers keep importing it here.
+import type { OwnerConnector } from "../../shared/rpc/owner-bind";
+export type { OwnerConnector };
 
 export interface VerifyOwnerBindParams {
 	connector: OwnerConnector;

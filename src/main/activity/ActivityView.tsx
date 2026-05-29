@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useDetourTheme } from "../useDetourTheme";
-import { SidebarIcon } from "../SidebarIcon";
 import { TrajectoriesPane } from "./TrajectoriesPane";
 import { LogsPane } from "./LogsPane";
 import { RuntimePane } from "./RuntimePane";
@@ -8,9 +7,11 @@ import { TasksPane } from "./TasksPane";
 import { SubagentsPane } from "./SubagentsPane";
 import { AutonomyPane } from "./AutonomyPane";
 import { PluginsPane } from "./PluginsPane";
+import { PrintingPressPane } from "./PrintingPressPane";
 import { DbPane } from "./DbPane";
 
-type Tab = "trajectories" | "logs" | "tasks" | "subagents" | "autonomy" | "plugins" | "db" | "runtime";
+export type ActivityTab = "trajectories" | "logs" | "tasks" | "subagents" | "autonomy" | "plugins" | "tools" | "db" | "runtime";
+type Tab = ActivityTab;
 
 const TABS: { id: Tab; label: string }[] = [
 	{ id: "trajectories", label: "Trajectories" },
@@ -19,6 +20,7 @@ const TABS: { id: Tab; label: string }[] = [
 	{ id: "subagents", label: "Subagents" },
 	{ id: "autonomy", label: "Autonomy" },
 	{ id: "plugins", label: "Plugins" },
+	{ id: "tools", label: "Tools" },
 	{ id: "db", label: "DB" },
 	{ id: "runtime", label: "Runtime" },
 ];
@@ -26,15 +28,19 @@ const TABS: { id: Tab; label: string }[] = [
 /**
  * Top-level Activity view: trajectories + logs + tasks + runtime introspection.
  *
- * Two render modes (see PensieveView for the same pattern):
- *   - standalone window: legacy `views://main/activity.html` entrypoint, full
- *     left sidebar.
- *   - embedded inside the Detour hub (`<ActivityView embedded />`): tab nav
- *     becomes a right-side rail that collapses to icons and expands on hover.
- *
- * Tab state is persisted to localStorage so it survives mode switches.
+ * Rendered as a tab inside the Detour hub (App.tsx → renderToolView): tab nav
+ * is a right-side rail that collapses to icons and expands on hover. Tab state
+ * persists to localStorage.
  */
-export function ActivityView({ embedded = false }: { embedded?: boolean } = {}) {
+export function ActivityView({
+	focusTab = null,
+	onFocusApplied,
+}: {
+	/** One-shot deep-link from the hub (e.g. "Open Coding Agents" → "subagents"). */
+	focusTab?: ActivityTab | null;
+	/** Called once focusTab has been applied so the caller can clear it. */
+	onFocusApplied?: () => void;
+} = {}) {
 	useDetourTheme();
 	const [tab, setTab] = useState<Tab>(() => {
 		try {
@@ -48,6 +54,19 @@ export function ActivityView({ embedded = false }: { embedded?: boolean } = {}) 
 		try { localStorage.setItem("activity.tab", tab); } catch { /* ignore */ }
 	}, [tab]);
 
+	// Apply a one-shot focus request (works whether or not we're already
+	// mounted), then signal the caller to clear it so normal navigation keeps
+	// the user's last tab. onFocusApplied is intentionally out of the dep list
+	// — the parent recreates it each render, and the focusTab→null transition
+	// re-runs this effect to settle.
+	useEffect(() => {
+		if (focusTab) {
+			setTab(focusTab);
+			onFocusApplied?.();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focusTab]);
+
 	const content = (
 		<>
 			{tab === "trajectories" && <TrajectoriesPane />}
@@ -56,59 +75,30 @@ export function ActivityView({ embedded = false }: { embedded?: boolean } = {}) 
 			{tab === "subagents" && <SubagentsPane />}
 			{tab === "autonomy" && <AutonomyPane />}
 			{tab === "plugins" && <PluginsPane />}
+			{tab === "tools" && <PrintingPressPane />}
 			{tab === "db" && <DbPane />}
 			{tab === "runtime" && <RuntimePane />}
 		</>
 	);
 
-	if (embedded) {
-		return (
-			<div className="embedded-view">
-				<main className="embedded-main">{content}</main>
-				<aside className="embedded-right-rail" aria-label="Activity tabs">
-					<div className="embedded-right-rail-section-label">Runtime</div>
-					{TABS.map((t) => (
-						<button
-							key={t.id}
-							type="button"
-							className={tab === t.id ? "embedded-right-rail-btn active" : "embedded-right-rail-btn"}
-							onClick={() => setTab(t.id)}
-							title={t.label}
-						>
-							<span className="embedded-right-rail-glyph">{t.label.slice(0, 2).toUpperCase()}</span>
-							<span className="embedded-right-rail-label">{t.label}</span>
-						</button>
-					))}
-				</aside>
-			</div>
-		);
-	}
-
 	return (
-		<div className="settings-shell">
-			<aside className="settings-sidebar">
-				<div className="window-brand">Activity</div>
-				<div className="sidebar-section">
-					<div className="section-btn active" aria-hidden title="Live runtime">
-						<SidebarIcon name="pulse" />
-						<span className="section-btn-label">Live runtime</span>
-					</div>
-					<div className="sub-nav">
-						{TABS.map((t) => (
-							<button
-								key={t.id}
-								type="button"
-								className={tab === t.id ? "sub-nav-btn active" : "sub-nav-btn"}
-								onClick={() => setTab(t.id)}
-							>
-								{t.label}
-							</button>
-						))}
-					</div>
-				</div>
-				<div style={{ flex: 1 }} />
+		<div className="embedded-view">
+			<main className="embedded-main">{content}</main>
+			<aside className="embedded-right-rail" aria-label="Activity tabs">
+				<div className="embedded-right-rail-section-label">Runtime</div>
+				{TABS.map((t) => (
+					<button
+						key={t.id}
+						type="button"
+						className={tab === t.id ? "embedded-right-rail-btn active" : "embedded-right-rail-btn"}
+						onClick={() => setTab(t.id)}
+						title={t.label}
+					>
+						<span className="embedded-right-rail-glyph">{t.label.slice(0, 2).toUpperCase()}</span>
+						<span className="embedded-right-rail-label">{t.label}</span>
+					</button>
+				))}
 			</aside>
-			<main className="settings-main settings-main-flush">{content}</main>
 		</div>
 	);
 }

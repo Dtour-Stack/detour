@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatCommandInfo, WindowOpenTarget } from "../../shared/index";
+import type { ChatCommandInfo } from "../../shared/index";
+import { COMMAND_PALETTE_WINDOW_TARGETS, windowTargetMeta } from "../../shared/window-targets";
 import { rpc } from "../rpc";
 
 type PaletteItem = {
@@ -24,21 +25,6 @@ type Props = {
 	onChatCommand: (request: ChatCommandRequest) => void;
 	windowed?: boolean;
 };
-
-const WINDOW_COMMANDS: Array<{
-	id: WindowOpenTarget;
-	title: string;
-	subtitle: string;
-	kicker: string;
-}> = [
-	{ id: "chat", title: "Open Detour", subtitle: "Inbox, agent chat, message feed, and connector status.", kicker: "Window" },
-	{ id: "settings", title: "Open configuration", subtitle: "Providers, vault, models, character, and appearance.", kicker: "Window" },
-	{ id: "pensieve", title: "Open Pensieve", subtitle: "Memories, knowledge, templates, relationships, and graphs.", kicker: "Window" },
-	{ id: "activity", title: "Open Activity", subtitle: "Runtime, logs, trajectories, subagents, tasks, and autonomy.", kicker: "Window" },
-	{ id: "browser", title: "Open agent browser", subtitle: "Inspect, automate, and use saved login flows.", kicker: "Window" },
-	{ id: "agents", title: "Open coding agents", subtitle: "Running coding subagents, logs, previews, and task state.", kicker: "Window" },
-	{ id: "gallery", title: "Open gallery", subtitle: "Generated pictures, videos, and audio.", kicker: "Window" },
-];
 
 /**
  * Deep-link palette items — jump straight to a Settings tab. The format
@@ -124,23 +110,26 @@ export function CommandPalette({
 	}, [open]);
 
 	const items = useMemo(() => {
-		const windowItems: PaletteItem[] = WINDOW_COMMANDS.map((command) => ({
-			id: `window:${command.id}`,
-			title: command.title,
-			subtitle: command.subtitle,
-			kicker: command.kicker,
-			group: "Windows",
-			keywords: command.id,
-			run: () => {
-				onClose();
-				if (command.id === "settings") {
-					onOpenSettings();
-					return;
-				}
-				if (command.id === "chat") return;
-				void rpc.request.windowOpen({ target: command.id });
-			},
-		}));
+		const windowItems: PaletteItem[] = COMMAND_PALETTE_WINDOW_TARGETS.map((target) => {
+			const command = windowTargetMeta(target);
+			return {
+				id: `window:${command.id}`,
+				title: command.title,
+				subtitle: command.subtitle,
+				kicker: "Window",
+				group: "Windows",
+				keywords: command.keywords,
+				run: () => {
+					onClose();
+					if (command.id === "settings") {
+						onOpenSettings();
+						return;
+					}
+					if (command.id === "chat") return;
+					void rpc.request.windowOpen({ target: command.id });
+				},
+			};
+		});
 
 		const settingsItems: PaletteItem[] = SETTINGS_DEEP_LINKS.map((link) => ({
 			id: `settings-tab:${link.id}`,

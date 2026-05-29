@@ -26,12 +26,13 @@ bun run build:canary      # rolling main builds (pushed to GitHub "canary" relea
 bun run build:stable      # tagged release builds (release-please drives versioning)
 
 # tests (Bun test runner)
-bun test                                                # everything under src/
+bun run test                                                # Detour suite (src/bun + src/main + src/shared)
+bun run test:watch                                          # watch the Detour suite
 bun test src/bun/core/runtime-llm-plugin-priority.test.ts   # single file
 bun test --watch path/to/file.test.ts                       # watch one file
 ```
 
-There are ~58 `*.test.ts` files under `src/` plus the eliza submodule's own suites. Tests live alongside source (`foo.ts` + `foo.test.ts`). Use `bun test` — no separate Vitest/Jest runner is wired up at the Detour level.
+Detour's tests live alongside source (`foo.ts` + `foo.test.ts`) under `src/bun`, `src/main`, `src/shared` (~68 files). **Use `bun run test`** — it scopes to those dirs. Do NOT use bare `bun test` or `bun test src/`: Bun matches the path arg as a substring, so `src/` also pulls in the vendored `eliza/**/src/` suites — and those are **Vitest** tests (they use `vi.mock` module-mocking, which Bun's runner doesn't replicate), so dozens fail under `bun test` even though they pass under eliza's own Vitest. Those failures are a test-runner mismatch in the pinned submodule, not Detour bugs, and none of that code is loaded by Detour's runtime. No Vitest/Jest is wired up at the Detour level.
 
 After **any non-trivial change**, run `bun run typecheck`. The codebase is strict TS and many runtime invariants are enforced only at the type layer.
 
@@ -147,6 +148,27 @@ Two ruleset files in `.claude/rules/` are project instructions and override defa
 - **`bunny.md`** — Bunny Ears / Carrot rules. Relevant because Detour's Carrot host follows the same model.
 
 Detour is **not Electron**. Don't apply Electron patterns (`ipcMain`, `webContents`, `app.whenReady`, `protocol.registerFileProtocol`, etc.). See `.claude/rules/electrobun.md` § "Electrobun vs Electron".
+
+## Plumbing discipline
+
+Before **and** after any routing, endpoint, API, page, controller, handler, middleware, feature wiring, import boundary, state store, adapter, repository, port, service, dependency-injection, RPC handler, server action, background job, event handler, migration, or module/package-boundary change, invoke the `plumber` subagent (`.claude/agents/plumber.md`).
+
+- **PRE-FLIGHT** (before editing): have `plumber` identify the canonical lane, the allowed touch set, the forbidden edges, and the Flow Gate. Implement only inside that lane.
+- **POST-FLIGHT** (after editing, against the `git diff`): have `plumber` reconstruct the actual lane and return a Flow Gate result.
+
+Do not declare the task complete until `plumber` returns **Flow Gate Result: PASS**. If it returns **FAIL**, repair the blocking topology violations first. If it returns **UNKNOWN**, state exactly what could not be verified and get explicit user acceptance (with stated risks) before treating the task as done.
+
+The repo standard lane is:
+
+```
+surface -> boundary adapter -> application use case -> domain/policy -> port/interface -> implementation adapter
+```
+
+In Detour terms this maps to: **view (`src/main`) → typed RPC schema (`src/shared/rpc`) → bun RPC handler (`src/bun/core/rpc/handlers`) → core service (`src/bun/core`) → eliza/Detour plugin or adapter (`src/bun/plugins`)**, with the kernel (`src/bun/kernel`) bridging Core ↔ windows and `src/shared` as the single source of truth for wire types.
+
+Avoid rat-tail topology: views reaching into `src/bun` internals instead of typed RPC; feature-to-feature internal imports (`src/bun/features/*`, `src/main/<view>/*`); a `WindowOpenTarget`/dispatch path that re-derives routing instead of using the shared `window-targets.ts` maps; `shared`/`lib`/`utils`/`helpers` junk drawers; global stores as hidden routing; duplicated workflow ownership; application code importing concrete adapters; domain code importing framework/UI/routing/persistence.
+
+**Architecture checks:** this repo currently has **no** committed automated topology check (no dependency-cruiser / eslint-boundaries / madge / Nx), so `plumber` returns UNKNOWN for graph-level claims until set up. Provision them with the **`plumber-setup` skill** (`.claude/skills/plumber-setup/SKILL.md`) — it installs `dependency-cruiser` (+ `madge`), authors a Detour-tuned layering ruleset enforcing the seams above + `no-circular`, wires `check:flow` / `check:cycles`, **validates they run**, and writes a `.claude/topology.md` baseline. `plumber` invokes this skill (or recommends it) the first time it runs. Until then, `bun run typecheck` is the only enforced boundary check.
 
 ## Releases
 

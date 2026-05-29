@@ -37,24 +37,10 @@ import { broadcaster } from "../rpc/registry";
 const RING_CAP = 1000;
 const INBOX_TAG = "inbox";
 
-export type InboxKind = "message" | "notification" | "identity-conflict" | "task" | "event";
-export type InboxStatus = "pending" | "acting" | "acknowledged" | "acted" | "dismissed";
-
-export interface InboxItem {
-	readonly id: string;
-	readonly time: number;
-	readonly kind: InboxKind;
-	readonly status: InboxStatus;
-	readonly title: string;
-	readonly body: string;
-	readonly source: string;
-	readonly channel?: string;
-	readonly fromHandle?: string;
-	readonly entityId?: string;
-	readonly prompted?: boolean;
-	readonly replyText?: string;
-	readonly meta?: Record<string, unknown>;
-}
+// Defined in the shared RPC contract (single source of truth — shared is a
+// leaf); re-exported so existing bun-side consumers keep importing them here.
+import type { InboxItem, InboxKind, InboxStatus } from "../../../shared/rpc/inbox";
+export type { InboxItem, InboxKind, InboxStatus };
 
 export interface PostOptions {
 	kind: InboxKind;
@@ -164,6 +150,10 @@ export class InboxService {
 	private readonly buffer: InboxItem[] = [];
 	private readonly statusOverrides = new Map<string, InboxStatus>();
 	private readonly replyTexts = new Map<string, string>();
+	/** Callbacks fired when an item gets replyText — channels use this
+	 * to route replies back to the originating platform (e.g. AgentMail
+	 * sends the reply back as an email thread response). */
+	private readonly replyCallbacks: Array<(id: string, replyText: string, item: InboxItem) => void> = [];
 	/** Per-inbox-item lock — prevents concurrent `act(id)` calls from
 	 * flipping status "pending → acting → pending" out of order, and
 	 * keeps the JSONL audit trail in causal order per item. */
@@ -305,6 +295,7 @@ export class InboxService {
 		if (s.includes("discord")) return "discord";
 		if (s.includes("telegram")) return "telegram";
 		if (s.includes("imessage") || s.includes("messages")) return "imessage";
+		if (s.includes("agentmail") || s.includes("email")) return "agentmail";
 		return "unknown";
 	}
 
@@ -513,6 +504,7 @@ export class InboxService {
 	}
 
 	private promptText(item: InboxItem): string {
+		const tierHint = item.meta?.modelTier;
 		return [
 			"Inbox item needs action.",
 			`Kind: ${item.kind}`,
@@ -520,6 +512,7 @@ export class InboxService {
 			item.channel ? `Channel: ${item.channel}` : "",
 			item.fromHandle ? `From: ${item.fromHandle}` : "",
 			item.meta?.roomId ? `Room: ${String(item.meta.roomId)}` : "",
+			tierHint ? `Model tier: ${String(tierHint)}` : "",
 			"",
 			`Title: ${item.title}`,
 			item.body ? `Message:\n${item.body}` : "",
@@ -585,6 +578,9 @@ export class InboxService {
 				attachments: [],
 			},
 			createdAt: item.time,
+			// Pass inbox meta (including modelTier) through so downstream
+			// model-routing middleware or action guards can read it.
+			metadata: item.meta ? { ...item.meta } as unknown as Memory["metadata"] : undefined,
 		};
 		// Fire-and-forget: handleMessage can take 20-30s for an LLM round-trip,
 		// and we don't want POST /api/inbox to block on it. eliza's REPLY action
@@ -626,6 +622,15 @@ export class InboxService {
 			);
 		});
 		(item as unknown as { prompted: boolean }).prompted = true;
+	}
+
+	/**
+	 * Register a callback fired whenever an inbox item receives a reply
+	 * from the agent. Used by channel services (AgentMail, etc.) to route
+	 * the agent's reply back to the originating platform.
+	 */
+	onReply(cb: (id: string, replyText: string, item: InboxItem) => void): void {
+		this.replyCallbacks.push(cb);
 	}
 
 	getReply(id: string): string | undefined {
@@ -680,6 +685,21 @@ export class InboxService {
 				{ mode: 0o600 },
 			);
 		} catch {
+		}
+		// Fire reply callbacks so external channels can route the reply
+		// back to the originating platform.
+		const item = this.buffer.find((i) => i.id === id);
+		if (item) {
+			for (const cb of this.replyCallbacks) {
+				try {
+					cb(id, replyText, this.withRuntimeState(item));
+				} catch (err) {
+					logger.debug(
+						{ src: "inbox", err: err instanceof Error ? err.message : err },
+						"reply callback failed",
+					);
+				}
+			}
 		}
 	}
 

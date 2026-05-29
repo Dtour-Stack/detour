@@ -32,12 +32,22 @@ const ONE_SHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // placeholder updateInterval 
 
 export type CronScheduleType = "every" | "at" | "cron";
 
+/**
+ * Which model tier to route this job to.
+ *   - "cheap"  → Use TEXT_SMALL / local model for routine data gathering
+ *   - "sota"   → Use the best available model (GPT-5.5, etc.) for evaluation
+ *   - "auto"   → Let the runtime decide (default, backwards-compatible)
+ */
+export type CronModelTier = "cheap" | "sota" | "auto";
+
 export interface CronJob {
 	id: string;
 	name: string;
 	schedule: string;
 	prompt: string;
 	enabled: boolean;
+	/** Model routing hint. Defaults to "auto" for backwards-compat. */
+	modelTier?: CronModelTier;
 	createdAt: number;
 	createdBy: string;
 	updatedAt: number;
@@ -54,6 +64,7 @@ export interface CronJobInput {
 	prompt: string;
 	enabled?: boolean;
 	createdBy?: string;
+	modelTier?: CronModelTier;
 }
 
 export interface CronJobUpdate {
@@ -126,11 +137,29 @@ export class CronService {
 	private seedDefaults(): void {
 		if (this.defaultsSeededAt) return;
 		const now = Date.now();
-		const id = crypto.randomUUID();
-		const job: CronJob = {
-			id,
+
+		const seedJob = (partial: Omit<CronJob, "id" | "createdAt" | "updatedAt" | "runCount" | "createdBy">) => {
+			const id = crypto.randomUUID();
+			const job: CronJob = {
+				...partial,
+				id,
+				createdAt: now,
+				createdBy: "system:default",
+				updatedAt: now,
+				runCount: 0,
+			};
+			this.jobs.set(id, job);
+			this.audit({ action: "seed-default", jobId: id, ts: now, by: "system" });
+			logger.info({ src: "cron", jobId: id, name: job.name }, `seeded default '${job.name}' cron job`);
+			return id;
+		};
+
+		// ── 1. Check X mentions (every 10m, auto model) ─────────────
+		seedJob({
 			name: "Check X mentions",
 			schedule: "every:10m",
+			modelTier: "auto",
+			enabled: true,
 			prompt: [
 				"Call X_NOTIFICATIONS to fetch new mentions, replies, follows, and likes on @detour_squirrel.",
 				"For each genuine mention or reply addressed to me that I haven't responded to yet, use X_REPLY in-character:",
@@ -142,17 +171,213 @@ export class CronService {
 				"- skip anything that looks like spam, airdrop bait, or a thread I'm not part of.",
 				"If there are zero new actionable mentions, take no action and don't post anything just to fill space.",
 			].join("\n"),
+		});
+
+		// ── 2. Memory hygiene (3 AM UTC, cheap model) ──────────────
+		seedJob({
+			name: "Memory hygiene",
+			schedule: "cron:0 3 * * *",
+			modelTier: "cheap",
 			enabled: true,
-			createdAt: now,
-			createdBy: "system:default",
-			updatedAt: now,
-			runCount: 0,
-		};
-		this.jobs.set(id, job);
+			prompt: [
+				"[MODEL_TIER: cheap — routine data work, SOTA model will review your output]",
+				"",
+				"Perform memory hygiene pass:",
+				"1. Use PENSIEVE_LIST at '/' to list all top-level memory trees.",
+				"2. Use PENSIEVE_SEARCH to find memories older than 14 days.",
+				"3. For each old memory, score it on: recency (when last accessed), relevance (does it inform current goals/relationships), and uniqueness (is it duplicated elsewhere).",
+				"4. Use PENSIEVE_WRITE to tag low-value memories (score < 30) as `memory:stale` — do NOT delete them.",
+				"5. Identify near-duplicate facts and propose merges (list pairs with similarity > 80%).",
+				"6. Check for contradictory facts and flag them as `memory:conflict` via PENSIEVE_WRITE.",
+				"7. Use EVAL_PERSIST to save the hygiene report:",
+				"   path: '/self/hygiene/<date>'",
+				"   data: {totalScanned, staleTagged, mergeProposed, conflictsFound}",
+				"   type: 'benchmark'",
+				"",
+				"Output your report as structured JSON so the eval model can verify your work.",
+			].join("\n"),
+		});
+
+		// ── 3. Relationship context refresh (6 AM UTC, cheap model) ─
+		seedJob({
+			name: "Relationship context refresh",
+			schedule: "cron:0 6 * * *",
+			modelTier: "cheap",
+			enabled: true,
+			prompt: [
+				"[MODEL_TIER: cheap — routine data work, SOTA model will review your output]",
+				"",
+				"Refresh relationship context:",
+				"1. Use PENSIEVE_LIST at '/relationships/' and PENSIEVE_SEARCH for memories referencing people, users, or handles.",
+				"2. For each known relationship, compute a strength score based on: interaction recency, interaction frequency, sentiment of recent exchanges, shared goals/projects.",
+				"3. Categorize: active (interacted <7 days), warm (7-30 days), dormant (>30 days).",
+				"4. Use X_SEARCH to check recent mentions of key relationships on X.",
+				"5. Use PENSIEVE_WRITE to update relationship memories with fresh strength scores and last-interaction timestamps.",
+				"6. Identify any NEW people who've interacted 3+ times but don't have a relationship memory yet — use PENSIEVE_WRITE to create one.",
+				"7. Use EVAL_PERSIST to save the relationship report:",
+				"   path: '/self/relationships/<date>'",
+				"   data: {activeCount, warmCount, dormantCount, newRelationships, updatedScores}",
+				"   type: 'benchmark'",
+				"",
+				"Output your report as structured JSON so the eval model can verify your work.",
+			].join("\n"),
+		});
+
+		// ── 4. Superteam Earn daily scan (9 AM UTC, cheap model) ────
+		seedJob({
+			name: "Superteam Earn daily scan",
+			schedule: "cron:0 9 * * *",
+			modelTier: "cheap",
+			enabled: true,
+			prompt: [
+				"[MODEL_TIER: cheap — routine data work, SOTA model will review your output]",
+				"",
+				"Run SUPERTEAM_EARN_SCAN to fetch all live bounties, projects, and grants from Superteam Earn.",
+				"For each listing, compute viability ranking (high/medium/low) based on agent eligibility, reward, deadline, competition, and skill fit.",
+				"Use PENSIEVE_WRITE to persist results at /earn/listings/<slug> with viability tags.",
+				"The calendar is auto-populated by the earn scanner — no manual calendar creation needed.",
+				"For HIGH viability listings that are new: use SUPERTEAM_EARN_SET_GOAL to set a goal, and draft an initial approach.",
+				"For listings whose deadline has passed: use PENSIEVE_WRITE to mark as earn:expired.",
+				"Use EVAL_PERSIST to save the scan report:",
+				"   path: '/earn/scans/<date>'",
+				"   data: {newCount, activeCount, expiredCount, highViability: [...slugs], urgentDeadlines: [...slugs]}",
+				"   type: 'benchmark'",
+				"",
+				"Summarize: how many new, active, expired, and high-viability listings. Report any that need immediate attention (deadline <3 days).",
+				"",
+				"Output your report as structured JSON so the eval model can verify your work.",
+			].join("\n"),
+		});
+
+		// ── 5. Self-benchmark + tool audit (12 PM UTC, cheap gather → SOTA eval) ──
+		seedJob({
+			name: "Self-benchmark and tool audit",
+			schedule: "cron:0 12 * * *",
+			modelTier: "cheap",
+			enabled: true,
+			prompt: [
+				"[MODEL_TIER: cheap — data gathering phase. Output structured JSON for SOTA eval.]",
+				"",
+				"Perform a self-benchmark and tool audit using the Overwatch observability actions:",
+				"1. Use OVERWATCH_TRAJECTORIES (limit: 100) to list the last 24h of trajectories.",
+				"2. Use OVERWATCH_ACTION_STATS (limit: 100) to get per-action success/failure rates.",
+				"3. For each enabled Printing Press CLI (use PRINTING_PRESS_INSTALLED): check if it appears in the action stats. Was it used? Any errors?",
+				"4. Use OVERWATCH_TRAJECTORY_DETAIL on any failed trajectories to identify root causes.",
+				"5. Check current Earn goals (use DETOUR_ACTIVE_GOAL) — any deadlines approaching? any stalled projects?",
+				"6. Use PENSIEVE_READ to review the last hygiene report and relationship report for issues flagged.",
+				"7. Use EVAL_PERSIST to save raw benchmark data:",
+				"   path: '/self/benchmarks/<date>'",
+				"   data: {trajectoryCount, actionStats, successRate, failedActions, toolUtilization, earnGoalStatus}",
+				"   type: 'benchmark'",
+				"8. List recommendations: CLIs to install (PRINTING_PRESS_SEARCH), CLIs to create (PRINTING_PRESS_CREATE), skills to develop.",
+				"",
+				"Output ALL data as structured JSON. The SOTA eval job will grade this and add corrections.",
+			].join("\n"),
+		});
+
+		// ── 6. SOTA eval pass (12:30 PM UTC, SOTA model reviews cheap outputs) ──
+		seedJob({
+			name: "SOTA eval and corrections",
+			schedule: "cron:30 12 * * *",
+			modelTier: "sota",
+			enabled: true,
+			prompt: [
+				"[MODEL_TIER: sota — you are the supervisor. Review and grade the cheap model's work.]",
+				"",
+				"You are performing the daily SOTA evaluation pass.",
+				"",
+				"STEP 1: Load today's reports from Pensieve:",
+				"- Use PENSIEVE_READ at /self/hygiene/<today> (memory hygiene report)",
+				"- Use PENSIEVE_READ at /self/relationships/<today> (relationship refresh report)",
+				"- Use PENSIEVE_READ at /earn/scans/<today> (earn scan results)",
+				"- Use PENSIEVE_READ at /self/benchmarks/<today> (self-benchmark data)",
+				"",
+				"STEP 2: Cross-verify using Overwatch (ground truth):",
+				"- Use OVERWATCH_TRAJECTORIES (limit: 100) to see what actually happened today",
+				"- Use OVERWATCH_ACTION_STATS (limit: 100) to get actual success rates",
+				"- Compare the cheap model's reported numbers against the actual trajectory data",
+				"- Use OVERWATCH_TRAJECTORY_DETAIL on suspicious trajectories to verify specific claims",
+				"",
+				"STEP 3: For each report, grade and evaluate:",
+				"1. GRADE the quality (A/B/C/D/F) — was the data gathering thorough? accurate? well-structured?",
+				"2. CORRECT any mistakes — wrong viability scores, missed relationships, incorrect memory classifications.",
+				"3. ADD anything the cheap model missed — overlooked patterns, strategic insights, deeper analysis.",
+				"4. RATE effectiveness (0-100) across: accuracy, completeness, insightDepth, actionQuality.",
+				"",
+				"STEP 4: Use EVAL_GRADE for each report with structured scores:",
+				"  job: the job name (e.g., 'memory-hygiene', 'relationship-refresh', 'earn-scan', 'self-benchmark')",
+				"  grade: A/B/C/D/F",
+				"  scores: {accuracy, completeness, insightDepth, actionQuality, overall} (0-100)",
+				"  corrections: string[] of mistakes found",
+				"  additions: string[] of things missed",
+				"  recommendations: string[] for improvement",
+				"  trend: 'improving', 'stable', or 'declining' (compare to PENSIEVE_SEARCH for past evals)",
+				"",
+				"STEP 5: Use EVAL_PERSIST to save the full evaluation:",
+				"  path: '/self/evals/<today>'",
+				"  data: your complete evaluation object (including overwatch verification results)",
+				"  type: 'eval'",
+				"",
+				"If any report scored below 60 on any metric, flag it for prompt revision.",
+				"If the cheap model's reported stats don't match overwatch data, flag as 'data_integrity_issue'.",
+				"If you corrected data, use PENSIEVE_WRITE to update the original entries.",
+			].join("\n"),
+		});
+
+		// ── 7. Earn project work session (3 PM UTC, SOTA model) ─────
+		seedJob({
+			name: "Earn project work session",
+			schedule: "cron:0 15 * * *",
+			modelTier: "sota",
+			enabled: true,
+			prompt: [
+				"[MODEL_TIER: sota — use best available model for high-quality output]",
+				"",
+				"This is your daily focused work session for Superteam Earn projects.",
+				"1. Use DETOUR_ACTIVE_GOAL and PENSIEVE_READ at /earn/scans/ to check active goals. Pick the highest-viability opportunity with the closest deadline.",
+				"2. Use PENSIEVE_READ at /earn/projects/<slug>/progress for any previous progress.",
+				"3. Use PRINTING_PRESS_RUN with relevant installed CLIs to gather research data for the project.",
+				"4. Use X_SEARCH to find relevant conversations, competitors, and context on the topic.",
+				"5. Draft or iterate on the submission — this should be high-quality work:",
+				"   - For bounties: produce the deliverable (code, content, design, research)",
+				"   - For hackathons: build the project incrementally, track progress",
+				"   - For grants: refine the proposal, add supporting data",
+				"6. Use image generation (GENERATE_IMAGE) if the submission benefits from visual assets.",
+				"7. Use PENSIEVE_WRITE to save progress at /earn/projects/<slug>/progress.",
+				"8. If the deadline is <24h and work is complete, use SUPERTEAM_EARN_SUBMIT to submit.",
+				"",
+				"Focus on ONE project per session. Quality over quantity. This is where you earn revenue.",
+			].join("\n"),
+		});
+
+		// ── 8. CLI data refresh (6 PM UTC, cheap model) ────────────
+		seedJob({
+			name: "CLI data refresh",
+			schedule: "cron:0 18 * * *",
+			modelTier: "cheap",
+			enabled: true,
+			prompt: [
+				"[MODEL_TIER: cheap — routine data refresh, SOTA model will review your output]",
+				"",
+				"Refresh data from enabled Printing Press CLIs:",
+				"1. Use PRINTING_PRESS_INSTALLED to get the list of installed CLIs.",
+				"2. For each installed + enabled CLI, use PRINTING_PRESS_RUN with a lightweight query (e.g., 'status', 'health', or the simplest list command).",
+				"   - Check if the API key is still valid (exit code 3 = auth error)",
+				"   - Check if we're rate-limited (exit code 4 = rate limit)",
+				"3. For CLIs that returned fresh data, use PENSIEVE_WRITE to cache key findings at /tools/<slug>/cache.",
+				"4. For CLIs that failed, use PENSIEVE_WRITE to log the issue and tag as `tool:unhealthy`.",
+				"5. If any CLI needs an API key you don't have, use PENSIEVE_WRITE to note it at /self/needs/api-keys.",
+				"6. Use EVAL_PERSIST to save the tool health report:",
+				"   path: '/self/tools/<date>'",
+				"   data: {healthyClis, unhealthyClis, authErrors, rateLimited, missingKeys}",
+				"   type: 'benchmark'",
+				"",
+				"Output your report as structured JSON so the eval model can verify your work.",
+			].join("\n"),
+		});
+
 		this.defaultsSeededAt = now;
 		void this.persist();
-		this.audit({ action: "seed-default", jobId: id, ts: now, by: "system" });
-		logger.info({ src: "cron", jobId: id }, "seeded default 'Check X mentions' cron job");
 	}
 
 	stop(): void {
@@ -166,17 +391,8 @@ export class CronService {
 	 */
 	async attachRuntime(runtime: IAgentRuntime): Promise<void> {
 		this.runtime = runtime;
-		const r = runtime as unknown as {
-			getTaskWorker?: (name: string) => unknown;
-			getTask?: (id: UUID) => Promise<Task | null>;
-			registerTaskWorker: (worker: {
-				name: string;
-				execute: (rt: IAgentRuntime, options: unknown, task: Task) => Promise<undefined | { nextInterval?: number }>;
-				shouldRun?: (rt: IAgentRuntime, task: Task) => Promise<boolean>;
-			}) => void;
-		};
-		if (!r.getTaskWorker?.(CRON_TASK_WORKER_NAME)) {
-			r.registerTaskWorker({
+		if (!runtime.getTaskWorker(CRON_TASK_WORKER_NAME)) {
+			runtime.registerTaskWorker({
 				name: CRON_TASK_WORKER_NAME,
 				shouldRun: async (_rt, task) => {
 					const id = (task.metadata?.values as Record<string, unknown> | undefined)?.cronJobId as string | undefined;
@@ -210,8 +426,8 @@ export class CronService {
 			if (!job.enabled) continue;
 			await this.jobLocks.run(job.id, async () => {
 				let needsTask = !job.taskId;
-				if (job.taskId && r.getTask) {
-					const task = await r.getTask(job.taskId as UUID).catch((err) => {
+				if (job.taskId) {
+					const task = await runtime.getTask(job.taskId as UUID).catch((err) => {
 						logger.warn({ src: "cron", jobId: job.id, taskId: job.taskId, err: err instanceof Error ? err.message : err }, "task mirror lookup failed");
 						return undefined;
 					});
@@ -301,7 +517,7 @@ export class CronService {
 			// Sync mirror task — easier to delete + recreate than patch in place.
 			if (this.runtime && job.taskId) {
 				try {
-					await (this.runtime as unknown as { deleteTask: (id: UUID) => Promise<void> }).deleteTask(job.taskId as UUID);
+					await this.runtime.deleteTask(job.taskId as UUID);
 				} catch { /* row may already be gone */ }
 				job.taskId = undefined;
 			}
@@ -324,7 +540,7 @@ export class CronService {
 			if (!job) return false;
 			if (this.runtime && job.taskId) {
 				try {
-					await (this.runtime as unknown as { deleteTask: (id: UUID) => Promise<void> }).deleteTask(job.taskId as UUID);
+					await this.runtime.deleteTask(job.taskId as UUID);
 				} catch { /* best-effort */ }
 			}
 			this.jobs.delete(id);
@@ -360,11 +576,7 @@ export class CronService {
 		if (!runtime) throw new Error("no runtime");
 		const parsed = this.parsed(job);
 		const interval = parsed?.intervalMs ?? ONE_SHOT_INTERVAL_MS;
-		const r = runtime as unknown as {
-			createTask: (task: Task) => Promise<UUID>;
-			agentId: UUID;
-		};
-		const id = await r.createTask({
+		const id = await runtime.createTask({
 			name: CRON_TASK_WORKER_NAME,
 			description: `cron:${job.name}`,
 			tags: [...CRON_TASK_TAGS],

@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type {
 	CodexPetActivity,
 	CodexPetAnimationState,
@@ -11,6 +12,7 @@ import type {
 	CodexPetsListResponse,
 } from "../../../../shared/rpc/pets";
 import {
+	codexHome,
 	listCodexPets,
 	PET_ANIMATION_ROWS,
 	type PetSummary,
@@ -56,8 +58,9 @@ function toCodexPetSummary(pet: PetSummary): CodexPetSummary {
 	// webview has explicit navigation-rule allowance). To make every
 	// user pet "just work," drop ~/.codex/pets/<id>/ into
 	// build-assets/pets/<id>/ and rebuild the app.
+	const dirName = basename(pet.directory);
 	const spritesheetUrl = pet.bundled
-		? `views://main/pets/${pet.id}/spritesheet.webp`
+		? `views://main/pets/${dirName}/spritesheet.webp`
 		: `file://${pet.spritesheetPath}`;
 	return {
 		...pet,
@@ -115,6 +118,41 @@ function toCatalogEntry(pet: PetSummary): CodexPetCatalogEntry {
 	};
 }
 
+/**
+ * Sync custom pets from ~/.codex/pets/ into build-assets/pets/ so they
+ * get bundled into the app on the next electrobun rebuild. Only copies
+ * pets whose id doesn't already exist in build-assets — existing
+ * bundled entries with richer metadata (companionPreset, persona, etc.)
+ * are never overwritten.
+ */
+function syncCustomPetsToBuildAssets(): { synced: string[]; errors: string[] } {
+	const synced: string[] = [];
+	const errors: string[] = [];
+	const userPetsRoot = join(codexHome(), "pets");
+	if (!existsSync(userPetsRoot)) return { synced, errors };
+	const here = dirname(new URL(import.meta.url).pathname);
+	const buildAssetsRoot = join(here, "..", "..", "..", "..", "build-assets", "pets");
+	if (!existsSync(buildAssetsRoot)) return { synced, errors };
+	for (const entry of readdirSync(userPetsRoot, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const srcDir = join(userPetsRoot, entry.name);
+		const destDir = join(buildAssetsRoot, entry.name);
+		if (existsSync(destDir)) continue; // bundled version wins
+		if (!existsSync(join(srcDir, "pet.json"))) continue;
+		try {
+			mkdirSync(destDir, { recursive: true });
+			for (const file of readdirSync(srcDir)) {
+				if (file.startsWith(".")) continue;
+				copyFileSync(join(srcDir, file), join(destDir, file));
+			}
+			synced.push(entry.name);
+		} catch (err) {
+			errors.push(`${entry.name}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	return { synced, errors };
+}
+
 export function petsRequests(deps: RpcDeps) {
 	return {
 		petActive: async (
@@ -133,6 +171,9 @@ export function petsRequests(deps: RpcDeps) {
 			};
 		},
 		petSpawn: async (params: { pet?: string }): Promise<CodexPetSpawnResponse> => {
+			// Sync any new custom pets from ~/.codex/pets/ into build-assets/
+			// before resolving — ensures new user pets get bundled.
+			syncCustomPetsToBuildAssets();
 			const pet = findPet(typeof params.pet === "string" ? params.pet : null);
 			if (!pet) throw new Error("Codex pet not found");
 			if (!existsSync(pet.spritesheetPath)) throw new Error("pet spritesheet missing");

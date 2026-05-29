@@ -4,14 +4,23 @@ import { logger } from "@elizaos/core";
 import { clearSkillsDirCache } from "@elizaos/skills";
 import { ActivityService } from "./activity";
 import { AgentHfSyncService } from "./agent-hf-sync-service";
+import { TrajectoryLearningService } from "./trajectory-learning-service";
 import { ApiServer } from "./api/server";
 import { AuthService } from "./auth";
 import { BackendOps } from "./backend-ops";
 import { ChannelsService } from "./channels";
 import { ChannelGatewayService } from "./channels/gateway";
+import { AgentMailService } from "./channels/agentmail-service";
+import { SuperteamEarnService } from "./superteam-earn-service";
+import { createSuperteamEarnPlugin } from "../plugins/superteam-earn/index";
+import { PrintingPressClient } from "./printing-press-client";
+import { createPrintingPressPlugin } from "../plugins/printing-press/index";
+import { createEvalPlugin } from "../plugins/eval/index";
+import { createOverwatchPlugin } from "../plugins/overwatch/index";
 import { ConfigService } from "./config-service";
 import { ContinuousImprovementService } from "./continuous-improvement-service";
 import { DreamService } from "./dream-service";
+import { EarnScannerService } from "./earn-scanner-service";
 import { GoalService } from "./goal-service";
 import { attachGoalService } from "../plugins/detour-goal/index";
 import { CronService, type CronJobInput, type CronJobUpdate } from "./cron-service";
@@ -26,7 +35,8 @@ import type { ListMemoriesOptions, PensieveMemoryService } from "./pensieve/memo
 import { RuntimeService } from "./runtime";
 import { createTraySnapshotBuilder } from "./tray-snapshot";
 import { VaultService } from "./vault";
-import { buildRpcDeps } from "./rpc/registry";
+import { buildRpcDeps, broadcaster } from "./rpc/registry";
+import { RecapService } from "./recap-service";
 import type { RpcDeps } from "./rpc/types";
 
 export type CoreOptions = {
@@ -520,7 +530,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const config = new ConfigService(vault);
 	await config.bootstrap(); // load persisted config + push to plugins
 	const channels = new ChannelsService(vault);
-	const runtime = new RuntimeService(vault, auth, channels, undefined, config);
+	const runtime = new RuntimeService(vault, channels, undefined, config);
 	const backendOps = new BackendOps(vault);
 	const pensieve = new PensieveService(runtime, config);
 	pensieve.start();
@@ -532,7 +542,14 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		trajectories: activity.trajectories,
 	});
 	agentHfSync.start();
+	const trajectoryLearning = new TrajectoryLearningService({
+		runtime,
+		trajectories: activity.trajectories,
+	});
+	trajectoryLearning.start();
 	const gateway = new ChannelGatewayService();
+	const agentMail = new AgentMailService(vault, config, gateway);
+	const superteamEarn = new SuperteamEarnService(vault, config);
 	const improvement = new ContinuousImprovementService(runtime, pensieve.memories, activity.logs);
 	improvement.start();
 	// Goal service: capture explicit user goals + thread into sub-agent
@@ -541,6 +558,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const goal = new GoalService(() => runtime.peek(), pensieve.memories);
 	attachGoalService(goal);
 	runtime.setGoalService(goal);
+	const earnScanner = new EarnScannerService(pensieve.memories, goal);
 	// Guaranteed spawn-action wrap: runs once the AgentRuntime is fully
 	// assembled (orchestrator's PTYService + CodingWorkspaceService have
 	// finished their async start), so CREATE_TASK / SPAWN_AGENT are in
@@ -575,6 +593,8 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	});
 	const inbox = new InboxService(runtime, gateway);
 	inbox.bindToGateway();
+	agentMail.setInbox(inbox);
+	agentMail.setRuntime(runtime);
 	// Cron / scheduled prompts. JSON-persisted, mirrored as eliza Tasks so they
 	// show in Activity > Tasks. Dispatcher routes a fired job through the inbox
 	// pipeline so the agent processes it via the same messageService.handleMessage
@@ -602,11 +622,16 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 				// still acting, the new fire is skipped; if it's pending
 				// (last attempt failed), it's refreshed and re-prompted.
 				dedupeBySource: true,
+				// Pass model tier hint so downstream routing can use cheap/SOTA appropriately.
+				meta: job.modelTier && job.modelTier !== "auto" ? { modelTier: job.modelTier } : undefined,
 			}),
 		);
 	});
 	cron.start();
 	attachCronRuntime(cron, runtime);
+	runtime.onAfterBuild(async () => {
+		void agentMail.start();
+	});
 
 	// Local llama-server for embeddings (and later, optional chat fallback).
 	// Lazy-spawned on first ensureRunning() call, with model auto-download.
@@ -627,6 +652,15 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 		llama,
 	});
 	const extraPlugins = await loadCarrotPlugins(carrotManager);
+	extraPlugins.push(createSuperteamEarnPlugin(superteamEarn, earnScanner));
+
+	// Printing Press — 181 agent-native Go CLIs. Catalog search, install,
+	// run, and on-the-fly CLI creation from any API name or URL.
+	const printingPress = new PrintingPressClient();
+	extraPlugins.push(createPrintingPressPlugin(printingPress, config));
+	extraPlugins.push(createEvalPlugin());
+	extraPlugins.push(createOverwatchPlugin());
+
 	runtime.setExtraPlugins(extraPlugins);
 
 	// Portless — local-dev reverse proxy giving each app a stable
@@ -703,7 +737,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const api = new ApiServer(
 		runtime,
 		activity,
-		{ dream, improvement, agentHfSync, localChat, companion, pensieve, config },
+		{ dream, improvement, agentHfSync, trajectoryLearning, localChat, companion, pensieve, config },
 		buildTraySnapshot,
 	);
 	const { port } = await api.start(opts.port ?? 2138);
@@ -717,14 +751,22 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 	const { PreviewServerRegistry, setPreviewRegistry } = await import("./preview-server-registry");
 	const previewServers = new PreviewServerRegistry(portless);
 	setPreviewRegistry(previewServers);
+	const { BuildCoordinator, setBuildCoordinator } = await import("./build-coordinator");
+	setBuildCoordinator(new BuildCoordinator());
 
 	// Compose the dependency bag every typed-RPC handler reads from.
 	// Per docs/rpc-migration.md — handlers are window-agnostic; the same
 	// bag is mounted on every webview's RPC instance via WindowFactory.
+	const recap = new RecapService({
+		knowledge: pensieve.knowledge,
+		sendEmail: (to, subject, body) => agentMail.sendEmail(to, subject, body),
+		broadcast: (count) => broadcaster.broadcast("recapPending", { count }),
+	});
+	recap.start();
 	const rpcDeps = buildRpcDeps({
 		runtime, vault, auth, backendOps, config, pensieve, activity,
-		agentHfSync, channels, gateway, inbox, llama, localChat, companion, cron, ownerBind, portless, previewServers,
-		goal, dream, memoryArbiter: arbiter,
+		agentHfSync, agentMail, channels, gateway, inbox, llama, localChat, companion, cron, ownerBind, portless, previewServers, superteamEarn,
+		goal, dream, memoryArbiter: arbiter, earnScanner, printingPress, recap,
 	});
 
 	warmRuntime(runtime);
@@ -749,6 +791,7 @@ export async function startCore(opts: CoreOptions): Promise<CoreHandle> {
 			llama.stop();
 			carrotManager.stopAll();
 			await previewServers.stopAll();
+			agentMail.stop();
 			portless.stop();
 		},
 	};

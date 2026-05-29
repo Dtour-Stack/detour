@@ -1,37 +1,43 @@
-import { resolveViewUrl } from "../../kernel/view-url";
 import type { Feature } from "../../kernel/registry";
-import type { WindowHandle } from "../../kernel/windows";
+import { broadcaster } from "../../core/rpc/registry";
+import { WINDOW_TARGET_META } from "../../../shared/window-targets";
 
-const DEFAULT_WIDTH = 1180;
-const DEFAULT_HEIGHT = 780;
-
+/**
+ * Gallery = generated pictures / videos / audio.
+ *
+ * Lives as a tab inside the Detour hub (chat window), not a separate window.
+ * Opening it shows the hub and broadcasts `uiOpenGallery`, which the React
+ * app turns into `setActiveView("gallery")` (see App.tsx). The `forwarded`
+ * guard stops the kernel's broadcast→event bridge from looping back into
+ * `open()`. Mirrors the browser feature.
+ *
+ * (Previously this also spawned a standalone window, so a single broadcast
+ * opened a window AND switched the hub tab — the duplicate surface is gone.)
+ */
 export const galleryFeature: Feature = {
 	id: "gallery",
 	init(deps) {
-		let win: WindowHandle | null = null;
+		let forwarded = false;
 
 		function open() {
-			if (win) {
-				try { (win.window as { activate?: () => void }).activate?.(); } catch { /* ignore */ }
-				win.show();
-				return;
-			}
-			const handle = deps.windows.createWindow({
-				viewKey: "gallery",
-				title: "Detour Gallery",
-				width: DEFAULT_WIDTH,
-				height: DEFAULT_HEIGHT,
-				centered: true,
-				url: resolveViewUrl("gallery"),
-			});
-			handle.onClose(() => { win = null; });
-			win = handle;
+			deps.events.emit("ui:open-chat", {});
+			const route = () => {
+				forwarded = true;
+				broadcaster.broadcast("uiOpenGallery", {});
+				setTimeout(() => { forwarded = false; }, 0);
+			};
+			setTimeout(route, 150);
+			setTimeout(route, 400);
+			setTimeout(route, 900);
 		}
 
 		deps.tray.addMenuItem(
-			{ label: "Open Gallery", action: "gallery:open", order: 27 },
+			{ label: WINDOW_TARGET_META.gallery.menuLabel, action: "gallery:open", order: 27 },
 			() => open(),
 		);
-		deps.events.on("ui:open-gallery", () => open());
+		deps.events.on("ui:open-gallery", () => {
+			if (forwarded) return;
+			open();
+		});
 	},
 };

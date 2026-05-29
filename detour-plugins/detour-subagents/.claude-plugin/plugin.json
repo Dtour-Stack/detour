@@ -1,0 +1,19 @@
+{
+  "name": "detour-subagents",
+  "version": "0.1.0",
+  "description": "Codebase-integrity subagents. First component: `plumber` — a topology/routing/wiring-integrity specialist that maps the dependency graph, enforces layer boundaries (surface → adapter → use case → domain → port → adapter), and prevents rat-tail topology. Ships with the `plumber-setup` skill that provisions a ratcheting flow-check (dependency-cruiser + madge) and a topology baseline so the agent reasons from evidence, not guesses.",
+  "author": {
+    "name": "dexploarer"
+  },
+  "keywords": [
+    "subagents",
+    "architecture",
+    "topology",
+    "dependency-graph",
+    "routing",
+    "boundaries",
+    "code-review",
+    "dependency-cruiser"
+  ],
+  "license": "MIT"
+}

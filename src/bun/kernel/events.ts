@@ -29,5 +29,7 @@ export type KernelEvents = {
 	"ui:open-portless": Record<string, never>;
 	"ui:open-pet": Record<string, never>;
 	"ui:open-gallery": Record<string, never>;
+	"ui:open-capsule": Record<string, never>;
+	"ui:open-tray-popover": Record<string, never>;
 	notify: { title: string; body?: string; subtitle?: string };
 };

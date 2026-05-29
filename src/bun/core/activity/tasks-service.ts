@@ -19,11 +19,6 @@ const TASK_SERVICE_TYPE = "task";
 
 interface RuntimeTaskShape {
 	taskWorkers?: Map<string, { name: string; shouldRun?: unknown; canExecute?: unknown }>;
-	getTasks?: (params: { tags?: string[]; limit?: number }) => Promise<unknown[]>;
-	getTask?: (id: string) => Promise<unknown | null>;
-	updateTask?: (id: string, task: Record<string, unknown>) => Promise<void>;
-	deleteTask?: (id: string) => Promise<void>;
-	getService?: (type: string) => unknown;
 }
 
 interface TaskServiceShape {
@@ -181,7 +176,7 @@ export class ActivityTasksService {
 		const known = new Set(workers.map((w) => w.name));
 		const tasks: ActivityTaskRecord[] = [];
 		try {
-			const raw = (await r.getTasks?.({ tags: [] })) ?? [];
+			const raw = await runtime.getTasks({ agentIds: [runtime.agentId], tags: [] });
 			for (const item of raw) {
 				const norm = normalizeTask(item, known);
 				if (norm) tasks.push(norm);
@@ -216,20 +211,18 @@ export class ActivityTasksService {
 	async pause(id: string, paused: boolean): Promise<boolean> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return false;
-		const r = runtime as unknown as RuntimeTaskShape;
-		const existing = (await r.getTask?.(id)) as Record<string, unknown> | null | undefined;
+		const existing = await runtime.getTask(id as import("@elizaos/core").UUID);
 		if (!existing) return false;
 		const meta = asObject(existing.metadata);
 		const nextMeta = { ...meta, paused };
-		await r.updateTask?.(id, { metadata: nextMeta });
+		await runtime.updateTask(id as import("@elizaos/core").UUID, { metadata: nextMeta });
 		return true;
 	}
 
 	async remove(id: string): Promise<boolean> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return false;
-		const r = runtime as unknown as RuntimeTaskShape;
-		await r.deleteTask?.(id);
+		await runtime.deleteTask(id as import("@elizaos/core").UUID);
 		return true;
 	}
 
@@ -240,15 +233,14 @@ export class ActivityTasksService {
 	async runNow(id: string): Promise<boolean> {
 		const runtime = this.resolveRuntime();
 		if (!runtime) return false;
-		const r = runtime as unknown as RuntimeTaskShape;
-		const existing = (await r.getTask?.(id)) as Record<string, unknown> | null | undefined;
+		const existing = await runtime.getTask(id as import("@elizaos/core").UUID);
 		if (!existing) return false;
 		const meta = asObject(existing.metadata);
 		const nextMeta = { ...meta };
 		delete nextMeta.updatedAt;
 		delete nextMeta.lastExecuted;
-		await r.updateTask?.(id, { metadata: nextMeta, dueAt: Date.now() });
-		const taskService = r.getService?.(TASK_SERVICE_TYPE) as TaskServiceShape | undefined;
+		await runtime.updateTask(id as import("@elizaos/core").UUID, { metadata: nextMeta as import("@elizaos/core").TaskMetadata, dueAt: Date.now() });
+		const taskService = runtime.getService(TASK_SERVICE_TYPE) as TaskServiceShape | null;
 		try {
 			await taskService?.runDueTasks?.();
 		} catch {

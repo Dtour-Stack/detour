@@ -40,9 +40,15 @@ const CRED_PATTERNS: RegExp[] = [
 	/gho_[A-Za-z0-9]{30,}/g,
 	/ghu_[A-Za-z0-9]{30,}/g,
 	/ghs_[A-Za-z0-9]{30,}/g,
+	/hf_[A-Za-z0-9]{20,}/g, // Hugging Face tokens
+	/xai-[A-Za-z0-9]{20,}/g, // xAI API keys
 	/AKIA[A-Z0-9]{16}/g,
-	/(ANTHROPIC_API_KEY|OPENAI_API_KEY|OPENROUTER_API_KEY|ELIZAOS_CLOUD_API_KEY|ELEVENLABS_API_KEY|GITHUB_TOKEN|GITHUB_AGENT_PAT|GITHUB_USER_PAT)\s*[=:]\s*[^\s,"'}]+/gi,
+	/\bBearer\s+[A-Za-z0-9._\-=+/%]{20,}/gi, // bearer tokens (incl. X public bearer)
+	/\b(?:auth_token|ct0)["'\s]*[=:]["'\s]*[A-Za-z0-9%]{16,}/gi, // X session cookies
+	/\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s"'<>]+/gi, // DB/broker connection strings (carry passwords)
+	/(ANTHROPIC_API_KEY|OPENAI_API_KEY|OPENROUTER_API_KEY|ELIZAOS_CLOUD_API_KEY|ELEVENLABS_API_KEY|GITHUB_TOKEN|GITHUB_AGENT_PAT|GITHUB_USER_PAT|HF_TOKEN|HUGGINGFACE_TOKEN|X_AUTH_TOKEN|X_CT0|GMGN_API_KEY|GMGN_PRIVATE_KEY|SUPABASE_[A-Z_]*KEY|DATABASE_URL|[A-Z0-9_]*PRIVATE_KEY|[A-Z0-9_]*SECRET[A-Z0-9_]*)\s*["']?\s*[=:]\s*["']?[^\s,"'}]+/gi,
 	/-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g,
+	/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, // email addresses (PII)
 ];
 
 const SENSITIVE_PATH_PATTERNS = [/^vault\b/i, /^auth\b/i, /^_meta\b/i, /^_routing\b/i, /^pm\./i, /^config\./i];

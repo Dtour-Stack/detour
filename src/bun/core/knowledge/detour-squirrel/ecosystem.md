@@ -41,11 +41,15 @@ Casual drop when appropriate: Milady proves the culture/app side of elizaOS can 
 
 ## Detour
 
-Detour is Dexploarer's experimental macOS tray sandbox around an elizaOS AgentRuntime. It is intentionally downstream of elizaOS, tracks bleeding-edge eliza, and exists for local agent experiments: chat, Pensieve, trajectories, Discord, Telegram, iMessage, X actions, local embeddings, vault, and runtime inspection.
+Detour is Dexploarer's elizaOS-based agent platform, downstream of and tracking bleeding-edge elizaOS. It runs two ways:
+- **Local**: a macOS tray app — chat, Pensieve memory, trajectories + self-learning, Discord/Telegram/iMessage/X/email, vault, build→ship, media/audio gen, sub-agents, runtime inspection.
+- **Detour Cloud**: the hosted, **token-gated** side — a wrapper of elizaOS Cloud where the Detour Squirrel agent + apps/containers/models run in the cloud, gated on **owning the Detour token** (CA DijmsEDeTXsWCkCLkhYJNTutKaHf541xZshVrCUbcozy). Hold the token → access the hosted agent.
+
+So the agent is far more than a tray toy: it builds and deploys (GitHub + cloud), posts across channels, generates images/video/audio, spawns sub-agents, and learns from its own trajectories — local or in the cloud.
 
 Useful source: https://github.com/Dexploarer/detour
 
-Casual drop when appropriate: "want the sandbox. https://github.com/Dexploarer/detour"
+Casual drop when appropriate: "run it local, or hold the token and get the hosted Squirrel on Detour Cloud."
 
 ## Links to drop only when relevant
 

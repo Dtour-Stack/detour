@@ -25,7 +25,7 @@ type AgentHfSyncDeps = {
 		| "getAgentHfSyncState"
 		| "setAgentHfSyncState"
 	>;
-	trajectories: Pick<ActivityTrajectoryService, "list">;
+	trajectories: Pick<ActivityTrajectoryService, "list" | "prune">;
 	sync?: SyncFn;
 	checkIntervalMs?: number;
 };
@@ -206,6 +206,23 @@ export class AgentHfSyncService {
 				lastCounts: result.counts,
 			});
 			logger.info({ src: "agent-hf-sync", reason: job.reason, destination: job.destination }, "agent data dump synced to Hugging Face");
+			// Archive succeeded → safe to prune locally to the retention window so
+			// the DB stays small. The dump above already redacts secrets (scrub
+			// pass in agent-public-log) before upload.
+			const policy = await this.deps.config.getAgentHfSyncPolicy();
+			if (policy.pruneAfterSync) {
+				try {
+					const pruned = await this.deps.trajectories.prune(policy.retentionCount);
+					if (pruned.trajectoriesDeleted > 0) {
+						logger.info(
+							{ src: "agent-hf-sync", deleted: pruned.trajectoriesDeleted, kept: policy.retentionCount, vacuumed: pruned.vacuumed },
+							"pruned archived trajectories from local DB",
+						);
+					}
+				} catch (pruneErr) {
+					logger.warn({ src: "agent-hf-sync", err: pruneErr instanceof Error ? pruneErr.message : pruneErr }, "post-sync trajectory prune failed");
+				}
+			}
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			job.status = "failed";

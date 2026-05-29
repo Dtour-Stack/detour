@@ -30,25 +30,18 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { KeyedAsyncLock } from "../async-lock";
+// Defined in the shared RPC contract (single source of truth — shared is a
+// leaf); re-exported so existing bun-side consumers keep importing them here.
+import type {
+	GatewayChannel,
+	GatewayDirection,
+	GatewayMessage,
+	IdentityCandidate,
+} from "../../../shared/rpc/gateway";
+export type { GatewayChannel, GatewayDirection, GatewayMessage, IdentityCandidate };
 
 const RING_BUFFER_CAP = 2000;
 const PERSISTED_LIST_CAP = 5000;
-
-export type GatewayDirection = "in" | "out" | "deleted" | "interaction";
-export type GatewayChannel = "discord" | "telegram" | "imessage" | "chat" | "unknown";
-
-export interface GatewayMessage {
-	readonly id: string;
-	readonly time: number;
-	readonly direction: GatewayDirection;
-	readonly channel: GatewayChannel;
-	readonly source: string;
-	readonly roomId: string;
-	readonly entityId: string;
-	readonly externalHandle?: string;
-	readonly text: string;
-	readonly meta?: Record<string, unknown>;
-}
 
 export interface ListOptions {
 	channel?: GatewayChannel;
@@ -58,16 +51,6 @@ export interface ListOptions {
 	q?: string;
 	since?: number;
 	limit?: number;
-}
-
-export interface IdentityCandidate {
-	readonly key: string;
-	readonly channel: GatewayChannel;
-	readonly externalHandle: string;
-	readonly entityIds: string[];
-	readonly firstSeen: number;
-	readonly lastSeen: number;
-	readonly messageCount: number;
 }
 
 interface IdentityRecord {
@@ -157,6 +140,8 @@ function inferChannel(source: string | undefined, memory?: Memory): GatewayChann
 	if (text.includes("telegram")) return "telegram";
 	if (text.includes("imessage") || text.includes("messages")) return "imessage";
 	if (text.includes("tray-app") || text.includes("chat") || text.includes("client_chat")) return "chat";
+	if (text.includes("agentmail") || text.includes("email")) return "agentmail";
+	if (text.includes("twitter") || text.includes("x_autonomy") || text.includes("tweet") || text.includes("x.com")) return "twitter";
 	return "unknown";
 }
 
@@ -209,6 +194,12 @@ function inferExternalHandle(memory: Memory | undefined, channel: GatewayChannel
 			imessage?.id,
 			metadata?.fromId,
 			sender?.id,
+			...common,
+		] : channel === "twitter" ? [
+			metadata?.twitterUserId,
+			metadata?.twitterScreenName,
+			content?.userScreenName,
+			content?.screenName,
 			...common,
 		] : common;
 	for (const c of channelCandidates) {

@@ -7,9 +7,9 @@
  *   - Mutations that the service returns as `boolean` are projected to
  *     `void` on the wire; we throw on `false` so the UI sees the same
  *     error semantic the HTTP route produced via `error(...)`.
- *   - UUID-branded ids cross the wire as `string`; we cast with `as never`
+ *   - UUID-branded ids cross the wire as `string`; we cast with `as UUID`
  *     when calling services (same shape as HTTP did via decodeURIComponent
- *     + `as never`).
+ *     + `as UUID`).
  *   - `pensieveAudit(...)` is preserved on every mutation — observability
  *     for write operations and downstream consumers may depend on it.
  *   - `pensieveMemoryGet` merges `backlinks` from a separate
@@ -38,6 +38,7 @@ import type {
 import { pensieveAudit } from "../../pensieve";
 import type { GraphFilter } from "../../pensieve";
 import type { RpcDeps } from "../types";
+import type { UUID } from "@elizaos/core";
 
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -228,7 +229,7 @@ export function pensieveRequests(deps: RpcDeps) {
 		},
 
 		pensieveMemoryGet: async (params: { id: string }): Promise<PensieveMemoryDetail> => {
-			const detail = await pensieve.memories.get(params.id as never);
+			const detail = await pensieve.memories.get(params.id as UUID);
 			if (!detail) throw new Error("not found");
 			const backlinks = await pensieve.graph.backlinksForMemory(params.id);
 			// Wire shape mirrors HTTP: `{ ...detail, backlinks }`. The bun
@@ -276,7 +277,7 @@ export function pensieveRequests(deps: RpcDeps) {
 			let success = false;
 			let errMsg: string | undefined;
 			try {
-				success = await pensieve.memories.update(params.id as never, params.patch);
+				success = await pensieve.memories.update(params.id as UUID, params.patch);
 			} catch (err) {
 				errMsg = errMessage(err);
 			}
@@ -295,7 +296,7 @@ export function pensieveRequests(deps: RpcDeps) {
 			let success = false;
 			let errMsg: string | undefined;
 			try {
-				success = await pensieve.memories.remove(params.id as never);
+				success = await pensieve.memories.remove(params.id as UUID);
 			} catch (err) {
 				errMsg = errMessage(err);
 			}
@@ -435,7 +436,7 @@ export function pensieveRequests(deps: RpcDeps) {
 		},
 
 		pensievePersonGet: async (params: { id: string }): Promise<PensievePersonDetail> => {
-			const detail = await pensieve.relationships.getPerson(params.id as never);
+			const detail = await pensieve.relationships.getPerson(params.id as UUID);
 			if (!detail) throw new Error("not found");
 			return detail;
 		},
@@ -444,7 +445,7 @@ export function pensieveRequests(deps: RpcDeps) {
 			id: string;
 			tracked: boolean;
 		}): Promise<PensievePersonDetail> => {
-			const detail = await pensieve.relationships.setTracked(params.id as never, params.tracked);
+			const detail = await pensieve.relationships.setTracked(params.id as UUID, params.tracked);
 			if (!detail) throw new Error("track update failed");
 			return detail;
 		},

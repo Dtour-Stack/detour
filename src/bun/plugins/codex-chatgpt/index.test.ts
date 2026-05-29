@@ -36,6 +36,9 @@ describe("codex-chatgpt plugin", () => {
 					key === "CODEX_OAUTH_TOKEN" ? TOKEN :
 					key === "CODEX_CHATGPT_ACCOUNT_ID" ? ACCOUNT_ID :
 					undefined,
+				// A real AgentRuntime always has a populated character; the handler
+				// reads `runtime.character.system` for the instructions.
+				character: { name: "Test", system: "You are a helpful test assistant." },
 			} as IAgentRuntime;
 			const handler = codexChatGptPlugin.models?.[ModelType.TEXT_SMALL];
 			if (typeof handler !== "function") throw new Error("TEXT_SMALL handler missing");

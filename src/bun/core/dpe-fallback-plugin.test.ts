@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { ModelType, type IAgentRuntime } from "@elizaos/core";
+import { ModelType, runWithPlannerReplyContext, type IAgentRuntime } from "@elizaos/core";
 import {
 	installDpeFallbackPatch,
-	runWithPlannerFallbackContext,
 	setCompanionPlannerHook,
 	conversationText,
 } from "./dpe-fallback-plugin";
@@ -63,7 +62,7 @@ describe("dpe fallback patch", () => {
 			simple: true,
 		}));
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -77,7 +76,7 @@ describe("dpe fallback patch", () => {
 			throw new Error("planner failed");
 		});
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -91,7 +90,7 @@ describe("dpe fallback patch", () => {
 			throw new Error("planner failed");
 		});
 
-		await expect(runWithPlannerFallbackContext(
+		await expect(runWithPlannerReplyContext(
 			{ source: "discord", addressed: false },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		)).rejects.toThrow("planner failed");
@@ -102,7 +101,7 @@ describe("dpe fallback patch", () => {
 	test("does not force plain replies for unaddressed Discord messages", async () => {
 		const { runtime, calls } = makeRuntime(async () => null);
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "discord", addressed: false },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -129,7 +128,7 @@ describe("dpe fallback patch", () => {
 			},
 		);
 
-		await runWithPlannerFallbackContext(
+		await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -148,7 +147,7 @@ describe("dpe fallback patch", () => {
 			async () => "Reply generation failed inside my provider path. Logged discord_generation_failed: apiKey=set",
 		);
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -161,7 +160,7 @@ describe("dpe fallback patch", () => {
 			throw new Error("planner failed");
 		});
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "telegram", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -173,7 +172,7 @@ describe("dpe fallback patch", () => {
 	test("does not force plain replies for unaddressed Telegram groups", async () => {
 		const { runtime, calls } = makeRuntime(async () => null);
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "telegram", addressed: false },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -222,7 +221,7 @@ describe("dpe fallback patch", () => {
 			},
 		} satisfies DynamicPromptArgs;
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(argsWithProviders),
 		);
@@ -248,7 +247,7 @@ describe("dpe fallback patch", () => {
 			},
 		);
 
-		await runWithPlannerFallbackContext(
+		await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs),
 		);
@@ -296,7 +295,7 @@ describe("dpe fallback patch", () => {
 			},
 		} satisfies DynamicPromptArgs;
 
-		await runWithPlannerFallbackContext(
+		await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(longPlannerArgs)
 		);
@@ -323,7 +322,7 @@ describe("dpe fallback patch", () => {
 			throw new Error("should not be called because of quota cap");
 		});
 
-		const result = await runWithPlannerFallbackContext(
+		const result = await runWithPlannerReplyContext(
 			{ source: "discord", addressed: true },
 			() => runtime.dynamicPromptExecFromState(plannerArgs)
 		);

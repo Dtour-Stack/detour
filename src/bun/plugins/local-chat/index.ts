@@ -48,6 +48,44 @@ function asBoolean(value: string | undefined): boolean {
 	return ["1", "true", "yes", "on"].includes(n);
 }
 
+// ── Health probe ──────────────────────────────────────────────────
+const HEALTH_CACHE_MS = 5_000;
+const HEALTH_PROBE_TIMEOUT_MS = 1_500;
+
+/** Cached health state so we don't probe on every model call. */
+let lastHealthProbe: { ok: boolean; at: number } | null = null;
+
+/**
+ * Lightweight /health probe with a short-lived cache. Returns true when
+ * the llama-server is responding, false when it's down or unreachable.
+ * The 5s cache means at most one real probe per DPE planning cycle even
+ * when the chain walks TEXT_SMALL → MEDIUM → LARGE in quick succession.
+ */
+async function probeLocalChatHealth(url: string): Promise<boolean> {
+	const now = Date.now();
+	if (lastHealthProbe && now - lastHealthProbe.at < HEALTH_CACHE_MS) {
+		return lastHealthProbe.ok;
+	}
+	try {
+		const ctl = new AbortController();
+		const timer = setTimeout(() => ctl.abort(), HEALTH_PROBE_TIMEOUT_MS);
+		const res = await fetch(`${url}/health`, { signal: ctl.signal });
+		clearTimeout(timer);
+		const ok = res.ok;
+		lastHealthProbe = { ok, at: now };
+		return ok;
+	} catch {
+		lastHealthProbe = { ok: false, at: now };
+		return false;
+	}
+}
+
+/** Invalidate the cached health state — called externally when the
+ *  llama-server is known to have (re)started. */
+export function resetLocalChatHealthCache(): void {
+	lastHealthProbe = null;
+}
+
 /**
  * Resolve the local-chat URL at call time. When DETOUR_LOCAL_CHAT_URL is
  * unset the service hasn't been enabled — throw so the planner's
@@ -393,6 +431,12 @@ function makeTextHandler(modelType: string) {
 		params: GenerateTextParams | string,
 	): Promise<string> => {
 		const url = resolveLocalChatUrl(runtime);
+		const healthy = await probeLocalChatHealth(url);
+		if (!healthy) {
+			throw new Error(
+				`local-chat: llama-server not responding at ${url} — falling through to next provider`,
+			);
+		}
 		const prompt = extractPromptText(params);
 		if (!prompt) return "";
 		const onStreamChunk = extractStreamCallback(params);

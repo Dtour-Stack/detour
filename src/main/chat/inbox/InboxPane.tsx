@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { InboxItem } from "../../../bun/core/inbox";
+import type { InboxItem } from "../../../shared/rpc/inbox";
 import { UI_POLL_INTERVAL_MS } from "../../../shared/timing";
 import { rpc } from "../../rpc";
 

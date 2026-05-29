@@ -12,7 +12,7 @@ import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { useDetourTheme } from "../useDetourTheme";
 
-export function PortlessView({ embedded: _embedded = false }: { embedded?: boolean } = {}) {
+export function PortlessView() {
 	useDetourTheme();
 	const [snapshot, setSnapshot] = useState<PortlessSnapshot | null>(null);
 	const [error, setError] = useState<string | null>(null);

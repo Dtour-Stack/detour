@@ -54,7 +54,8 @@ export type WindowOpenTarget =
 	| "agents"
 	| "pet"
 	| "gallery"
-	| "portless";
+	| "portless"
+	| "capsule";
 
 // Mirrors @elizaos/vault BackendStatus — duplicated here so non-Bun clients
 // (web, cli) don't need the @elizaos/vault dep.
@@ -406,6 +407,13 @@ export type AgentHfSyncPolicy = {
 	everyNewTrajectories: number;
 	minIntervalMinutes: number;
 	failureCooldownMinutes: number;
+	/**
+	 * After a successful (scrubbed) archive, prune local trajectories to keep
+	 * only `retentionCount` newest rows + VACUUM, so the DB stays small. When
+	 * false, archive-only (no local deletion).
+	 */
+	pruneAfterSync: boolean;
+	retentionCount: number;
 };
 
 export type AgentHfSyncState = {
@@ -491,7 +499,8 @@ export type TraySlot =
 	| "gallery"
 	| "settings"
 	| "command-palette"
-	| "portless";
+	| "portless"
+	| "capsule";
 
 export type TrayStatusLabelMode = "terse" | "verbose";
 
@@ -918,7 +927,7 @@ export type PensieveTemplateRenderResult = {
 	missing: string[];
 };
 
-export type ChannelId = "discord" | "telegram" | "github" | "imessage";
+export type ChannelId = "discord" | "telegram" | "github" | "imessage" | "agentmail" | "twitter";
 
 export type ChannelLiveStatus =
 	| "off"
@@ -950,6 +959,110 @@ export type ChannelStatus = {
 
 export type ChannelsSnapshot = {
 	channels: ChannelStatus[];
+};
+
+export type AgentMailConfig = {
+	enabled: boolean;
+	autoReply: boolean;
+	draftMode: boolean;
+};
+
+export type AgentMailStatus = {
+	enabled: boolean;
+	connected: boolean;
+	inboxId: string | null;
+	inboxAddress: string | null;
+	messageCount: number;
+	lastMessageAt: number | null;
+	lastError: string | null;
+};
+
+export type SuperteamEarnConfig = {
+	baseUrl: string;
+	telegramUrl: string;
+	autoNotify: boolean;
+};
+
+export type SuperteamEarnStatus = {
+	configured: boolean;
+	agentId: string | null;
+	username: string | null;
+	claimCode: string | null;
+	claimUrl: string | null;
+};
+
+// ── Printing Press ───────────────────────────────────────────────────
+
+export type PrintingPressConfig = {
+	enabledClis: string[];
+	autoInstall: boolean;
+	allowCreate: boolean;
+};
+
+export type PrintingPressCatalogEntry = {
+	slug: string;
+	category: string;
+	api: string;
+	description: string;
+	searchTerms: string[];
+	installed: boolean;
+	enabled: boolean;
+	hasMcp: boolean;
+	toolCount: number;
+};
+
+export type PrintingPressCatalogSnapshot = {
+	entries: PrintingPressCatalogEntry[];
+	categories: { category: string; count: number; enabledCount: number }[];
+	totalInstalled: number;
+	totalEnabled: number;
+};
+
+// ── Superteam Earn Calendar ──────────────────────────────────────────
+
+export type EarnViabilityTier = "high" | "medium" | "low";
+
+export type EarnCalendarEvent = {
+	id: string;
+	date: string;
+	type: "deadline" | "announcement" | "commitment" | "scan";
+	title: string;
+	slug: string;
+	listingType: "bounty" | "project" | "hackathon" | "grant";
+	viability: EarnViabilityTier;
+	viabilityScore: number;
+	reward: number | null;
+	token: string;
+	sponsor: string;
+	agentAccess: string;
+	submissions: number;
+	hasGoal: boolean;
+	projectDir: string | null;
+	color: string;
+	url: string;
+};
+
+export type EarnViabilityBreakdown = {
+	tier: EarnViabilityTier;
+	score: number;
+	reasons: string[];
+};
+
+export type EarnScanSummary = {
+	scannedAt: string;
+	totalActive: number;
+	newListings: number;
+	expiredListings: number;
+	highViability: number;
+	mediumViability: number;
+	lowViability: number;
+	goalsSet: number;
+	urgentDeadlines: {
+		slug: string;
+		title: string;
+		deadline: string;
+		daysLeft: number;
+	}[];
 };
 
 export type ActivityDbColumn = {

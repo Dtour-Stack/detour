@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SidebarIcon, type IconName } from "../SidebarIcon";
 import { ProvidersTab } from "./ProvidersTab";
+import { AgentMailTab } from "./AgentMailTab";
 import { InventoryTab } from "./InventoryTab";
 import { SavedLoginsTab } from "./SavedLoginsTab";
 import { BackendsTab } from "./BackendsTab";
@@ -21,7 +22,7 @@ import { TrayTab } from "./TrayTab";
 
 type Section = "configuration" | "vault" | "cloud";
 
-type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | "character" | "agent" | "skills" | "os" | "window" | "phantom" | "tray";
+type ConfigTab = "appearance" | "providers" | "models" | "local-ai" | "audio" | "character" | "agent" | "skills" | "os" | "window" | "phantom" | "tray" | "agentmail";
 type VaultTab = "inventory" | "saved-logins" | "backends";
 type CloudTab = "elizacloud" | "apps" | "containers";
 
@@ -33,6 +34,7 @@ const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
 	{ id: "models", label: "Models & Routing" },
 	{ id: "local-ai", label: "Local AI" },
 	{ id: "audio", label: "Audio" },
+	{ id: "agentmail", label: "Email (AgentMail)" },
 	{ id: "character", label: "Agent Character" },
 	{ id: "agent", label: "Agent Permissions" },
 	{ id: "skills", label: "Skills" },
@@ -67,6 +69,8 @@ function ConfigContent({ tab }: { tab: ConfigTab }) {
 			return <LocalAITab />;
 		case "audio":
 			return <AudioTab />;
+		case "agentmail":
+			return <AgentMailTab />;
 		case "character":
 			return <AgentCharacterTab />;
 		case "agent":

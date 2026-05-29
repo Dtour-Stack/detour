@@ -29,6 +29,9 @@ const rpcDef = Electroview.defineRPC<DetourRPC>({
 
 const electroview = new Electrobun.Electroview({ rpc: rpcDef });
 
+let webviewLogForwarderInstalled = false;
+let lastServerTraceId: string | undefined;
+
 export const rpc = rpcDef;
 export const view = electroview;
 
@@ -43,9 +46,6 @@ installWebviewLogForwarder();
  *
  * Forwarding goes over typed RPC via `view.rpc.send.logWebview`.
  */
-let webviewLogForwarderInstalled = false;
-let lastServerTraceId: string | undefined;
-
 function installWebviewLogForwarder(): void {
 	if (webviewLogForwarderInstalled) return;
 	webviewLogForwarderInstalled = true;

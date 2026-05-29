@@ -87,6 +87,7 @@ export type ChatMessages = {
 	uiOpenAgents: Record<string, never>;
 	uiOpenPet: Record<string, never>;
 	uiOpenGallery: Record<string, never>;
+	uiOpenCapsule: Record<string, never>;
 	// Bun → chat view broadcast: insert this command into the chat
 	// composer (and optionally submit). Round-trip pattern — the
 	// palette emits chatCommandRun via rpc.send.chatCommandRun, the

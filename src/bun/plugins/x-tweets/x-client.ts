@@ -97,6 +97,13 @@ export interface XViewer {
 	name?: string;
 }
 
+export interface XTweetMedia {
+	type: "photo" | "video" | "animated_gif" | string;
+	/** Image URL (for video/gif this is the preview thumbnail). */
+	url: string;
+	altText?: string;
+}
+
 export interface XTweetSummary {
 	tweetId: string;
 	authorId?: string;
@@ -107,6 +114,8 @@ export interface XTweetSummary {
 	retweetCount?: number;
 	replyCount?: number;
 	url: string;
+	/** Photos/video/gif attached to the post, so the agent can actually see it. */
+	media?: XTweetMedia[];
 }
 
 export interface XUserSummary {
@@ -591,20 +600,38 @@ export class XClient {
 		// 404 the equivalent GET. So we POST everything for consistency.
 		const url = `${GQL_BASE}/${queryId}/${operationName}`;
 		const body = JSON.stringify({ variables, features: buildFeatures(), queryId });
-		const res = await this.fetchWithTimeout(url, {
-			method: "POST",
-			headers: this.getJsonHeaders(),
-			body,
-		});
-		if (!res.ok) {
+		// X's GraphQL surface intermittently returns transient failures — 429s,
+		// 5xx, and (seen in the wild) a 422 whose body is just "Internal server
+		// error" wrapped as GRAPHQL_VALIDATION_FAILED. Retry those a couple times
+		// with backoff so a momentary hiccup doesn't fail an otherwise-valid read.
+		// A genuine validation error has a real message and is NOT retried.
+		const maxAttempts = 3;
+		let lastError = `${operationName} request failed`;
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			const res = await this.fetchWithTimeout(url, {
+				method: "POST",
+				headers: this.getJsonHeaders(),
+				body,
+			});
+			if (res.ok) {
+				const json = (await res.json()) as { data?: unknown; errors?: Array<{ message?: string }> };
+				if (json.errors && json.errors.length > 0) {
+					const message = json.errors.map((e) => e.message ?? "?").join(", ");
+					if (/internal server error/i.test(message) && attempt < maxAttempts) {
+						await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+						continue;
+					}
+					throw new Error(`${operationName}: ${message}`);
+				}
+				return json;
+			}
 			const text = await res.text();
-			throw new Error(`${operationName} HTTP ${res.status}: ${text.slice(0, 200)}`);
+			lastError = `${operationName} HTTP ${res.status}: ${text.slice(0, 200)}`;
+			const transient = res.status === 429 || res.status >= 500 || (res.status === 422 && /internal server error/i.test(text));
+			if (!transient || attempt === maxAttempts) throw new Error(lastError);
+			await new Promise((resolve) => setTimeout(resolve, attempt * 500));
 		}
-		const json = (await res.json()) as { data?: unknown; errors?: Array<{ message?: string }> };
-		if (json.errors && json.errors.length > 0) {
-			throw new Error(`${operationName}: ${json.errors.map((e) => e.message ?? "?").join(", ")}`);
-		}
-		return json;
+		throw new Error(lastError);
 	}
 
 	private async mutation(
@@ -760,6 +787,23 @@ function collectTweets(data: { data?: unknown }): XTweetSummary[] {
 		const userResults =
 			(obj.core as { user_results?: { result?: ViewerUserResult } } | undefined)?.user_results
 				?.result ?? undefined;
+		const rawMedia =
+			((legacy.extended_entities as { media?: unknown[] } | undefined)?.media) ??
+			((legacy.entities as { media?: unknown[] } | undefined)?.media);
+		const media: XTweetMedia[] = Array.isArray(rawMedia)
+			? rawMedia
+					.map((m) => {
+						const mm = m as Record<string, unknown>;
+						const url = (mm.media_url_https as string) ?? (mm.media_url as string) ?? "";
+						const alt = typeof mm.ext_alt_text === "string" ? mm.ext_alt_text : undefined;
+						return {
+							type: typeof mm.type === "string" ? mm.type : "photo",
+							url,
+							...(alt ? { altText: alt } : {}),
+						} satisfies XTweetMedia;
+					})
+					.filter((m) => m.url.length > 0)
+			: [];
 		out.push({
 			tweetId,
 			text: legacy.full_text as string,
@@ -770,6 +814,7 @@ function collectTweets(data: { data?: unknown }): XTweetSummary[] {
 			retweetCount: legacy.retweet_count as number | undefined,
 			replyCount: legacy.reply_count as number | undefined,
 			url: `https://x.com/i/web/status/${tweetId}`,
+			...(media.length > 0 ? { media } : {}),
 		});
 	});
 	const seen = new Set<string>();

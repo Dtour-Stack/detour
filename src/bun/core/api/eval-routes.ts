@@ -3,11 +3,19 @@
  *
  *   GET  /api/eval/health        → { ok, runtimeBuilt, activeProvider, capActive }
  *   POST /api/eval/send          → drive a turn; returns { ok, traceId, reply, durationMs }
- *                                  body: { text: string, wait?: boolean, timeoutMs?: number }
+ *                                  body: { text, wait?, timeoutMs?,
+ *                                          source?, callerId?, conversationId?,
+ *                                          callbackUrl?, callbackEmail? }
  *   GET  /api/eval/trajectory/:id           → full ActivityTrajectoryDetail JSON
  *   GET  /api/eval/trajectory/:id/simple    → SimpleView extract (request/reply/thinking/actions)
  *   GET  /api/eval/trajectories             → list of recent trajectory summaries
  *                                              (?limit&status — same options as the RPC handler)
+ *
+ * Agent-to-agent features:
+ *   - source / callerId: tag prompts with the caller's identity (logged in trajectory)
+ *   - conversationId: multi-turn threading — calls with the same id share eliza room context
+ *   - callbackUrl: webhook — POST { traceId, reply, durationMs, conversationId } when done
+ *   - callbackEmail: send the reply as an AgentMail email to this address
  *
  * Authentication: every route requires the `X-Detour-Eval-Token` header
  * to match the `DETOUR_EVAL_TOKEN` env var. If the env var is unset the
@@ -25,6 +33,7 @@ import type { RuntimeService } from "../runtime";
 import type { DreamService } from "../dream-service";
 import type { ContinuousImprovementService } from "../continuous-improvement-service";
 import type { AgentHfSyncService } from "../agent-hf-sync-service";
+import type { TrajectoryLearningService } from "../trajectory-learning-service";
 import type { LocalChatService } from "../llama/chat-service";
 import type { CompanionService } from "../llama/companion-service";
 import type { PensieveService } from "../pensieve";
@@ -33,6 +42,7 @@ import { logger } from "@elizaos/core";
 import { extractSimpleView } from "../../../main/activity/trajectory-extractors";
 import { narrate } from "../agent-narrator";
 import { EVAL_WRITABLE_SETTING_KEYS } from "../../../shared/settings-registry";
+import { ConversationCondenserService } from "../pensieve/conversation-condenser";
 
 type Json = (data: unknown, status?: number) => Response;
 type ErrorJson = (message: string, status?: number) => Response;
@@ -44,6 +54,7 @@ export interface EvalRouteDeps {
 	dream?: DreamService;
 	improvement?: ContinuousImprovementService;
 	agentHfSync?: AgentHfSyncService;
+	trajectoryLearning?: TrajectoryLearningService;
 	localChat?: LocalChatService;
 	companion?: CompanionService;
 	pensieve?: PensieveService;
@@ -80,6 +91,16 @@ interface SendBody {
 	text?: unknown;
 	wait?: unknown;
 	timeoutMs?: unknown;
+	/** Source identifier — e.g. "codex", "claude", "cron:daily-review". */
+	source?: unknown;
+	/** Opaque caller identifier for distinguishing prompt origins. */
+	callerId?: unknown;
+	/** Conversation thread id — consecutive calls with the same id share eliza room context. */
+	conversationId?: unknown;
+	/** Webhook URL — when the turn completes, POST { traceId, reply, durationMs, conversationId } here. */
+	callbackUrl?: unknown;
+	/** AgentMail address — send the reply as an email to this address. */
+	callbackEmail?: unknown;
 }
 
 function asString(value: unknown): string | null {
@@ -112,15 +133,21 @@ async function driveTurn(
 	deps: EvalRouteDeps,
 	text: string,
 	timeoutMs: number,
-): Promise<{ reply: string; durationMs: number; trajectoryId: string | null }> {
+	opts?: {
+		source?: string;
+		callerId?: string;
+		conversationId?: string;
+	},
+): Promise<{ reply: string; durationMs: number; trajectoryId: string | null; conversationId?: string }> {
 	const { broadcaster } = await import("../rpc/registry");
 	// Real narration via the local companion model. Falls back to a
 	// canned summary when the companion isn't running so the bubble is
 	// never silent.
 	const echo = text.length > 60 ? text.slice(0, 60) + "…" : text;
+	const sourceLabel = opts?.source ? ` [${opts.source}]` : "";
 	narrate(deps.companion, {
 		kind: "turn-start",
-		fact: `User just asked: "${echo}"`,
+		fact: `User${sourceLabel} just asked: "${echo}"`,
 		fallback: `Thinking about: ${echo}`,
 		traceId: "eval-send",
 	});
@@ -128,15 +155,27 @@ async function driveTurn(
 	const onDelta = (delta: string): void => {
 		chunks.push(delta);
 		broadcaster.broadcast("chatDelta", {
-			convId: "default",
+			convId: opts?.conversationId ?? "default",
 			delta,
 			traceId: "eval-send",
+			source: opts?.source,
 		});
 	};
 	const started = Date.now();
-	const sendPromise = deps.runtime.sendMessage(text, onDelta);
+	// Inject source/caller metadata into the prompt so it's captured
+	// in trajectory logs. The runtime.sendMessage API takes a plain
+	// string, so we prepend a structured header that the agent can see.
+	const metaHeader =
+		opts?.source || opts?.callerId
+			? `[source=${opts.source ?? "unknown"} caller=${opts.callerId ?? "anonymous"} conversation=${opts.conversationId ?? "none"}]\n`
+			: "";
+	const sendPromise = deps.runtime.sendMessage(metaHeader + text, onDelta, {
+		source: opts?.source ?? "eval",
+		conversationId: opts?.conversationId,
+	});
+	let sendTimer: ReturnType<typeof setTimeout> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
-		setTimeout(
+		sendTimer = setTimeout(
 			() => reject(new Error(`eval send timed out after ${timeoutMs}ms`)),
 			timeoutMs,
 		);
@@ -152,6 +191,8 @@ async function driveTurn(
 			traceId: "eval-send",
 		});
 		throw err;
+	} finally {
+		clearTimeout(sendTimer);
 	}
 	const durationMs = Date.now() - started;
 	const reply = chunks.join("");
@@ -164,14 +205,15 @@ async function driveTurn(
 	// notification manager fires a banner, the pet bubble flips from
 	// "thinking" to the actual reply.
 	broadcaster.broadcast("chatComplete", {
-		convId: "default",
+		convId: opts?.conversationId ?? "default",
 		text: reply,
 		summary: reply.slice(0, 200),
 		trajectoryId,
 		durationMs,
 		traceId: "eval-send",
+		source: opts?.source,
 	});
-	return { reply, durationMs, trajectoryId };
+	return { reply, durationMs, trajectoryId, conversationId: opts?.conversationId };
 }
 
 export function evalRoutes(deps: EvalRouteDeps, helpers: EvalRouteHelpers) {
@@ -212,6 +254,7 @@ const evalRouteHandlers: EvalRouteHandler[] = [
 	handleHfSyncEvalRoutes,
 	handleLocalChatEvalRoutes,
 	handleCompanionEvalRoutes,
+	handleContactEvalRoutes,
 ];
 
 async function firstRoute(ctx: EvalRequestContext, handlers: readonly EvalRouteHandler[]): Promise<Response | null> {
@@ -261,20 +304,48 @@ async function handleSendRoute(ctx: EvalRequestContext): Promise<Response | null
 		if (!text) return error("missing 'text' field", 400);
 		const wait = asBool(body.wait, true);
 		const timeoutMs = asNumber(body.timeoutMs, 90_000);
+		const source = asString(body.source) ?? undefined;
+		const callerId = asString(body.callerId) ?? undefined;
+		const conversationId = asString(body.conversationId) ?? undefined;
+		const callbackUrl = asString(body.callbackUrl) ?? undefined;
+		const callbackEmail = asString(body.callbackEmail) ?? undefined;
+
+		if (source || callerId) {
+			logger.info(
+				{ src: "eval", source, callerId, conversationId },
+				"eval/send with source metadata",
+			);
+		}
 
 		if (!wait) {
-			void deps.runtime.sendMessage(text, () => undefined).catch((err) => {
-				logger.warn(
-					{ src: "eval", err: err instanceof Error ? err.message : err },
-					"[EvalRoutes] async send failed",
-				);
-			});
-			return json({ ok: true, async: true, reply: null, trajectoryId: null });
+			// Fire-and-forget, then deliver callback when done
+			void (async () => {
+				try {
+					const result = await driveTurn(deps, text, timeoutMs, { source, callerId, conversationId });
+					if (callbackUrl) {
+						void fireCallback(callbackUrl, result).catch((err) =>
+							logger.warn({ src: "eval", err: err instanceof Error ? err.message : err }, "callback delivery failed"),
+						);
+					}
+				} catch (err) {
+					logger.warn(
+						{ src: "eval", err: err instanceof Error ? err.message : err, source },
+						"async send failed",
+					);
+				}
+			})();
+			return json({ ok: true, async: true, reply: null, trajectoryId: null, source, conversationId });
 		}
 
 		try {
-			const result = await driveTurn(deps, text, timeoutMs);
-			return json({ ok: true, ...result });
+			const result = await driveTurn(deps, text, timeoutMs, { source, callerId, conversationId });
+			// Fire webhook callback in the background if provided
+			if (callbackUrl) {
+				void fireCallback(callbackUrl, result).catch((err) =>
+					logger.warn({ src: "eval", err: err instanceof Error ? err.message : err }, "callback delivery failed"),
+				);
+			}
+			return json({ ok: true, ...result, source, callerId });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			return error(msg, 500);
@@ -282,6 +353,39 @@ async function handleSendRoute(ctx: EvalRequestContext): Promise<Response | null
 	}
 
 	return null;
+}
+
+/**
+ * Fire a webhook callback to the caller's URL after a turn completes.
+ * Best-effort — logs failures but does not retry.
+ */
+async function fireCallback(
+	callbackUrl: string,
+	result: { reply: string; durationMs: number; trajectoryId: string | null; conversationId?: string },
+): Promise<void> {
+	const CALLBACK_TIMEOUT_MS = 10_000;
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), CALLBACK_TIMEOUT_MS);
+	try {
+		const res = await fetch(callbackUrl, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				traceId: result.trajectoryId,
+				reply: result.reply,
+				durationMs: result.durationMs,
+				conversationId: result.conversationId,
+				completedAt: new Date().toISOString(),
+			}),
+			signal: controller.signal,
+		});
+		logger.info(
+			{ src: "eval", callbackUrl, status: res.status },
+			"callback delivered",
+		);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 async function handleTrajectoryRoute(ctx: EvalRequestContext): Promise<Response | null> {
@@ -683,7 +787,7 @@ async function handleCharacterGenerateRoute(ctx: EvalRequestContext): Promise<Re
 	const character = deps.config ? await deps.config.getCharacter() : null;
 	const chunks: string[] = [];
 	try {
-		await deps.runtime.sendMessage(characterGeneratePrompt(input, character), (d) => chunks.push(d));
+		await deps.runtime.sendMessage(characterGeneratePrompt(input, character), (d) => chunks.push(d), { source: "eval:character-gen" });
 	} catch (err) {
 		return error(err instanceof Error ? err.message : "generate failed", 500);
 	}
@@ -782,7 +886,7 @@ async function handleDreamRunRoute(ctx: EvalRequestContext): Promise<Response | 
 	if (req.method === "POST" && path === "/api/eval/dreams/run") {
 		if (!deps.dream) return error("dream service not wired", 503);
 		let body: { instructions?: unknown } = {};
-		try { body = (await req.json()) as { instructions?: unknown }; } catch {}
+		try { body = (await req.json()) as { instructions?: unknown }; } catch { /* optional body */ }
 		const instructions = asString(body.instructions);
 		const result = await deps.dream.runNow(instructions ? { instructions } : {});
 		return json({
@@ -829,7 +933,22 @@ async function handleHfSyncEvalRoutes(ctx: EvalRequestContext): Promise<Response
 		handleHfSyncGetRoute,
 		handleHfSyncRunRoute,
 		handleHfSyncCheckRoute,
+		handleTrajectoryLearningRunRoute,
 	]);
+}
+
+async function handleTrajectoryLearningRunRoute(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+	if (req.method === "POST" && path === "/api/eval/trajectory-learning/run") {
+		if (!deps.trajectoryLearning) return error("trajectory-learning service not wired", 503);
+		try {
+			const result = await deps.trajectoryLearning.tick();
+			return json({ ok: true, result });
+		} catch (err) {
+			return error(err instanceof Error ? err.message : String(err), 500);
+		}
+	}
+	return null;
 }
 
 async function handleHfSyncGetRoute(ctx: EvalRequestContext): Promise<Response | null> {
@@ -852,7 +971,7 @@ async function handleHfSyncRunRoute(ctx: EvalRequestContext): Promise<Response |
 		let body: { reason?: unknown; destination?: unknown; limit?: unknown } = {};
 		try {
 			body = (await req.json()) as typeof body;
-		} catch {}
+		} catch { /* optional body */ }
 		const reason = asString(body.reason) ?? "manual";
 		try {
 			const job = await deps.agentHfSync.startSync(
@@ -914,7 +1033,7 @@ async function handleLocalChatStartRoute(ctx: EvalRequestContext): Promise<Respo
 	if (req.method === "POST" && path === "/api/eval/local-chat/start") {
 		if (!deps.localChat) return error("local-chat service not wired", 503);
 		let body: { preset?: unknown; customModelRef?: unknown; contextSize?: unknown } = {};
-		try { body = (await req.json()) as typeof body; } catch {}
+		try { body = (await req.json()) as typeof body; } catch { /* optional body */ }
 		const config: { preset?: string; customModelRef?: string; contextSize?: number } = {};
 		const preset = asString(body.preset);
 		if (preset) config.preset = preset;
@@ -985,7 +1104,7 @@ async function handleCompanionStart(ctx: EvalRequestContext): Promise<Response> 
 	const { deps, req, json, error } = ctx;
 	if (!deps.companion) return error("companion not wired", 503);
 	let body: { modelRef?: unknown; contextSize?: unknown; preset?: unknown } = {};
-	try { body = (await req.json()) as typeof body; } catch {}
+	try { body = (await req.json()) as typeof body; } catch { /* optional body */ }
 	const config: { modelRef?: string; contextSize?: number; preset?: string } = {};
 	const ref = asString(body.modelRef);
 	if (ref) config.modelRef = ref;
@@ -1010,7 +1129,7 @@ async function handleCompanionAssignments(ctx: EvalRequestContext): Promise<Resp
 	const { deps, req, json, error } = ctx;
 	if (!deps.companion) return error("companion not wired", 503);
 	let body: { assignments?: unknown; reset?: unknown } = {};
-	try { body = (await req.json()) as typeof body; } catch {}
+	try { body = (await req.json()) as typeof body; } catch { /* optional body */ }
 	if (body.reset === true) {
 		deps.companion.resetAssignments();
 		return json({ ok: true, ...deps.companion.status() });
@@ -1099,4 +1218,120 @@ async function handleShouldRespondJob(
 		ok: true,
 		result: await deps.companion.shouldRespond(agentName, channel, recent),
 	});
+}
+
+// ── Contact management routes ─────────────────────────────────────────────
+
+async function handleContactEvalRoutes(ctx: EvalRequestContext): Promise<Response | null> {
+	const { deps, req, path, json, error } = ctx;
+
+	// GET /api/eval/contacts — list all contacts with dossier summaries
+	if (req.method === "GET" && path === "/api/eval/contacts") {
+		if (!deps.pensieve) return error("pensieve not wired", 503);
+		try {
+			const limit = asNumber(
+				new URL(req.url).searchParams.get("limit") ?? undefined,
+				100,
+			);
+			const persons = await deps.pensieve.relationships.listPersons(limit);
+			return json({ ok: true, count: persons.length, contacts: persons });
+		} catch (err) {
+			return error(
+				`contacts list failed: ${err instanceof Error ? err.message : String(err)}`,
+				500,
+			);
+		}
+	}
+
+	// GET /api/eval/contacts/:entityId — full dossier for a contact
+	const contactDetailMatch = path.match(/^\/api\/eval\/contacts\/([a-f0-9-]+)$/);
+	if (req.method === "GET" && contactDetailMatch) {
+		if (!deps.pensieve) return error("pensieve not wired", 503);
+		const entityId = contactDetailMatch[1];
+		try {
+			const detail = await deps.pensieve.relationships.getPerson(entityId as any);
+			if (!detail) return error(`contact ${entityId} not found`, 404);
+			return json({ ok: true, contact: detail });
+		} catch (err) {
+			return error(
+				`contact detail failed: ${err instanceof Error ? err.message : String(err)}`,
+				500,
+			);
+		}
+	}
+
+	// POST /api/eval/contacts/consolidate — trigger cross-channel identity consolidation
+	if (req.method === "POST" && path === "/api/eval/contacts/consolidate") {
+		if (!deps.pensieve) return error("pensieve not wired", 503);
+		try {
+			const result = await deps.pensieve.relationships.consolidateCrossChannelIdentities();
+			return json({ ok: true, ...result });
+		} catch (err) {
+			return error(
+				`consolidation failed: ${err instanceof Error ? err.message : String(err)}`,
+				500,
+			);
+		}
+	}
+
+	// POST /api/eval/contacts/condense — trigger conversation condensation
+	if (req.method === "POST" && path === "/api/eval/contacts/condense") {
+		if (!deps.pensieve) return error("pensieve not wired", 503);
+		const runtime = deps.runtime.peek();
+		if (!runtime) return error("runtime not ready", 503);
+		try {
+			const condenser = new ConversationCondenserService(() => runtime);
+			const result = await condenser.run();
+			return json({ ok: true, ...result });
+		} catch (err) {
+			return error(
+				`condensation failed: ${err instanceof Error ? err.message : String(err)}`,
+				500,
+			);
+		}
+	}
+
+	// POST /api/eval/contacts/prune — trigger stale contact pruning
+	if (req.method === "POST" && path === "/api/eval/contacts/prune") {
+		if (!deps.pensieve) return error("pensieve not wired", 503);
+		try {
+			let body: Record<string, unknown> = {};
+			try { body = await req.json() as Record<string, unknown>; } catch { /* empty body ok */ }
+			const dryRun = body.dryRun === true;
+			const result = await deps.pensieve.relationships.pruneStaleContacts({ dryRun });
+			return json({ ok: true, dryRun, ...result });
+		} catch (err) {
+			return error(
+				`pruning failed: ${err instanceof Error ? err.message : String(err)}`,
+				500,
+			);
+		}
+	}
+
+	// POST /api/eval/contacts/:primaryId/merge — merge secondary into primary
+	const mergeMatch = path.match(/^\/api\/eval\/contacts\/([a-f0-9-]+)\/merge$/);
+	if (req.method === "POST" && mergeMatch) {
+		if (!deps.pensieve) return error("pensieve not wired", 503);
+		const primaryId = mergeMatch[1];
+		try {
+			const body = await req.json() as { secondaryIds?: string[] };
+			const secondaryIds = body.secondaryIds;
+			if (!Array.isArray(secondaryIds) || secondaryIds.length === 0) {
+				return error("missing secondaryIds array", 400);
+			}
+			const result = await deps.pensieve.relationships.mergeEntities(
+				primaryId as any,
+				secondaryIds as any[],
+			);
+			if (!result) return error("merge failed — relationships service may not support merge", 500);
+			return json({ ok: true, contact: result });
+		} catch (err) {
+			return error(
+				`merge failed: ${err instanceof Error ? err.message : String(err)}`,
+				500,
+			);
+		}
+	}
+
+	return null;
 }

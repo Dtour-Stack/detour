@@ -268,6 +268,7 @@ export class ApiServer {
 			dream?: import("../dream-service").DreamService;
 			improvement?: import("../continuous-improvement-service").ContinuousImprovementService;
 			agentHfSync?: import("../agent-hf-sync-service").AgentHfSyncService;
+			trajectoryLearning?: import("../trajectory-learning-service").TrajectoryLearningService;
 			localChat?: import("../llama/chat-service").LocalChatService;
 			companion?: import("../llama/companion-service").CompanionService;
 			pensieve?: import("../pensieve").PensieveService;
@@ -612,6 +613,9 @@ export class ApiServer {
 						: {}),
 					...(this.selfImprovement?.agentHfSync
 						? { agentHfSync: this.selfImprovement.agentHfSync }
+						: {}),
+					...(this.selfImprovement?.trajectoryLearning
+						? { trajectoryLearning: this.selfImprovement.trajectoryLearning }
 						: {}),
 					...(this.selfImprovement?.localChat
 						? { localChat: this.selfImprovement.localChat }

@@ -10,6 +10,7 @@
  */
 
 import type { ActivityService } from "../activity";
+import type { AgentMailService } from "../channels/agentmail-service";
 import type { AgentHfSyncService } from "../agent-hf-sync-service";
 import type { AuthService } from "../auth";
 import type { BackendOps } from "../backend-ops";
@@ -27,8 +28,12 @@ import type { PensieveService } from "../pensieve";
 import type { PortlessService } from "../portless";
 import type { PreviewServerRegistry } from "../preview-server-registry";
 import type { DreamService } from "../dream-service";
+import type { EarnScannerService } from "../earn-scanner-service";
 import type { GoalService } from "../goal-service";
+import type { PrintingPressClient } from "../printing-press-client";
+import type { RecapService } from "../recap-service";
 import type { RuntimeService } from "../runtime";
+import type { SuperteamEarnService } from "../superteam-earn-service";
 import type { VaultService } from "../vault";
 
 export type RpcBroadcaster = {
@@ -54,6 +59,8 @@ export type RpcDeps = {
 	pensieve: PensieveService;
 	activity: ActivityService;
 	agentHfSync: AgentHfSyncService;
+	agentMail: AgentMailService;
+	superteamEarn: SuperteamEarnService;
 	channels: ChannelsService;
 	gateway: ChannelGatewayService;
 	inbox: InboxService;
@@ -67,5 +74,8 @@ export type RpcDeps = {
 	previewServers: PreviewServerRegistry;
 	goal: GoalService;
 	dream: DreamService;
+	earnScanner: EarnScannerService;
+	printingPress: PrintingPressClient;
+	recap: RecapService;
 	broadcaster: RpcBroadcaster;
 };

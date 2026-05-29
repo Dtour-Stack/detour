@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	GatewayMessage,
 	IdentityCandidate as GatewayIdentityCandidate,
-} from "../../../bun/core/channels/gateway";
+} from "../../../shared/rpc/gateway";
 import { UI_POLL_INTERVAL_MS } from "../../../shared/timing";
 import { rpc } from "../../rpc";
 

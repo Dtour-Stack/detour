@@ -27,6 +27,7 @@ import {
 	type TrayPrefs,
 	type TraySlot,
 } from "../../shared/index";
+import { WINDOW_TARGET_META, traySlotMeta } from "../../shared/window-targets";
 import { UI_POLL_INTERVAL_MS } from "../../shared/timing";
 import { rpc } from "../rpc";
 import { onTrayPrefsChanged } from "../rpc-listeners/config";
@@ -34,12 +35,6 @@ import { onTrayPrefsChanged } from "../rpc-listeners/config";
 const POLL_MS = UI_POLL_INTERVAL_MS.trayStatus;
 
 const ICONS = {
-	chat: "💬",
-	pensieve: "🧠",
-	activity: "📊",
-	browser: "🌐",
-	gallery: "🖼",
-	settings: "⚙",
 	quit: "⏻",
 	provider: "✦",
 };
@@ -69,17 +64,6 @@ const EMPTY_SNAPSHOT: Snapshot = {
 	memory: null,
 	prefs: { ...DEFAULT_TRAY_PREFS, slots: [...DEFAULT_TRAY_SLOTS] },
 	recentTrajectories: [],
-};
-
-const SLOT_META: Record<TraySlot, { icon: string; label: string }> = {
-	chat: { icon: "💬", label: "Chat" },
-	pensieve: { icon: "🧠", label: "Pensieve" },
-	activity: { icon: "📊", label: "Activity" },
-	browser: { icon: "🌐", label: "Browser" },
-	gallery: { icon: "🖼", label: "Gallery" },
-	settings: { icon: "⚙", label: "Settings" },
-	"command-palette": { icon: "⌘", label: "Palette" },
-	portless: { icon: "↔", label: "Portless" },
 };
 
 function fmtRelative(ts?: number): string {
@@ -154,7 +138,9 @@ export function TrayPopoverView() {
 	const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
 	const [providerMenuOpen, setProviderMenuOpen] = useState(false);
 	const [switching, setSwitching] = useState(false);
+	const [dragging, setDragging] = useState(false);
 	const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const lastPointer = useRef<{ x: number; y: number } | null>(null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -175,6 +161,28 @@ export function TrayPopoverView() {
 			offPrefs();
 		};
 	}, [refresh]);
+
+	/* ── Drag-to-reposition ── */
+	useEffect(() => {
+		if (!dragging) return;
+		const onMove = (event: PointerEvent) => {
+			if (!lastPointer.current) return;
+			const dx = event.screenX - lastPointer.current.x;
+			const dy = event.screenY - lastPointer.current.y;
+			lastPointer.current = { x: event.screenX, y: event.screenY };
+			rpc.send.trayPopoverDrag({ dx, dy });
+		};
+		const onUp = () => {
+			lastPointer.current = null;
+			setDragging(false);
+		};
+		window.addEventListener("pointermove", onMove);
+		window.addEventListener("pointerup", onUp);
+		return () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("pointerup", onUp);
+		};
+	}, [dragging]);
 
 	const switchProvider = useCallback(
 		async (id: ProviderId) => {
@@ -225,11 +233,17 @@ export function TrayPopoverView() {
 	const companionShared = snap.companion?.sharedWithLocalChat ?? false;
 
 	return (
-		<div className="tray-popover">
+		<div className={`tray-popover${dragging ? " tp-dragging" : ""}`}>
 			<style>{POPOVER_CSS}</style>
 
-			{/* Header — identity + active provider chip */}
-			<header className="tp-header">
+			{/* Header — identity + active provider chip + drag handle */}
+			<header
+				className="tp-header"
+				onPointerDown={(event) => {
+					lastPointer.current = { x: event.screenX, y: event.screenY };
+					setDragging(true);
+				}}
+			>
 				<div className="tp-header-left">
 					<div className="tp-app-name">Detour</div>
 					<div className="tp-app-sub">
@@ -242,6 +256,7 @@ export function TrayPopoverView() {
 					type="button"
 					className="tp-provider-chip"
 					onClick={() => setProviderMenuOpen((v) => !v)}
+					onPointerDown={(event) => event.stopPropagation()}
 					disabled={switching || snap.providers.length === 0}
 				>
 					<span className="tp-provider-dot" />
@@ -335,10 +350,20 @@ export function TrayPopoverView() {
 				</div>
 			)}
 
+			<button
+				type="button"
+				className="tp-capture"
+				onClick={() => void rpc.request.windowOpen({ target: "capsule" })}
+			>
+				<span className="tp-capture-icon">{WINDOW_TARGET_META.capsule.icon}</span>
+				<span className="tp-capture-text">{WINDOW_TARGET_META.capsule.label}</span>
+				<span className="tp-capture-key">{WINDOW_TARGET_META.capsule.accelerator?.replace("CommandOrControl+", "⌘").replace("Shift+", "⇧")}</span>
+			</button>
+
 			{/* Quick actions grid — user-configurable, see Settings → Tray */}
 			<div className="tp-grid">
 				{snap.prefs.slots.slice(0, 6).map((slot, idx) => {
-					const meta = SLOT_META[slot];
+					const meta = traySlotMeta(slot);
 					return (
 						<GridButton
 							key={`${slot}-${idx}`}
@@ -471,6 +496,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
 	justify-content: space-between;
 	gap: 8px;
 	margin-bottom: 10px;
+	cursor: grab;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.tp-dragging .tp-header {
+	cursor: grabbing;
 }
 .tp-app-name {
 	font-weight: 600;
@@ -637,6 +668,44 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
 	height: 100%;
 	transition: width 200ms ease;
 	border-radius: 2px;
+}
+
+.tp-capture {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 10px;
+	padding: 9px 10px;
+	border-radius: 8px;
+	border: 1px solid rgba(10, 132, 255, 0.28);
+	background: rgba(10, 132, 255, 0.14);
+	color: var(--tp-fg);
+	cursor: pointer;
+}
+.tp-capture:hover {
+	background: rgba(10, 132, 255, 0.2);
+}
+.tp-capture-icon {
+	width: 18px;
+	height: 18px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 5px;
+	background: rgba(10, 132, 255, 0.22);
+	color: var(--tp-accent);
+	font-size: 12px;
+}
+.tp-capture-text {
+	flex: 1;
+	font-size: 12px;
+	font-weight: 600;
+	text-align: left;
+}
+.tp-capture-key {
+	font-size: 10px;
+	color: var(--tp-muted);
 }
 
 /* Quick actions grid */

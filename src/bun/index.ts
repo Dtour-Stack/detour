@@ -113,6 +113,7 @@ const { galleryFeature } = await import("./features/gallery");
 const { trayPopoverFeature } = await import("./features/tray-popover");
 const { urlSchemeFeature } = await import("./features/url-scheme");
 const { statusWidgetFeature } = await import("./features/status-widget");
+const { capsuleFeature } = await import("./features/capsule");
 
 logger.info({ src: "main" }, "[Main] creating kernel");
 const kernel = createKernel({ trayTitle: "Detour", core });
@@ -124,6 +125,7 @@ await loadFeatures(kernel, [
 	// same event; the first to bind wins as the canonical menu.)
 	trayPopoverFeature,
 	urlSchemeFeature,
+	capsuleFeature,
 	chatFeature,
 	settingsFeature,
 	pensieveFeature,

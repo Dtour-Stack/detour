@@ -1,6 +1,7 @@
 import type { IAgentRuntime } from "@elizaos/core";
 import { runDiscordCatchUp } from "../../discord-catchup";
 import type { RpcDeps } from "../types";
+import type { ChannelStatus } from "../../../../shared/index";
 
 /**
  * Channels handler factory — covers `/api/channels/*` HTTP routes:
@@ -235,7 +236,26 @@ export function channelsRequests(deps: RpcDeps) {
 			const snap = deps.activity.pluginsSnapshot();
 			const loadedNames = snap.plugins.map((p) => p.name);
 			const liveRuntime = deps.runtime.peek();
-			return deps.channels.snapshot(loadedNames, liveRuntime);
+			const result = await deps.channels.snapshot(loadedNames, liveRuntime);
+			// AgentMail is a core service, not a plugin channel — surface it in the
+			// rail/feed (configured in Settings → Email) without the plugin loader.
+			const am = deps.agentMail.status();
+			const agentmail: ChannelStatus = {
+				id: "agentmail",
+				label: "Email",
+				description: "AgentMail inbox — the agent's email. Configure in Settings → Email (AgentMail).",
+				platform: "any",
+				requiredVaultKeys: ["AGENTMAIL_API_KEY"],
+				optionalVaultKeys: [],
+				pluginPackage: "",
+				configured: am.enabled,
+				missingKeys: am.enabled ? [] : ["AGENTMAIL_API_KEY"],
+				platformAvailable: true,
+				pluginLoaded: am.connected,
+				liveStatus: am.connected ? "online" : am.lastError ? "error" : am.enabled ? "connecting" : "off",
+				...(am.lastError ? { liveDetail: am.lastError } : am.inboxAddress ? { liveDetail: am.inboxAddress } : {}),
+			};
+			return { ...result, channels: [...result.channels, agentmail] };
 		},
 
 		channelsSetCredential: async (params: { key: string; value: string; skipValidate?: boolean }) => {

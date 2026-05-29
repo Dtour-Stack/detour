@@ -17,7 +17,26 @@
  * source/channel/since — but no current view exercises them).
  */
 
-import type { InboxItem, InboxKind, InboxStatus } from "../../bun/core/inbox";
+// Single source of truth for the inbox wire shapes. The bun-side inbox service
+// imports these back from here (shared is a leaf — it must not depend on bun).
+export type InboxKind = "message" | "notification" | "identity-conflict" | "task" | "event";
+export type InboxStatus = "pending" | "acting" | "acknowledged" | "acted" | "dismissed";
+
+export interface InboxItem {
+	readonly id: string;
+	readonly time: number;
+	readonly kind: InboxKind;
+	readonly status: InboxStatus;
+	readonly title: string;
+	readonly body: string;
+	readonly source: string;
+	readonly channel?: string;
+	readonly fromHandle?: string;
+	readonly entityId?: string;
+	readonly prompted?: boolean;
+	readonly replyText?: string;
+	readonly meta?: Record<string, unknown>;
+}
 
 export type InboxListOptions = {
 	status?: InboxStatus;

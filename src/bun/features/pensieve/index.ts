@@ -1,52 +1,42 @@
 import type { Feature } from "../../kernel/registry";
-import type { WindowHandle } from "../../kernel/windows";
-
-const DEFAULT_WIDTH = 1200;
-const DEFAULT_HEIGHT = 800;
-import { resolveViewUrl } from "../../kernel/view-url";
+import { broadcaster } from "../../core/rpc/registry";
+import { WINDOW_TARGET_META } from "../../../shared/window-targets";
 
 /**
- * Pensieve = activity / memories / relationships / graph browser.
- * Lives in its own regular window (titled, resizable, centered) — chat
- * popup is too cramped for the graph + side-panel layout.
+ * Pensieve = memories / relationships / templates / graph browser.
  *
- * Loaded from the same Vite bundle as the chat popup; the React app reads
- * `window.location.hash === "#pensieve"` and mounts <PensieveView/> instead
- * of <App/>.
+ * Lives as a tab inside the Detour hub (chat window), not a separate window.
+ * Opening it just shows the hub and broadcasts `uiOpenPensieve`, which the
+ * React app turns into `setActiveView("pensieve")` (see App.tsx). The
+ * `forwarded` guard stops the kernel's broadcast→event bridge from looping
+ * back into `open()`. Mirrors the browser feature.
  */
 export const pensieveFeature: Feature = {
 	id: "pensieve",
 	init(deps) {
-		let pensieveWindow: WindowHandle | null = null;
+		let forwarded = false;
 
 		function open() {
-			if (pensieveWindow) {
-				try {
-					(pensieveWindow.window as unknown as { activate?: () => void }).activate?.();
-				} catch {
-					// best effort
-				}
-				pensieveWindow.show();
-				return;
-			}
-			const handle = deps.windows.createWindow({
-				viewKey: "pensieve", // unused (overridden by url) but required by the type
-				title: "Detour Pensieve",
-				width: DEFAULT_WIDTH,
-				height: DEFAULT_HEIGHT,
-				centered: true,
-				url: resolveViewUrl("pensieve"),
-			});
-			handle.onClose(() => {
-				pensieveWindow = null;
-			});
-			pensieveWindow = handle;
+			deps.events.emit("ui:open-chat", {});
+			const route = () => {
+				forwarded = true;
+				broadcaster.broadcast("uiOpenPensieve", {});
+				setTimeout(() => { forwarded = false; }, 0);
+			};
+			// Retry a few times so the hub webview has time to mount + wire
+			// its RPC listener before we deliver the tab-switch.
+			setTimeout(route, 150);
+			setTimeout(route, 400);
+			setTimeout(route, 900);
 		}
 
 		deps.tray.addMenuItem(
-			{ label: "Open Pensieve", action: "pensieve:open", order: 30 },
+			{ label: WINDOW_TARGET_META.pensieve.menuLabel, action: "pensieve:open", order: 30 },
 			() => open(),
 		);
-		deps.events.on("ui:open-pensieve", () => open());
+		deps.events.on("ui:open-pensieve", () => {
+			if (forwarded) return;
+			open();
+		});
 	},
 };

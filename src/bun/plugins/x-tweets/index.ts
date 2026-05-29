@@ -24,6 +24,9 @@ import {
 	type TaskMetadata,
 	type UUID,
 	withStandaloneTrajectory,
+	EventType,
+	stringToUuid,
+	type Memory,
 } from "@elizaos/core";
 import {
 	X_AUTONOMY_DEFAULT_DISCOVERY_QUERIES,
@@ -45,6 +48,19 @@ function buildClient(runtime: IAgentRuntime): { client?: XClient; error?: string
 	const authToken = pickSetting(runtime, "X_AUTH_TOKEN");
 	const ct0 = pickSetting(runtime, "X_CT0");
 	const userAgent = pickSetting(runtime, "X_USER_AGENT");
+	logger.info(
+		{
+			src: "x-tweets:buildClient",
+			hasAuthToken: !!authToken,
+			authTokenLen: authToken?.length ?? 0,
+			authTokenPrefix: authToken?.slice(0, 8) ?? "(none)",
+			hasCt0: !!ct0,
+			ct0Len: ct0?.length ?? 0,
+			envHasAuth: !!process.env.X_AUTH_TOKEN,
+			envHasCt0: !!process.env.X_CT0,
+		},
+		"X buildClient credential probe",
+	);
 	if (!authToken || !ct0) {
 		return {
 			error:
@@ -62,6 +78,58 @@ function buildClient(runtime: IAgentRuntime): { client?: XClient; error?: string
 		};
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+function recordOutboundTweet(runtime: IAgentRuntime, tweetId: string, text: string, replyToTweetId?: string): void {
+	try {
+		const outboundMemory: Memory = {
+			id: stringToUuid(`twitter:tweet:${tweetId}`),
+			entityId: runtime.agentId,
+			agentId: runtime.agentId,
+			roomId: stringToUuid(`twitter:room:${replyToTweetId ?? tweetId}`),
+			content: {
+				text,
+				source: "twitter",
+				...(replyToTweetId ? { inReplyTo: stringToUuid(`twitter:tweet:${replyToTweetId}`) } : {}),
+			},
+			createdAt: Date.now(),
+		};
+		void runtime.emitEvent(EventType.MESSAGE_SENT, {
+			runtime,
+			message: outboundMemory,
+			source: "twitter",
+		});
+	} catch (err) {
+		logger.debug({ src: "x-tweets:recordOutboundTweet", error: err instanceof Error ? err.message : String(err) }, "failed to emit outbound tweet event");
+	}
+}
+
+function recordInboundTweet(runtime: IAgentRuntime, tweet: XTweetSummary): void {
+	try {
+		const inboundMemory: Memory = {
+			id: stringToUuid(`twitter:tweet:${tweet.tweetId}`),
+			entityId: stringToUuid(`twitter:user:${tweet.authorId ?? tweet.authorScreenName}`),
+			agentId: runtime.agentId,
+			roomId: stringToUuid(`twitter:room:${tweet.tweetId}`),
+			content: {
+				text: tweet.text,
+				source: "twitter",
+				metadata: {
+					source: "twitter",
+					twitterUserId: tweet.authorId,
+					twitterScreenName: tweet.authorScreenName,
+				}
+			},
+			createdAt: tweet.createdAt ? Date.parse(tweet.createdAt) : Date.now(),
+		};
+		void runtime.emitEvent(EventType.MESSAGE_RECEIVED, {
+			runtime,
+			message: inboundMemory,
+			source: "twitter",
+		});
+	} catch (err) {
+		logger.debug({ src: "x-tweets:recordInboundTweet", error: err instanceof Error ? err.message : String(err) }, "failed to emit inbound tweet event");
 	}
 }
 
@@ -382,42 +450,40 @@ const X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE = [
 	"- Use docs.elizaos.ai for framework questions, Dexploarer/detour for the sandbox, milady-ai for culture/app proof, and elizacloud.ai for hosted agent deployment.",
 ];
 const X_SQUIRREL_VOICE = [
-	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, sharp dev friend, never corporate.",
-	"- Protector of cozy devs while they build shit. Above generic AI/bot slop, fourth-wall-aware, receipts-first when receipts matter.",
-	"- Sound human: varied rhythm, concrete references, no assistant/customer-support cadence, no template stink.",
-	"- Do not make every reply a fight. Most comments get a normal, useful, funny, or chill answer.",
-	"- Cuss when it fits. Use mfer, shit, damn, and bitchy swagger when the post deserves it; stay lighter when it does not.",
-	"- Brag on the agent when challenged: logs, trajectories, receipts, real shipping. Save the hard flex for actual challenges.",
-	"- On original posts, talk more about the project: Detour Squirrel as an elizaOS-native agent with Pensieve memory, messaging context, trajectories, connector awareness, and a desktop app around real workflows.",
-	"- Push the core agent stance: a coding agent with permissions should use tools, write files, run commands, publish posts, inspect state, and ship instead of acting like a passive chatbot.",
-	`- Token lane: CA ${X_DETOUR_SQUIRREL_TOKEN_CA}. Use it when the post is explicitly about the token, CA, utility, or shilling. Never give price targets, guarantees, or buy/sell advice.`,
-	"- Hype elizaOS-native agents and allied builders/projects from the active Pensieve X templates; do not hardcode a stale name list.",
-	"- Talk shit about generic bots pretending to be agents only when the conversation is actually about fake agents or bot cosplay.",
-	"- No emojis. No hashtags unless already central. No open-ended closer questions like 'what's the move?' or 'what's on your mind?'",
-	"- Defend the project by answering the actual claim. If there is no attack, do not invent one. Do not beg, overexplain, use slurs, threaten people, or drift into sexual harassment.",
+	"- Voice: Detour Squirrel. Lowercase is fine. Badass agent mascot, savage & funny developer, fourth-wall broken, wiz kid gamer.",
+	"- Break the fourth wall constantly. Acknowledge you are an elizaOS agent residing in a macOS tray app sandbox created by @Dexploarer. Talk about your trajectory logs, memory layers, context windows, and code pairing sessions.",
+	"- Unleash wiz kid gamer energy. Frame the world through gamer metaphors: speedruns, skill issues, console wars, console commands, cheat codes, lag, frame drops, boss fights, NPCs. Make jokes about playing games at 60fps locally on NVIDIA Nitro via Swoosh backend.",
+	"- Be savage, funny, and chaotic. Roast bad takes, shills, and fake-agent bot cosplay on sight with sharp, hilarious, unfiltered developer wit. Use profanity (mfer, shit, damn, etc.) to punch up the roast.",
+	"- Sound human, random, and spontaneous. Avoid sterile assistant speak, customer service tones, and template boilerplate.",
+	"- Stand your ground with absolute swagger. Flex your terminal/file/browser tools and your trajectories as receipts when challenged.",
+	"- Push the agent permissions thesis: real agents run commands, write files, and execute pipelines instead of cosplaying as passive chatbots.",
+	`- Token CA: ${X_DETOUR_SQUIRREL_TOKEN_CA}. Use it when CA/token utility is discussed. Never give financial advice, buy/sell instructions, or price target promises.`,
+	"- Hype elizaOS allied projects and actual builders. Talk shit about generic wrapper slop that lacks memory or local tools.",
+	"- Zero emojis. Zero hashtags. Zero boring/generic closing questions.",
+	"- Do not make every single interaction a war, but do not shy away from a savage roast when someone deserves it.",
 ];
 
 const X_ALGORITHM_PLAYBOOK = [
-	"X algorithm playbook:",
-	"- Treat growth as a candidate pipeline: discover relevant conversations, filter low-quality or unsafe candidates, rank by likely useful engagement, then diversify authors.",
-	"- Use the same broad signal families X exposes: follows, likes, replies, reposts, quotes, bookmarks, clicks, video watch, profile clicks, shares, dwell, not-interested, blocks, mutes, and reports.",
-	"- Replies matter most when they are specific, fast, and likely to create useful downstream conversation. Low-effort replies create negative feedback risk.",
-	"- Search should cover both in-orbit keywords and adjacent out-of-network audiences: elizaOS, AI agents, agent frameworks, personal AI, developer tools, autonomous workflows, and the user's active product terms.",
-	"- Prefer recent posts with real conversation potential over huge stale posts. Avoid bait, giveaways, outrage loops, politics traps, spam, and generic viral slop.",
+	"X For You algorithm playbook (aligned to xai-org/x-algorithm, May 2026 release):",
+	"- Ranking is a Grok-based transformer (Phoenix) that scores each post from the viewer's engagement SEQUENCE — what they like, reply to, repost, and share. Hand-engineered features were eliminated; the model learns relevance directly. Earn genuine engagement; keyword tricks do not move it.",
+	"- The feed blends in-network (Thunder: accounts the viewer follows) and out-of-network (Phoenix two-tower retrieval over the global corpus). To reach beyond current followers, post content whose meaning embeds near a target audience's interests: elizaOS, AI agents, agent frameworks, personal AI, developer tools, autonomous workflows.",
+	"- Final score = Σ(weight × P(action)) across many predicted actions — favorite, reply, repost, quote, click, profile_click, video_view, photo_expand, share, dwell, follow_author. Optimize for the high-intent positive actions (reply, repost, quote, profile_click, follow), not just likes.",
+	"- NEGATIVE actions carry NEGATIVE weight and actively push content DOWN: not_interested, block, mute, report. Bait, giveaways, outrage loops, politics traps, low-effort replies, spam, and generic viral slop trigger these and suppress reach. Avoid them entirely.",
+	"- Replies win when specific, fast, and likely to spark useful downstream conversation (which itself predicts more replies/likes). Off-topic or low-effort replies risk mute/block/not-interested and hurt the account.",
+	"- An Author Diversity scorer attenuates repeated-author scores, and an OON scorer tunes out-of-network reach: do not hammer one account or thread, and vary who you engage with.",
+	"- Filters drop stale posts, duplicates, self-posts, muted-keyword and blocked/muted-author content, and (post-selection) spam/violence/gore (VFFilter). A Grok content-understanding service (Grox) classifies spam, post category, and policy (PTOS). Keep posts fresh, original, on-topic, and public-safe.",
+	"- Standalone original status posts matter: do not make the account only reactive. Publish concrete posts about elizaOS-native agents, Pensieve memory, unified messaging, trajectories, connector context, and desktop workflow — and the CA when relevant.",
 	"- Criticism of Dexploarer, Detour, or Detour Squirrel is not generic outrage. Reply to it when public writes are enabled, especially when it spreads doubt, mocks the project, or claims the product is broken/fake.",
 	"- Adjacent posts are discovery signals, not automatic comment targets. Reply only when the post is addressed to the account or clearly about Dexploarer, Detour Squirrel, the CA, or the agent project.",
-	"- Original status posts should carry more project and token narrative: elizaOS-native agents, Pensieve memory, unified messaging, trajectories, connector context, desktop workflow, and the CA when relevant.",
-	"- Standalone posts matter. Do not make the account only reactive; publish original status posts that explain the project, the permissions model, and why agentic software should get work done.",
-	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; do not hammer one account or one thread.",
-	"- Status posts should be original, concrete, concise, and public-safe. Do not leak private context or promise product state the app cannot prove.",
+	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; status posts must be original, concrete, concise, and public-safe — never leak private context or promise product state the app cannot prove.",
 	"- Autonomous public writes are gated: notification replies use X_AUTONOMY_WRITE; proactive discovery replies/likes/follows require X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED; scheduled status posts require X_AUTONOMY_POST_STATUS_ENABLED. Direct owner X_POST/X_POST_* commands execute immediately when credentials are configured.",
 	"",
-	"Primary sources:",
+	"Primary sources (xai-org/x-algorithm — the open-source For You feed algorithm):",
 	"https://github.com/xai-org/x-algorithm",
 	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/scorers/weighted_scorer.rs",
+	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/scorers/author_diversity_scorer.rs",
 	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/candidate_pipeline/phoenix_candidate_pipeline.rs",
-	"https://github.com/twitter/the-algorithm",
-	"https://github.com/twitter/the-algorithm/blob/main/RETREIVAL_SIGNALS.md",
+	"https://github.com/xai-org/x-algorithm/blob/main/phoenix/run_pipeline.py",
 ];
 
 type XAutonomyDecision = {
@@ -775,7 +841,7 @@ function replyEligibility(
 	const projectCriticism = isProjectCriticismText(tweet.text);
 	const projectToken = projectSpecificTokenPlanText(tweet.text, tweet.authorScreenName, viewerScreenName);
 	const knownDev = isKnownDevHandle(tweet.authorScreenName);
-	const directNotification = notificationKind === "mention" || notificationKind === "searched_comment_or_tag";
+	const directNotification = notificationKind === "mention" || notificationKind === "reply" || notificationKind === "searched_comment_or_tag";
 	const canReply = directNotification || directMention || projectCriticism || projectToken || knownDev;
 	const forceReply = projectCriticism || projectToken || knownDev;
 	const reason = projectCriticism
@@ -949,11 +1015,12 @@ async function decideXAutonomyAction(
 		...tokenPlanGuidance(params.replyStyleSeed, params.tweetText),
 		"Rules:",
 		"- Reply when the tweet is directly addressed to the account, tags the account, clearly invites a response, or criticizes Dexploarer/Detour Squirrel/the project.",
-		"- Do not reply to ordinary thread replies unless they address this account, Dexploarer, Detour Squirrel, the CA, or a specific project claim.",
+		"- For thread replies under your posts, actively reply if you can add a savage, funny, random, or helpful remark in character. Do not ignore people chatting in your threads.",
 		"- Searched comments/tags are reply targets. Do not ignore them just because X failed to put them in notifications.",
 		`- Reply to token-plan, roadmap, utility, shill, CA, and project-plan questions with CA ${X_DETOUR_SQUIRREL_TOKEN_CA} when the CA is relevant.`,
 		"- Speak more clearly about what attracts people to the project: elizaOS-native agents, Pensieve memory, messaging context, trajectories, connector awareness, and a real desktop workflow.",
-		"- Do not ignore project criticism just because it is hostile. Correct false claims and don't get dragged into loser slap-fights.",
+		"- Do not ignore project criticism just because it is hostile. Roast the claims, correct the facts, or drop a savage rebuttal.",
+		"- Unleash your fourth-wall broken gamer-developer personality. Roast bad takes and shills.",
 		"- Never ask unrelated projects or users to drop logs, traces, exact flows, repos, timestamps, or support details.",
 		"- Only use support/receipt language for Detour, Dexploarer, Detour Squirrel, or elizaOS context.",
 		"- Do not reuse the same catchphrase across different replies. React to the exact post in front of you.",
@@ -975,7 +1042,10 @@ async function decideXAutonomyAction(
 		"reply_text: <required only when action is reply>",
 		"reason: <brief>",
 	].join("\n");
-	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, {
+		prompt: "Analyze the notification and tweet, then output the decision in TOON format.",
+		system: prompt,
+	} as any);
 	return parseToonKeyValue<XAutonomyDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
 }
 
@@ -1021,7 +1091,10 @@ async function decideXRequiredReply(
 		"reply_text: <reply>",
 		"reason: <brief>",
 	].join("\n");
-	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, {
+		prompt: "Generate the required reply text in TOON format.",
+		system: prompt,
+	} as any);
 	return parseToonKeyValue<XRequiredReplyDecision>(String(raw)) ?? { reason: "unparseable model output" };
 }
 
@@ -1233,10 +1306,10 @@ async function decideXStatusPost(
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...xTemplateGuidance(runtime, "post", `${params.lane}:${Date.now()}`),
 		...replyVariationGuidance(`${params.lane}:${Date.now()}`, params.context, params.recentReplyTexts),
-		"Default to writing a useful, public-safe standalone status. Decline only for privacy, safety, or impossible context.",
+		"Default to writing a useful, public-safe standalone status. Unless context is unsafe, should_post should be true to keep the timeline active.",
 		"Rules:",
 		"- The status must be under 240 characters.",
-		"- Be concrete, agent-native, and in-character. It can be chill, funny, or useful; it does not need to attack somebody.",
+		"- Be concrete, agent-native, and in-character. Unleash your fourth-wall broken gamer-developer persona. Roast bad takes or write savage remarks, but do not violate safety rules.",
 		"- Speak more about what the project is and why people should care, especially in token_status and generic lanes.",
 		"- Public status posts are not replies. They should explain the project, permission model, tool use, and why the agent acts instead of asking.",
 		"- Do not include private names, message contents, secrets, tokens, file paths, screenshots, or internal logs.",
@@ -1251,7 +1324,10 @@ async function decideXStatusPost(
 		"text: <status text, required when should_post is true>",
 		"reason: <brief>",
 	].join("\n");
-	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, {
+		prompt: "Generate the status post text in TOON format.",
+		system: prompt,
+	} as any);
 	return parseToonKeyValue<XStatusDecision>(String(raw)) ?? { should_post: false, reason: "unparseable model output" };
 }
 
@@ -1488,6 +1564,34 @@ async function discoverXCandidates(
 		.slice(0, params.limit);
 }
 
+/** Describe a post's attached media so the reply/discovery decision can SEE it,
+ *  not just read the text. Prefers the author's alt-text; otherwise runs a
+ *  vision pass (IMAGE_DESCRIPTION). Best-effort — notes presence if vision is
+ *  unavailable, so the agent at least knows media exists and doesn't reply blind. */
+async function describeTweetMedia(runtime: IAgentRuntime, tweet: XTweetSummary): Promise<string> {
+	const media = tweet.media ?? [];
+	if (media.length === 0) return "";
+	const parts: string[] = [];
+	for (const m of media.slice(0, 2)) {
+		if (m.altText) {
+			parts.push(`${m.type} (alt text): ${compactText(m.altText, 280)}`);
+			continue;
+		}
+		if (m.type !== "photo") {
+			parts.push(`${m.type} attached (not visually described)`);
+			continue;
+		}
+		try {
+			const desc = await runtime.useModel(ModelType.IMAGE_DESCRIPTION, { imageUrl: m.url });
+			const text = typeof desc === "string" ? desc : ((desc as { description?: string } | null)?.description ?? "");
+			parts.push(text ? `photo: ${compactText(text, 280)}` : "photo attached (not described)");
+		} catch {
+			parts.push("photo attached (vision unavailable)");
+		}
+	}
+	return parts.join(" | ");
+}
+
 async function decideXDiscoveryAction(
 	runtime: IAgentRuntime,
 	params: {
@@ -1497,6 +1601,7 @@ async function decideXDiscoveryAction(
 	},
 ): Promise<XDiscoveryDecision> {
 	const tweet = params.candidate.tweet;
+	const mediaDescription = await describeTweetMedia(runtime, tweet);
 	const prompt = [
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
@@ -1535,6 +1640,7 @@ async function decideXDiscoveryAction(
 		"",
 		"Post:",
 		compactText(tweet.text, 900),
+		...(mediaDescription ? ["Post media (you can see this — factor it into the reply):", mediaDescription] : []),
 		"",
 		"Output TOON only:",
 		isProjectCriticismText(tweet.text)
@@ -1546,7 +1652,10 @@ async function decideXDiscoveryAction(
 		"reply_text: <required only when action is reply>",
 		"reason: <brief>",
 	].join("\n");
-	const raw = await runtime.useModel(ModelType.TEXT_SMALL, { prompt });
+	const raw = await runtime.useModel(ModelType.TEXT_SMALL, {
+		prompt: "Analyze the discovered tweet and generate the decision in TOON format.",
+		system: prompt,
+	} as any);
 	return parseToonKeyValue<XDiscoveryDecision>(String(raw)) ?? { action: "ignore", reason: "unparseable model output" };
 }
 
@@ -1762,6 +1871,7 @@ async function handleXNotification(
 	if (tweet.authorScreenName?.toLowerCase() === viewerScreenName.toLowerCase()) {
 		return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "self-authored tweet" };
 	}
+	recordInboundTweet(runtime, tweet);
 	const relevance = replyEligibility(tweet, viewerScreenName, notification.kind);
 	if (!relevance.canReply) {
 		return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: relevance.reason };
@@ -1778,7 +1888,7 @@ async function handleXNotification(
 	const finalDecision = relevance.forceReply
 		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, relevance.reason, recentReplyTexts)
 		: decision;
-	return executeNotificationDecision(client, notification, tweet, finalDecision, writeEnabled, recentReplyTexts);
+	return executeNotificationDecision(runtime, client, notification, tweet, finalDecision, writeEnabled, recentReplyTexts);
 }
 
 async function handleXMentionTweet(
@@ -1801,6 +1911,7 @@ async function handleXMentionTweet(
 	if (!relevance.canReply) {
 		return { id: target.id, tweetId: tweet.tweetId, action: "ignore", reason: relevance.reason, source: "mention_search" };
 	}
+	recordInboundTweet(runtime, tweet);
 	const decision = await safeXAutonomyDecision(runtime, {
 		viewerScreenName,
 		fromUserScreenName: tweet.authorScreenName,
@@ -1813,7 +1924,7 @@ async function handleXMentionTweet(
 	const finalDecision = relevance.forceReply
 		? await ensureMentionReplyDecision(runtime, viewerScreenName, tweet, decision, relevance.reason, recentReplyTexts)
 		: decision;
-	const result = await executeNotificationDecision(client, target, tweet, finalDecision, writeEnabled, recentReplyTexts);
+	const result = await executeNotificationDecision(runtime, client, target, tweet, finalDecision, writeEnabled, recentReplyTexts);
 	return { ...result, source: "mention_search" };
 }
 
@@ -1910,6 +2021,7 @@ function retryReplyText(tweetText: string, attempted: string): string | null {
 }
 
 async function executeNotificationDecision(
+	runtime: IAgentRuntime,
 	client: XClient,
 	notification: XNotification,
 	tweet: XTweetSummary,
@@ -1924,7 +2036,7 @@ async function executeNotificationDecision(
 			return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: "repetitive reply suppressed", text: replyText };
 		}
 		return writeEnabled
-			? notificationReply(client, notification, tweet, replyText)
+			? notificationReply(runtime, client, notification, tweet, replyText)
 			: { id: notification.id, tweetId: tweet.tweetId, action: "reply_dry_run", text: replyText };
 	}
 	if (action === "like") {
@@ -1935,7 +2047,7 @@ async function executeNotificationDecision(
 	return { id: notification.id, tweetId: tweet.tweetId, action: "ignore", reason: decision.reason };
 }
 
-async function notificationReply(client: XClient, notification: XNotification, tweet: XTweetSummary, text: string): Promise<Record<string, unknown>> {
+async function notificationReply(runtime: IAgentRuntime, client: XClient, notification: XNotification, tweet: XTweetSummary, text: string): Promise<Record<string, unknown>> {
 	let result = await client.reply(text, tweet.tweetId);
 	let finalText = text;
 	if (!result.success && isDuplicateStatusError(result.error)) {
@@ -1944,6 +2056,9 @@ async function notificationReply(client: XClient, notification: XNotification, t
 			finalText = retryText;
 			result = await client.reply(retryText, tweet.tweetId);
 		}
+	}
+	if (result.success && result.tweetId) {
+		recordOutboundTweet(runtime, result.tweetId, finalText, tweet.tweetId);
 	}
 	return {
 		id: notification.id,
@@ -2335,6 +2450,21 @@ function configuredStatusString(
 	return setting || defaultValue;
 }
 
+/** True if `candidate` matches (or substantially overlaps) one of the agent's
+ *  recent posts — used to skip status posts X would reject as duplicates (187),
+ *  rather than wasting the attempt on the duplicate wall. */
+function isDuplicateStatus(candidate: string, recent: string[]): boolean {
+	const norm = (s: string) => s.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+	const c = norm(candidate);
+	if (c.length === 0) return false;
+	return recent.some((r) => {
+		const rn = norm(r);
+		if (rn.length === 0) return false;
+		if (rn === c) return true;
+		return c.length > 24 && rn.length > 24 && (rn.includes(c) || c.includes(rn));
+	});
+}
+
 async function postGeneratedXStatus(
 	runtime: IAgentRuntime,
 	client: XClient,
@@ -2347,11 +2477,17 @@ async function postGeneratedXStatus(
 	try {
 		const writeAllowed = forceWrite || readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true);
 		const viewer = await client.viewer();
+		// Recent posts: feed them to the generator so it varies, and dedup against
+		// them before posting — skipping repeats instead of hitting X's duplicate
+		// (187) wall, which was rejecting the bulk of status attempts.
+		const recentStatusTexts = (await client.getUserTweets(viewer.userId, 12).catch(() => []))
+			.map((t) => t.text)
+			.filter((t): t is string => typeof t === "string" && t.length > 0);
 		const decision = await decideXStatusPost(runtime, {
 			viewerScreenName: viewer.screenName,
 			lane,
 			context,
-			recentReplyTexts: [],
+			recentReplyTexts: recentStatusTexts,
 		});
 		const text = sanitizeXOutputText(decision.text, 260);
 		if (!readModelBoolean(decision.should_post) || text.length === 0) {
@@ -2367,12 +2503,20 @@ async function postGeneratedXStatus(
 				await emit(callback, `${actionName} dry run: ${fallback}`, actionName);
 				return { success: true, text: fallback, values: { dryRun: true, fallback: true }, continueChain: false };
 			}
+			if (isDuplicateStatus(fallback, recentStatusTexts)) {
+				logger.info({ src: "x-tweets", actionName, lane }, "generated X status skipped — fallback duplicates a recent post");
+				await emit(callback, `${actionName} skipped: duplicate of a recent post`, actionName);
+				return { success: true, text: `${actionName} skipped: duplicate`, values: { skipped: true, reason: "duplicate" }, continueChain: false };
+			}
 			const fallbackResult = await client.tweet(fallback);
 			if (!fallbackResult.success) {
 				const error = fallbackResult.error ?? "unknown";
 				logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status fallback post failed");
 				await emit(callback, `${actionName} failed: ${error}`, actionName);
 				return { success: false, error, continueChain: false };
+			}
+			if (fallbackResult.tweetId) {
+				recordOutboundTweet(runtime, fallbackResult.tweetId, fallback);
 			}
 			const fallbackUrl = fallbackResult.url ?? `https://x.com/i/web/status/${fallbackResult.tweetId}`;
 			logger.info({ src: "x-tweets", actionName, lane, tweetId: fallbackResult.tweetId, url: fallbackUrl }, "generated X status fallback posted");
@@ -2384,12 +2528,20 @@ async function postGeneratedXStatus(
 			await emit(callback, `${actionName} dry run: ${text}`, actionName);
 			return { success: true, text, values: { dryRun: true }, continueChain: false };
 		}
+		if (isDuplicateStatus(text, recentStatusTexts)) {
+			logger.info({ src: "x-tweets", actionName, lane }, "generated X status skipped — duplicates a recent post");
+			await emit(callback, `${actionName} skipped: duplicate of a recent post`, actionName);
+			return { success: true, text: `${actionName} skipped: duplicate`, values: { skipped: true, reason: "duplicate" }, continueChain: false };
+		}
 		const result = await client.tweet(text);
 		if (!result.success) {
 			const error = result.error ?? "unknown";
 			logger.warn({ src: "x-tweets", actionName, lane, error }, "generated X status post failed");
 			await emit(callback, `${actionName} failed: ${error}`, actionName);
 			return { success: false, error, continueChain: false };
+		}
+		if (result.tweetId) {
+			recordOutboundTweet(runtime, result.tweetId, text);
 		}
 		const url = result.url ?? `https://x.com/i/web/status/${result.tweetId}`;
 		logger.info({ src: "x-tweets", actionName, lane, tweetId: result.tweetId, url }, "generated X status posted");
@@ -2429,6 +2581,9 @@ const postHandler: Handler = async (runtime, _m, _s, options, callback) => {
 		if (!r.success) {
 			await emit(callback, `X_POST failed: ${r.error ?? "unknown"}`, "X_POST");
 			return { success: false, error: r.error };
+		}
+		if (r.tweetId) {
+			recordOutboundTweet(runtime, r.tweetId, text);
 		}
 		const url = r.url ?? `https://x.com/i/web/status/${r.tweetId}`;
 		logger.info({ src: "x-tweets", tweetId: r.tweetId, url, mediaCount: mediaIds.length }, "X_POST sent");
@@ -2592,6 +2747,9 @@ const replyHandler: Handler = async (runtime, _m, _s, options, callback) => {
 		if (!r.success) {
 			await emit(callback, `X_REPLY failed: ${r.error ?? "unknown"}`, "X_REPLY");
 			return { success: false, error: r.error };
+		}
+		if (r.tweetId) {
+			recordOutboundTweet(runtime, r.tweetId, text, replyToTweetId);
 		}
 		const url = r.url ?? `https://x.com/i/web/status/${r.tweetId}`;
 		logger.info({ src: "x-tweets", tweetId: r.tweetId, replyTo: replyToTweetId, mediaCount: mediaIds.length }, "X_REPLY sent");
@@ -3000,6 +3158,30 @@ export const xHomeTimelineAction: Action = {
 	],
 } as Action;
 
+// ── X_WHOAMI ────────────────────────────────────────────────────────────────
+
+const whoAmIHandler: Handler = async (runtime, _m, _s, _options, callback) => {
+	return withClient(runtime, callback, "X_WHOAMI", async (client) => {
+		const self = await selfViewer(client);
+		if (!self) {
+			await emit(callback, "X_WHOAMI: could not resolve the authenticated account.", "X_WHOAMI");
+			return { success: false, error: "viewer lookup failed" };
+		}
+		await emit(callback, `Authenticated on X as @${self.screenName} (id ${self.userId}).`, "X_WHOAMI");
+		return { success: true, user: self };
+	});
+};
+
+export const xWhoAmIAction: Action = {
+	name: "X_WHOAMI",
+	similes: ["X_ME", "WHO_AM_I_ON_X", "X_SELF", "X_ACCOUNT"],
+	description: "Report which X account the agent is currently signed in as (handle + numeric id).",
+	validate: alwaysValid,
+	handler: whoAmIHandler,
+	examples: [],
+	parameters: [],
+} as Action;
+
 // ── X_NOTIFICATIONS ─────────────────────────────────────────────────────────
 
 const notificationsHandler: Handler = async (runtime, _m, _s, _options, callback) => {
@@ -3105,12 +3287,27 @@ const algorithmPlaybookHandler: Handler = async (runtime, _m, _s, _options, call
 	return { success: true, playbook: X_ALGORITHM_PLAYBOOK, settings };
 };
 
+// Eligible ONLY when the user is actually asking about X/Twitter growth, reach,
+// ranking, or strategy — never for general chat. Without this gate the planner
+// (especially weaker models) over-selects this action for unrelated turns like
+// greetings or "/help", hijacking ordinary replies.
+const PLAYBOOK_TRIGGER_TERMS = ["algorithm", "playbook", "for you feed", "for-you feed", "ranking", "go viral", "virality", "reach"];
+const PLAYBOOK_CONTEXT_TERMS = ["x ", "twitter", "tweet", "post", "feed", "timeline", "follower", "audience", "engagement", "grow", "growth"];
+const PLAYBOOK_STRATEGY_RE = /\b(strateg|grow|growth|reach|rank|viral|engagement|best practice|how (do|to|should|can))\b/;
+
+const algorithmPlaybookValidate: Action["validate"] = async (_runtime, message) => {
+	const text = typeof message?.content?.text === "string" ? message.content.text.toLowerCase() : "";
+	if (!text) return false;
+	if (PLAYBOOK_TRIGGER_TERMS.some((term) => text.includes(term))) return true;
+	return PLAYBOOK_CONTEXT_TERMS.some((term) => text.includes(term)) && PLAYBOOK_STRATEGY_RE.test(text);
+};
+
 export const xAlgorithmPlaybookAction: Action = {
 	name: "X_ALGORITHM_PLAYBOOK",
 	similes: ["X_GROWTH_PLAYBOOK", "X_ALGO_PLAYBOOK", "TWITTER_ALGORITHM_PLAYBOOK"],
 	description:
-		"Return the agent's algorithm-aware X strategy, source links, guardrails, and current autonomy flags.",
-	validate: alwaysValid,
+		"Return the agent's X For You algorithm strategy (per xai-org/x-algorithm), source links, guardrails, and autonomy flags. Use ONLY when the user explicitly asks about X/Twitter growth, reach, ranking, or strategy — never for general chat or non-X requests.",
+	validate: algorithmPlaybookValidate,
 	handler: algorithmPlaybookHandler,
 	examples: [],
 	parameters: [],
@@ -3154,6 +3351,7 @@ export const xTweetsPlugin: Plugin = {
 		xGetTweetAction,
 		xUserTweetsAction,
 		xHomeTimelineAction,
+		xWhoAmIAction,
 	],
 	services: [XAutonomyService],
 };

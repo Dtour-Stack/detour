@@ -11,6 +11,8 @@
 import {
 	AGENT_HF_SYNC_DEFAULT_DESTINATION,
 	type AgentCharacterConfig,
+	type AgentMailConfig,
+	type SuperteamEarnConfig,
 	type AgentCharacterMessageExample,
 	type AgentConfig,
 	type AgentHfSyncPolicy,
@@ -24,6 +26,7 @@ import {
 	type TraySlot,
 	type WindowConfig,
 } from "../../shared/index";
+import { TRAY_SLOT_CHOICES } from "../../shared/window-targets";
 import {
 	MIRRORED_ENV_KEYS,
 	isMirroredEnvKey,
@@ -43,9 +46,9 @@ const DEFAULT_AGENT: AgentConfig = {
 };
 
 const DEFAULT_MODELS: ModelConfig = {
-	codexLarge: "gpt-5.2",
-	codexSmall: "gpt-5.2",
-	codexImage: "gpt-5.2",
+	codexLarge: "gpt-5.5",
+	codexSmall: "gpt-5.5",
+	codexImage: "gpt-5.5",
 	openRouterTextLarge: "openrouter/free",
 	openRouterTextSmall: "openrouter/free",
 	openRouterEmbedding: "openai/text-embedding-3-small",
@@ -88,6 +91,8 @@ const DEFAULT_HF_SYNC_POLICY: AgentHfSyncPolicy = {
 	everyNewTrajectories: 50,
 	minIntervalMinutes: 30,
 	failureCooldownMinutes: 30,
+	pruneAfterSync: true,
+	retentionCount: 200,
 };
 
 const DEFAULT_HF_SYNC_STATE: AgentHfSyncState = {
@@ -102,6 +107,12 @@ const DEFAULT_HF_SYNC_STATE: AgentHfSyncState = {
 	lastCounts: null,
 };
 
+const DEFAULT_AGENTMAIL: AgentMailConfig = {
+	enabled: false,
+	autoReply: true,
+	draftMode: false,
+};
+
 const KEY_AGENT = "config.agent";
 const KEY_CHARACTER = "config.character";
 const KEY_MODELS = "config.models";
@@ -110,6 +121,21 @@ const KEY_CHRONICLER = "config.chronicler";
 const KEY_HF_SYNC_POLICY = "config.agentHfSyncPolicy";
 const KEY_HF_SYNC_STATE = "config.agentHfSyncState";
 const KEY_TRAY = "config.tray";
+const KEY_AGENTMAIL = "config.agentmail";
+const KEY_SUPERTEAM_EARN = "config.superteamEarn";
+const KEY_PRINTING_PRESS = "config.printingPress";
+
+const DEFAULT_SUPERTEAM_EARN: SuperteamEarnConfig = {
+	baseUrl: "https://earn.superteam.fun",
+	telegramUrl: "",
+	autoNotify: false,
+};
+
+const DEFAULT_PRINTING_PRESS: import("../../shared/index").PrintingPressConfig = {
+	enabledClis: [],
+	autoInstall: true,
+	allowCreate: true,
+};
 
 function configuredString(raw: Record<string, unknown>, key: keyof ModelConfig): string | null {
 	const value = raw[key];
@@ -315,16 +341,7 @@ export class ConfigService {
 	}
 
 	private sanitizeTrayPrefs(raw: Record<string, unknown> | TrayPrefs): TrayPrefs {
-		const validSlots = new Set<TraySlot>([
-			"chat",
-			"pensieve",
-			"activity",
-			"browser",
-			"gallery",
-			"settings",
-			"command-palette",
-			"portless",
-		]);
+		const validSlots = new Set<TraySlot>(TRAY_SLOT_CHOICES);
 		const rawSlots = (raw as { slots?: unknown }).slots;
 		const seen = new Set<TraySlot>();
 		const slots: TraySlot[] = [];
@@ -381,6 +398,76 @@ export class ConfigService {
 	async setAgentHfSyncState(next: AgentHfSyncState): Promise<AgentHfSyncState> {
 		const sanitized = this.sanitizeHfSyncState(recordFromUnknown(next));
 		await this.writeJson(KEY_HF_SYNC_STATE, sanitized);
+		return sanitized;
+	}
+
+	// ── AgentMail ──────────────────────────────────────────────────────
+
+	async getAgentMail(): Promise<AgentMailConfig> {
+		const raw = await this.readJson(KEY_AGENTMAIL);
+		if (!raw) return { ...DEFAULT_AGENTMAIL };
+		return {
+			enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_AGENTMAIL.enabled,
+			autoReply: typeof raw.autoReply === "boolean" ? raw.autoReply : DEFAULT_AGENTMAIL.autoReply,
+			draftMode: typeof raw.draftMode === "boolean" ? raw.draftMode : DEFAULT_AGENTMAIL.draftMode,
+		};
+	}
+
+	async setAgentMail(next: AgentMailConfig): Promise<AgentMailConfig> {
+		const sanitized: AgentMailConfig = {
+			enabled: !!next.enabled,
+			autoReply: typeof next.autoReply === "boolean" ? next.autoReply : DEFAULT_AGENTMAIL.autoReply,
+			draftMode: typeof next.draftMode === "boolean" ? next.draftMode : DEFAULT_AGENTMAIL.draftMode,
+		};
+		await this.writeJson(KEY_AGENTMAIL, sanitized);
+		return sanitized;
+	}
+
+	// ── Superteam Earn ────────────────────────────────────────────────
+
+	async getSuperteamEarn(): Promise<SuperteamEarnConfig> {
+		const raw = await this.readJson(KEY_SUPERTEAM_EARN);
+		if (!raw) return { ...DEFAULT_SUPERTEAM_EARN };
+		return {
+			baseUrl: typeof raw.baseUrl === "string" && raw.baseUrl.length > 0 ? raw.baseUrl : DEFAULT_SUPERTEAM_EARN.baseUrl,
+			telegramUrl: typeof raw.telegramUrl === "string" ? raw.telegramUrl : DEFAULT_SUPERTEAM_EARN.telegramUrl,
+			autoNotify: typeof raw.autoNotify === "boolean" ? raw.autoNotify : DEFAULT_SUPERTEAM_EARN.autoNotify,
+		};
+	}
+
+	async setSuperteamEarn(next: SuperteamEarnConfig): Promise<SuperteamEarnConfig> {
+		const sanitized: SuperteamEarnConfig = {
+			baseUrl: typeof next.baseUrl === "string" && next.baseUrl.length > 0 ? next.baseUrl : DEFAULT_SUPERTEAM_EARN.baseUrl,
+			telegramUrl: typeof next.telegramUrl === "string" ? next.telegramUrl.trim() : "",
+			autoNotify: !!next.autoNotify,
+		};
+		await this.writeJson(KEY_SUPERTEAM_EARN, sanitized);
+		return sanitized;
+	}
+
+	// ── Printing Press ────────────────────────────────────────────────
+
+	async getPrintingPress(): Promise<import("../../shared/index").PrintingPressConfig> {
+		const raw = await this.readJson(KEY_PRINTING_PRESS);
+		if (!raw) return { ...DEFAULT_PRINTING_PRESS };
+		return {
+			enabledClis: Array.isArray(raw.enabledClis)
+				? (raw.enabledClis as unknown[]).filter((x) => typeof x === "string") as string[]
+				: DEFAULT_PRINTING_PRESS.enabledClis,
+			autoInstall: typeof raw.autoInstall === "boolean" ? raw.autoInstall : DEFAULT_PRINTING_PRESS.autoInstall,
+			allowCreate: typeof raw.allowCreate === "boolean" ? raw.allowCreate : DEFAULT_PRINTING_PRESS.allowCreate,
+		};
+	}
+
+	async setPrintingPress(next: import("../../shared/index").PrintingPressConfig): Promise<import("../../shared/index").PrintingPressConfig> {
+		const sanitized: import("../../shared/index").PrintingPressConfig = {
+			enabledClis: Array.isArray(next.enabledClis)
+				? next.enabledClis.filter((x) => typeof x === "string")
+				: [],
+			autoInstall: !!next.autoInstall,
+			allowCreate: !!next.allowCreate,
+		};
+		await this.writeJson(KEY_PRINTING_PRESS, sanitized);
 		return sanitized;
 	}
 
@@ -451,6 +538,7 @@ export class ConfigService {
 		const everyNewTrajectories = this.clampedNumber(raw.everyNewTrajectories, 1, 10_000, DEFAULT_HF_SYNC_POLICY.everyNewTrajectories);
 		const minIntervalMinutes = this.clampedNumber(raw.minIntervalMinutes, 1, 24 * 60, DEFAULT_HF_SYNC_POLICY.minIntervalMinutes);
 		const failureCooldownMinutes = this.clampedNumber(raw.failureCooldownMinutes, 1, 24 * 60, DEFAULT_HF_SYNC_POLICY.failureCooldownMinutes);
+		const retentionCount = this.clampedNumber(raw.retentionCount, 0, 100_000, DEFAULT_HF_SYNC_POLICY.retentionCount);
 		return {
 			enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_HF_SYNC_POLICY.enabled,
 			destination,
@@ -461,6 +549,8 @@ export class ConfigService {
 			everyNewTrajectories,
 			minIntervalMinutes,
 			failureCooldownMinutes,
+			pruneAfterSync: typeof raw.pruneAfterSync === "boolean" ? raw.pruneAfterSync : DEFAULT_HF_SYNC_POLICY.pruneAfterSync,
+			retentionCount,
 		};
 	}
 

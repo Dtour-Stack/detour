@@ -1,6 +1,18 @@
 import type { ReactNode } from "react";
 import type { ChannelStatus } from "../../shared/index";
 import { BrandIcon, isBrandIconName } from "./BrandIcon";
+import {
+	MessageSquare,
+	Inbox,
+	Rss,
+	Brain,
+	Globe,
+	Activity,
+	Image,
+	Unplug,
+	Settings,
+	Mail,
+} from "lucide-react";
 
 const CHANNEL_VIEW_PREFIX = "channel:";
 
@@ -61,15 +73,20 @@ function renderChannelGlyph(channelId: string): ReactNode {
 	if (isBrandIconName(channelId)) {
 		return <BrandIcon name={channelId} size={14} />;
 	}
+	if (channelId === "agentmail") {
+		return <Mail size={14} />;
+	}
 	return <span className="hub-rail-glyph-text">{channelId.slice(0, 2).toUpperCase()}</span>;
 }
 
-const TOOL_META: Record<HubToolView, { label: string; glyph: string }> = {
-	pensieve: { label: "Pensieve", glyph: "PN" },
-	browser: { label: "Browser", glyph: "BR" },
-	activity: { label: "Activity", glyph: "AC" },
-	gallery: { label: "Gallery", glyph: "GL" },
-	portless: { label: "Portless", glyph: "PL" },
+const ICON_SIZE = 15;
+
+const TOOL_META: Record<HubToolView, { label: string; icon: ReactNode }> = {
+	pensieve: { label: "Pensieve", icon: <Brain size={ICON_SIZE} /> },
+	browser: { label: "Browser", icon: <Globe size={ICON_SIZE} /> },
+	activity: { label: "Activity", icon: <Activity size={ICON_SIZE} /> },
+	gallery: { label: "Gallery", icon: <Image size={ICON_SIZE} /> },
+	portless: { label: "Portless", icon: <Unplug size={ICON_SIZE} /> },
 };
 
 function statusTone(c: ChannelStatus | undefined): string {
@@ -109,21 +126,21 @@ export function ChannelRail({
 					active={activeView === "chat"}
 					onClick={() => onSelectView("chat")}
 					label="Chat"
-					glyph={<span className="hub-rail-glyph-text">AI</span>}
+					glyph={<MessageSquare size={ICON_SIZE} />}
 					tone="info"
 				/>
 				<RailButton
 					active={activeView === "inbox"}
 					onClick={() => onSelectView("inbox")}
 					label="Inbox"
-					glyph={<span className="hub-rail-glyph-text">IN</span>}
+					glyph={<Inbox size={ICON_SIZE} />}
 					tone="info"
 				/>
 				<RailButton
 					active={activeView === "feed"}
 					onClick={() => onSelectView("feed")}
 					label="All messages"
-					glyph={<span className="hub-rail-glyph-text">FD</span>}
+					glyph={<Rss size={ICON_SIZE} />}
 					tone="muted"
 				/>
 				{wired.map((c) => (
@@ -146,7 +163,7 @@ export function ChannelRail({
 							active={activeView === view}
 							onClick={() => onSelectView(view)}
 							label={meta.label}
-							glyph={<span className="hub-rail-glyph-text">{meta.glyph}</span>}
+							glyph={meta.icon}
 							tone="muted"
 						/>
 					);
@@ -156,7 +173,7 @@ export function ChannelRail({
 			<RailButton
 				onClick={onOpenChannelSettings}
 				label="Messaging connections"
-				glyph={<span className="hub-rail-glyph-text">SET</span>}
+				glyph={<Settings size={ICON_SIZE} />}
 				tone="muted"
 			/>
 		</aside>

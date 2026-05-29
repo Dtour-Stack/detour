@@ -25,19 +25,6 @@
  *      AND the original eliza planner return null, fire one more
  *      attempt at the simplest possible model call (TEXT_SMALL plain
  *      text) so the user is never left with literal silence.
- *
- * Removed in the 2026-05 cleanup (the freeform planner makes these
- * obsolete):
- *   - The TIER_CASCADE (ACTION_PLANNER → TEXT_LARGE → TEXT_MEDIUM →
- *     TEXT_SMALL) — the freeform planner picks the tier it needs
- *     directly, no retries required.
- *   - `compactRetryArgs` + `normalizeReplyLikeSchema` — there's no
- *     structured retry to compact or normalize anymore.
- *   - PROVIDER_RECOVERY_TARGETS + `runProviderRecovery` — the freeform
- *     planner works across any provider that can output text. No
- *     special-case provider switching needed.
- *   - `setCompanionPlannerHook` wiring is preserved (still used by
- *     `core/index.ts` to register the companion service).
  */
 
 import {
@@ -74,14 +61,6 @@ function isReplyLikeSchema(args: DynamicPromptArgs): boolean {
 		if (!fields.has(field)) return false;
 	}
 	return true;
-}
-
-/** @deprecated kept for back-compat; prefer `runWithPlannerReplyContext`. */
-export function runWithPlannerFallbackContext<T>(
-	context: { source: string; addressed: boolean },
-	run: () => T | Promise<T>,
-): T | Promise<T> {
-	return runWithPlannerReplyContext(context, run);
 }
 
 function readPlannerReplyContextSnapshot(

@@ -14,7 +14,7 @@ const KIND_OPTIONS: { id: FilterKind; label: string }[] = [
 	{ id: "pets", label: "Pets" },
 ];
 
-export function GalleryView({ embedded = false }: { embedded?: boolean } = {}) {
+export function GalleryView() {
 	useDetourTheme();
 	const [kind, setKind] = useState<FilterKind>("all");
 	const [provider, setProvider] = useState("all");
@@ -75,7 +75,7 @@ export function GalleryView({ embedded = false }: { embedded?: boolean } = {}) {
 	const isPetsTab = kind === "pets";
 
 	return (
-		<div className={embedded ? "gallery-shell embedded" : "gallery-shell"}>
+		<div className="gallery-shell embedded">
 			<aside className="gallery-sidebar">
 				<div className="window-brand">Gallery</div>
 				<div className="gallery-filter-group">

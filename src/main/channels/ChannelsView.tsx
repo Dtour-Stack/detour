@@ -18,6 +18,7 @@ const CHANNEL_ICONS: Record<string, string> = {
 	telegram: "TG",
 	github: "GH",
 	imessage: "IM",
+	twitter: "TW",
 };
 
 export function ChannelsView() {

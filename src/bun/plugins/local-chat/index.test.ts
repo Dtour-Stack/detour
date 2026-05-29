@@ -88,11 +88,15 @@ describe("local-chat plugin", () => {
 			const handler = getHandler("TEXT_SMALL");
 			const out = await handler(fakeRuntime(), { prompt: "Say hi" });
 			expect(out).toBe("Hello from local model.");
-			expect(calls.length).toBe(1);
-			expect(calls[0]!.url).toBe(
+			// The handler health-probes (GET /health) before the chat POST, so
+			// there can be a /health call too — assert the chat POST specifically
+			// rather than the total call count.
+			const chatCall = calls.find((c) => c.url.endsWith("/v1/chat/completions"));
+			expect(chatCall).toBeDefined();
+			expect(chatCall!.url).toBe(
 				"http://127.0.0.1:51100/v1/chat/completions",
 			);
-			const body = calls[0]!.body as {
+			const body = chatCall!.body as {
 				messages: Array<{ role: string; content: string }>;
 				stream: boolean;
 			};

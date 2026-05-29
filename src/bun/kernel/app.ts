@@ -3,6 +3,11 @@ import { registerWindow } from "../core/rpc/registry";
 import { EventBus, type KernelEvents } from "./events";
 import { TrayController } from "./tray";
 import { WindowFactory } from "./windows";
+import {
+	WINDOW_OPEN_MESSAGE,
+	WINDOW_OPEN_KERNEL_EVENT,
+} from "../../shared/window-targets";
+import type { WindowOpenTarget } from "../../shared/index";
 
 export type KernelDeps = {
 	core: CoreHandle;
@@ -19,19 +24,23 @@ export function createKernel(opts: {
 	const windows = new WindowFactory(opts.core.rpcDeps);
 	const tray = new TrayController({ title: opts.trayTitle });
 
-	// Bridge typed-RPC broadcasts onto the kernel event bus. The browser
-	// RPC handler / vault-tools agent enqueue browser commands through the
-	// `BROWSER_CONTROL_GLOBAL` symbol, which broadcasts `uiOpenBrowser`
-	// via the rpc broadcaster. We register an in-process faux send fn so
-	// the kernel can react alongside the real webview windows — this is
-	// what triggers the browser window to open when an agent calls
-	// `enqueueAndWait`. `browserCommand` is view-only and ignored here.
+	// Bridge typed-RPC `uiOpen*` broadcasts onto the kernel event bus so opens
+	// that originate outside an already-open hub (tray popover, detour:// URL,
+	// an agent broadcasting `uiOpenBrowser`) still reach the feature that owns
+	// the window/hub. Derived from the shared WINDOW_OPEN_* maps so it can't
+	// drift from the target set (the prior hardcoded if-chain had silently
+	// missed pensieve/activity). `browserCommand` is view-only and ignored here.
+	// Every WINDOW_OPEN_KERNEL_EVENT value is a `ui:open-*` event, all of which
+	// carry an empty payload — narrow to that subset so emit accepts `{}`.
+	type OpenEvent = Extract<keyof KernelEvents, `ui:open-${string}`>;
+	const BROADCAST_TO_KERNEL_EVENT = new Map<string, OpenEvent>(
+		(Object.entries(WINDOW_OPEN_KERNEL_EVENT) as Array<[WindowOpenTarget, string]>).map(
+			([target, event]) => [WINDOW_OPEN_MESSAGE[target], event as OpenEvent],
+		),
+	);
 	registerWindow((name) => {
-		if (name === "uiOpenChat") events.emit("ui:open-chat", {});
-		if (name === "uiOpenBrowser") events.emit("ui:open-browser", {});
-		if (name === "uiOpenPortless") events.emit("ui:open-portless", {});
-		if (name === "uiOpenPet") events.emit("ui:open-pet", {});
-		if (name === "uiOpenGallery") events.emit("ui:open-gallery", {});
+		const event = BROADCAST_TO_KERNEL_EVENT.get(name);
+		if (event) events.emit(event, {});
 	});
 
 	// Tray status poller — surfaces "● Detour: Codex + local embeds" at the

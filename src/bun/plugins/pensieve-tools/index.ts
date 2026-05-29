@@ -21,12 +21,12 @@
  * fan-out, and audit machinery as the UI.
  */
 
-import {
-	PensieveMemoryService,
-	PensieveRelationshipService,
-	PensieveTemplatesService,
-	type PensieveTemplateSummary,
-} from "../../core/index";
+// Import from the specific modules, not the core/index boot barrel — importing
+// the barrel created the core/index → runtime → pensieve-tools → core/index
+// cycle (and many of its variants).
+import { PensieveMemoryService } from "../../core/pensieve/memory-service";
+import { PensieveRelationshipService } from "../../core/pensieve/relationship-service";
+import { PensieveTemplatesService, type PensieveTemplateSummary } from "../../core/pensieve/templates-service";
 import {
 	type Action,
 	type ActionResult,

@@ -1,41 +1,39 @@
 import type { Feature } from "../../kernel/registry";
-import type { WindowHandle } from "../../kernel/windows";
-import { resolveViewUrl } from "../../kernel/view-url";
-
-const DEFAULT_WIDTH = 720;
-const DEFAULT_HEIGHT = 560;
+import { broadcaster } from "../../core/rpc/registry";
 
 /**
- * Portless = local-dev reverse proxy management. Browse registered
- * `<name>.localhost` routes, register new ones, prune stale entries.
+ * Portless = local-dev reverse proxy management.
+ *
+ * Lives as a tab inside the Detour hub (chat window), not a separate window.
+ * Opening it shows the hub and broadcasts `uiOpenPortless`, which the React
+ * app turns into `setActiveView("portless")` (see App.tsx). The `forwarded`
+ * guard stops the kernel's broadcast→event bridge from looping back into
+ * `open()`. Mirrors the browser feature.
  */
 export const portlessFeature: Feature = {
 	id: "portless",
 	init(deps) {
-		let w: WindowHandle | null = null;
+		let forwarded = false;
 
 		function open() {
-			if (w) {
-				try { (w.window as unknown as { activate?: () => void }).activate?.(); } catch {}
-				w.show();
-				return;
-			}
-			const handle = deps.windows.createWindow({
-				viewKey: "portless",
-				title: "Detour Portless",
-				width: DEFAULT_WIDTH,
-				height: DEFAULT_HEIGHT,
-				centered: true,
-				url: resolveViewUrl("portless"),
-			});
-			handle.onClose(() => { w = null; });
-			w = handle;
+			deps.events.emit("ui:open-chat", {});
+			const route = () => {
+				forwarded = true;
+				broadcaster.broadcast("uiOpenPortless", {});
+				setTimeout(() => { forwarded = false; }, 0);
+			};
+			setTimeout(route, 150);
+			setTimeout(route, 400);
+			setTimeout(route, 900);
 		}
 
 		deps.tray.addMenuItem(
 			{ label: "Open Portless", action: "portless:open", order: 28 },
 			() => open(),
 		);
-		deps.events.on("ui:open-portless", () => open());
+		deps.events.on("ui:open-portless", () => {
+			if (forwarded) return;
+			open();
+		});
 	},
 };

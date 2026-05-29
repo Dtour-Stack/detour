@@ -258,7 +258,7 @@ function useElectrobunWebviewScript(): "loading" | "ready" | "unavailable" {
 	return status;
 }
 
-export function BrowserView({ embedded = false }: { embedded?: boolean } = {}) {
+export function BrowserView() {
 	const scriptStatus = useElectrobunWebviewScript();
 	const [stageReady, setStageReady] = useState(false);
 	const [tabs, setTabs] = useState<BrowserTab[]>(() => {
@@ -698,7 +698,7 @@ if (el && typeof el.scrollBy === "function") el.scrollBy({ left: ${deltaX}, top:
 	const matchingLogins = loginData?.logins.filter((login) => matchesHost(login, currentHost)) ?? [];
 
 	return (
-		<div className={embedded ? "agent-browser-shell embedded" : "agent-browser-shell"}>
+		<div className="agent-browser-shell embedded">
 			<header className="agent-browser-header">
 				<div className="agent-browser-tabs" role="tablist" aria-label="Browser tabs">
 					{tabs.map((tab) => (

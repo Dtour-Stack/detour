@@ -275,9 +275,9 @@ async function streamText(runtime: IAgentRuntime, model: string, params: Generat
 		store: false,
 		// `/codex/responses` REQUIRES an `instructions` string — sending an
 		// empty body or omitting the field both yield 400 "Instructions are
-		// required". Fall back to a minimal default so the call succeeds even
-		// when the caller (and the prompt's system message) didn't provide one.
-		instructions: instructions ?? "You are a helpful assistant.",
+		// required". Fall back to the character's system prompt if available,
+		// otherwise a minimal default so the call succeeds.
+		instructions: instructions ?? runtime.character.system ?? "You are a helpful assistant.",
 		// Codex Responses API rejects BOTH `temperature` AND `max_output_tokens`
 		// with HTTP 400 ("Unsupported parameter: …"). Eliza's planner +
 		// evaluators pass both in their generateText params; we silently drop

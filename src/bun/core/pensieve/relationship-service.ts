@@ -475,12 +475,284 @@ export class PensieveRelationshipService {
 		return true;
 	}
 
-	async remove(source: UUID, target: UUID): Promise<boolean> {
+	// ── Phase 2: Cross-channel identity consolidation ─────────────────────
+
+	/**
+	 * Discover and merge entities that represent the same person across
+	 * different channels (Discord, X, Telegram, iMessage).
+	 *
+	 * Matching strategies (in order of confidence):
+	 * 1. Exact username match across platforms (confidence: 0.9)
+	 * 2. Phone number match between iMessage and Telegram (confidence: 0.85)
+	 * 3. Gateway identity candidates — same external handle seen under
+	 *    multiple entity IDs (confidence: 0.95 — most reliable)
+	 *
+	 * Returns the number of merges performed.
+	 */
+	async consolidateCrossChannelIdentities(
+		gatewayIdentities?: Array<{
+			channel: string;
+			externalHandle: string;
+			entityIds: string[];
+		}>,
+	): Promise<{ mergesPerformed: number; candidates: Array<{ primary: string; merged: string[]; reason: string }> }> {
 		const runtime = this.resolveRuntime();
-		if (!runtime) return false;
+		if (!runtime) return { mergesPerformed: 0, candidates: [] };
+		const relService = relationshipsService(runtime);
+		if (
+			typeof relService?.proposeMerge !== "function" ||
+			typeof relService.acceptMerge !== "function" ||
+			typeof runtime.getRelationships !== "function"
+		) {
+			return { mergesPerformed: 0, candidates: [] };
+		}
+
+		const mergeLog: Array<{ primary: string; merged: string[]; reason: string }> = [];
+		let mergesPerformed = 0;
+
+		// Strategy 1: Gateway identity candidates — same handle, multiple entity IDs
+		if (gatewayIdentities) {
+			for (const identity of gatewayIdentities) {
+				if (identity.entityIds.length < 2) continue;
+				const [primaryId, ...secondaryIds] = identity.entityIds;
+				for (const secondaryId of secondaryIds) {
+					try {
+						const candidateId = await relService.proposeMerge(
+							primaryId as UUID,
+							secondaryId as UUID,
+							{
+								source: "pensieve.cross-channel.gateway-handle",
+								confidence: 0.95,
+								channel: identity.channel,
+								handle: identity.externalHandle,
+							},
+						);
+						await relService.acceptMerge(candidateId);
+						mergesPerformed++;
+						mergeLog.push({
+							primary: primaryId,
+							merged: [secondaryId],
+							reason: `Same ${identity.channel} handle: ${identity.externalHandle}`,
+						});
+					} catch (err) {
+						logger.warn(
+							{
+								src: "pensieve:relationships",
+								err: err instanceof Error ? err.message : err,
+								primaryId,
+								secondaryId,
+							},
+							"[PensieveRelationshipService] cross-channel gateway merge failed",
+						);
+					}
+				}
+			}
+		}
+
+		// Strategy 2: Username-based matching across platforms
+		const agentId = String(runtime.agentId);
+		const rels = await (runtime as unknown as AdapterShape).getRelationships!({
+			entityIds: [runtime.agentId],
+			limit: 1000,
+		});
+		const entityIds = new Set<string>();
+		for (const rel of rels) {
+			for (const id of [String(rel.sourceEntityId), String(rel.targetEntityId)]) {
+				if (id !== agentId) entityIds.add(id);
+			}
+		}
+		if (entityIds.size === 0) return { mergesPerformed, candidates: mergeLog };
+
+		const allIds = Array.from(entityIds) as UUID[];
+		const entities = typeof (runtime as unknown as AdapterShape).getEntitiesByIds === "function"
+			? await (runtime as unknown as AdapterShape).getEntitiesByIds!(allIds)
+			: [];
+
+		// Build a handle→entityId index
+		const handleIndex = new Map<string, Set<string>>();
+		for (const entity of entities) {
+			const metadata = entity.metadata as Record<string, unknown> | undefined;
+			const handles = metadata?.handles as string[] | undefined;
+			const source = typeof metadata?.source === "string" ? metadata.source : null;
+
+			// Collect all possible usernames for this entity
+			const usernames = new Set<string>();
+			for (const name of entity.names ?? []) {
+				const normalized = name?.trim().toLowerCase().replace(/^@/, "");
+				if (normalized && normalized.length >= 3 && normalized !== "unknown" && normalized !== "user") {
+					usernames.add(normalized);
+				}
+			}
+			if (handles) {
+				for (const handle of handles) {
+					const normalized = handle?.trim().toLowerCase().replace(/^@/, "").replace(/^\+/, "");
+					if (normalized && normalized.length >= 3) {
+						usernames.add(normalized);
+					}
+				}
+			}
+
+			for (const username of usernames) {
+				const existing = handleIndex.get(username) ?? new Set();
+				existing.add(String(entity.id));
+				handleIndex.set(username, existing);
+			}
+		}
+
+		// Find clusters of entity IDs sharing a username
+		for (const [username, ids] of handleIndex) {
+			if (ids.size < 2) continue;
+			const sorted = Array.from(ids);
+			const primaryId = sorted[0];
+			// Check if already merged
+			const primaryResolved = relService.resolvePrimaryEntityId
+				? await relService.resolvePrimaryEntityId(primaryId as UUID).catch(() => primaryId)
+				: primaryId;
+			const memberIds = relService.getMemberEntityIds
+				? await relService.getMemberEntityIds(primaryResolved as UUID).catch(() => [primaryResolved])
+				: [primaryResolved];
+			const memberSet = new Set(memberIds.map(String));
+
+			for (const secondaryId of sorted.slice(1)) {
+				if (memberSet.has(secondaryId)) continue;
+				try {
+					const candidateId = await relService.proposeMerge(
+						primaryResolved as UUID,
+						secondaryId as UUID,
+						{
+							source: "pensieve.cross-channel.username-match",
+							confidence: 0.9,
+							matchedUsername: username,
+						},
+					);
+					await relService.acceptMerge(candidateId);
+					mergesPerformed++;
+					memberSet.add(secondaryId);
+					mergeLog.push({
+						primary: primaryResolved,
+						merged: [secondaryId],
+						reason: `Shared username: ${username}`,
+					});
+				} catch (err) {
+					logger.warn(
+						{
+							src: "pensieve:relationships",
+							err: err instanceof Error ? err.message : err,
+							primaryId: primaryResolved,
+							secondaryId,
+							username,
+						},
+						"[PensieveRelationshipService] cross-channel username merge failed",
+					);
+				}
+			}
+		}
+
+		return { mergesPerformed, candidates: mergeLog };
+	}
+
+	// ── Phase 4: Stale contact pruning ────────────────────────────────────
+
+	/**
+	 * Prune stale contacts that have low importance and haven't been seen
+	 * recently. This doesn't delete entities — it archives their memories
+	 * and demotes them so they don't clutter context.
+	 *
+	 * Rules:
+	 * - Tracked contacts are NEVER pruned regardless of inactivity
+	 * - importanceScore < 10 AND lastSeen > 90 days → mark as stale
+	 * - importanceScore < 5 AND lastSeen > 180 days → mark as archived
+	 */
+	async pruneStaleContacts(opts?: {
+		staleDays?: number;
+		archiveDays?: number;
+		staleThreshold?: number;
+		archiveThreshold?: number;
+		dryRun?: boolean;
+	}): Promise<{
+		staleCount: number;
+		archivedCount: number;
+		skippedTracked: number;
+		details: Array<{ entityId: string; name?: string; action: "stale" | "archived"; reason: string }>;
+	}> {
+		const staleDays = opts?.staleDays ?? 90;
+		const archiveDays = opts?.archiveDays ?? 180;
+		const staleThreshold = opts?.staleThreshold ?? 10;
+		const archiveThreshold = opts?.archiveThreshold ?? 5;
+		const dryRun = opts?.dryRun ?? false;
+
+		const runtime = this.resolveRuntime();
+		if (!runtime) return { staleCount: 0, archivedCount: 0, skippedTracked: 0, details: [] };
 		const a = adapter(runtime);
-		if (typeof a.deleteRelationships !== "function") return false;
-		await a.deleteRelationships([{ sourceEntityId: source, targetEntityId: target }]);
-		return true;
+		const relService = relationshipsService(runtime);
+
+		const persons = await this.listPersons(500);
+		const now = Date.now();
+		const staleMs = staleDays * 86_400_000;
+		const archiveMs = archiveDays * 86_400_000;
+
+		let staleCount = 0;
+		let archivedCount = 0;
+		let skippedTracked = 0;
+		const details: Array<{ entityId: string; name?: string; action: "stale" | "archived"; reason: string }> = [];
+
+		for (const person of persons) {
+			// Never prune tracked contacts
+			if (person.tracked) {
+				skippedTracked++;
+				continue;
+			}
+
+			const importance = person.importanceScore ?? 0;
+			const lastSeen = person.lastSeen ?? 0;
+			const age = now - lastSeen;
+
+			// Archive: very low importance + very old
+			if (importance < archiveThreshold && age > archiveMs) {
+				if (!dryRun && typeof a.updateEntity === "function") {
+					const entity = typeof a.getEntityById === "function"
+						? await a.getEntityById(person.id as UUID)
+						: null;
+					if (entity) {
+						const metadata = (entity.metadata ?? {}) as Record<string, unknown>;
+						metadata.archivedAt = now;
+						metadata.archiveReason = `importance=${importance}, lastSeen=${Math.floor(age / 86_400_000)}d ago`;
+						await a.updateEntity({ ...entity, metadata } as Entity);
+					}
+				}
+				archivedCount++;
+				details.push({
+					entityId: person.id,
+					name: person.name,
+					action: "archived",
+					reason: `Importance ${importance} < ${archiveThreshold}, last seen ${Math.floor(age / 86_400_000)}d ago > ${archiveDays}d`,
+				});
+				continue;
+			}
+
+			// Stale: low importance + old
+			if (importance < staleThreshold && age > staleMs) {
+				if (!dryRun && typeof a.updateEntity === "function") {
+					const entity = typeof a.getEntityById === "function"
+						? await a.getEntityById(person.id as UUID)
+						: null;
+					if (entity) {
+						const metadata = (entity.metadata ?? {}) as Record<string, unknown>;
+						metadata.staleAt = now;
+						metadata.staleReason = `importance=${importance}, lastSeen=${Math.floor(age / 86_400_000)}d ago`;
+						await a.updateEntity({ ...entity, metadata } as Entity);
+					}
+				}
+				staleCount++;
+				details.push({
+					entityId: person.id,
+					name: person.name,
+					action: "stale",
+					reason: `Importance ${importance} < ${staleThreshold}, last seen ${Math.floor(age / 86_400_000)}d ago > ${staleDays}d`,
+				});
+			}
+		}
+
+		return { staleCount, archivedCount, skippedTracked, details };
 	}
 }

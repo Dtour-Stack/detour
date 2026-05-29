@@ -27,6 +27,7 @@
 import { cpus, totalmem } from "node:os";
 import { LlamaServerService, type LlamaServerStatus } from "./server-service";
 import type { MemoryArbiter } from "./memory-arbiter";
+import { resetLocalChatHealthCache } from "../../plugins/local-chat/index";
 
 /**
  * Quick-pick presets that the UI surfaces. Keep these conservative for
@@ -324,6 +325,7 @@ export class LocalChatService {
 		// Reserve only after success so a failed spawn doesn't leak a slot.
 		this.arbiter?.reserve("chat", preset.approxLiveRamGB);
 		process.env.DETOUR_LOCAL_CHAT_URL = result.url;
+		resetLocalChatHealthCache();
 		process.env.DETOUR_LOCAL_CHAT_MODEL = preset.id;
 		// `mode` selects /v1/chat/completions vs /v1/completions+Q:A wrap.
 		process.env.DETOUR_LOCAL_CHAT_MODE = preset.mode ?? "chat";
@@ -350,6 +352,7 @@ export class LocalChatService {
 		this.currentModelRef = null;
 		this.arbiter?.release("chat");
 		delete process.env.DETOUR_LOCAL_CHAT_URL;
+		resetLocalChatHealthCache();
 		delete process.env.DETOUR_LOCAL_CHAT_MODEL;
 		delete process.env.DETOUR_LOCAL_CHAT_MODE;
 	}

@@ -1,58 +1,42 @@
 import { GlobalShortcut } from "electrobun/bun";
+import { logger } from "@elizaos/core";
 import type { Feature } from "../../kernel/registry";
+import { GLOBAL_SHORTCUTS, WINDOW_TARGET_META } from "../../../shared/window-targets";
 
-const TOGGLE_CHAT = "CommandOrControl+Shift+Space";
-const OPEN_SETTINGS = "CommandOrControl+Shift+S";
-const OPEN_PENSIEVE = "CommandOrControl+Shift+P";
-const OPEN_ACTIVITY = "CommandOrControl+Shift+A";
-const OPEN_BROWSER = "CommandOrControl+Shift+B";
+function registerShortcut(accelerator: string, label: string, handler: () => void): void {
+	const ok = GlobalShortcut.register(accelerator, handler);
+	if (!ok) {
+		logger.warn({ src: "shortcuts", accelerator }, "[Shortcuts] register failed");
+		return;
+	}
+	logger.info({ src: "shortcuts", accelerator, label }, "[Shortcuts] registered");
+}
 
 export const shortcutsFeature: Feature = {
 	id: "shortcuts",
 	init(deps) {
-		const okChat = GlobalShortcut.register(TOGGLE_CHAT, () => {
+		registerShortcut(GLOBAL_SHORTCUTS.toggleChat, "toggle chat", () => {
 			deps.events.emit("ui:toggle-chat", {});
 		});
-		if (!okChat) {
-			console.warn(`[shortcuts] failed to register ${TOGGLE_CHAT} (likely in use)`);
-		} else {
-			console.log(`[shortcuts] ${TOGGLE_CHAT} → toggle chat`);
-		}
 
-		const okSettings = GlobalShortcut.register(OPEN_SETTINGS, () => {
+		registerShortcut(GLOBAL_SHORTCUTS.openCapsule, WINDOW_TARGET_META.capsule.label, () => {
+			deps.events.emit("ui:open-capsule", {});
+		});
+
+		registerShortcut(GLOBAL_SHORTCUTS.openSettings, WINDOW_TARGET_META.settings.label, () => {
 			deps.events.emit("ui:open-settings", {});
 		});
-		if (!okSettings) {
-			console.warn(`[shortcuts] failed to register ${OPEN_SETTINGS}`);
-		} else {
-			console.log(`[shortcuts] ${OPEN_SETTINGS} → open settings`);
-		}
 
-		const okPensieve = GlobalShortcut.register(OPEN_PENSIEVE, () => {
+		registerShortcut(GLOBAL_SHORTCUTS.openPensieve, WINDOW_TARGET_META.pensieve.label, () => {
 			deps.events.emit("ui:open-pensieve", {});
 		});
-		if (!okPensieve) {
-			console.warn(`[shortcuts] failed to register ${OPEN_PENSIEVE}`);
-		} else {
-			console.log(`[shortcuts] ${OPEN_PENSIEVE} → open pensieve`);
-		}
 
-		const okActivity = GlobalShortcut.register(OPEN_ACTIVITY, () => {
+		registerShortcut(GLOBAL_SHORTCUTS.openActivity, WINDOW_TARGET_META.activity.label, () => {
 			deps.events.emit("ui:open-activity", {});
 		});
-		if (!okActivity) {
-			console.warn(`[shortcuts] failed to register ${OPEN_ACTIVITY}`);
-		} else {
-			console.log(`[shortcuts] ${OPEN_ACTIVITY} → open activity`);
-		}
 
-		const okBrowser = GlobalShortcut.register(OPEN_BROWSER, () => {
+		registerShortcut(GLOBAL_SHORTCUTS.openBrowser, WINDOW_TARGET_META.browser.label, () => {
 			deps.events.emit("ui:open-browser", {});
 		});
-		if (!okBrowser) {
-			console.warn(`[shortcuts] failed to register ${OPEN_BROWSER}`);
-		} else {
-			console.log(`[shortcuts] ${OPEN_BROWSER} → open browser`);
-		}
 	},
 };

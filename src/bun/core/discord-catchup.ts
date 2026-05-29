@@ -111,7 +111,7 @@ function resolveDiscordService(runtime: IAgentRuntime): DiscordServiceLike | nul
 
 function clampLimit(limit: number | undefined): number {
 	if (!Number.isFinite(limit)) return DEFAULT_LIMIT;
-	return Math.max(1, Math.min(500, Math.trunc(limit ?? DEFAULT_LIMIT)));
+	return Math.max(1, Math.min(100, Math.trunc(limit ?? DEFAULT_LIMIT)));
 }
 
 function escapeRegex(value: string): string {

@@ -1,5 +1,6 @@
 import type { Feature } from "../../kernel/registry";
 import { broadcaster } from "../../core/rpc/registry";
+import { WINDOW_TARGET_META } from "../../../shared/window-targets";
 
 export const browserFeature: Feature = {
 	id: "browser",
@@ -19,7 +20,7 @@ export const browserFeature: Feature = {
 		}
 
 		deps.tray.addMenuItem(
-			{ label: "Open Browser", action: "browser:open", order: 28 },
+			{ label: WINDOW_TARGET_META.browser.menuLabel, action: "browser:open", order: 28 },
 			() => open(),
 		);
 		deps.events.on("ui:open-browser", () => {

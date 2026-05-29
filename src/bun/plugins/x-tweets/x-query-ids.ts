@@ -10,7 +10,7 @@
  *   # then download that file and:
  *   grep -oE 'queryId:"[^"]+",operationName:"[^"]+"' main.<hash>.js | sort -u
  *
- * Last refreshed: 2026-05-05 against main.0d6e4b3a.js.
+ * Last refreshed: 2026-05-28 against main.6d52447a.js.
  *
  * The featureSwitches metadata travels alongside each operation in the bundle.
  * For mutations (FavoriteTweet, CreateRetweet, DeleteTweet, etc.) the bundle
@@ -21,7 +21,7 @@
 
 export const X_QUERY_IDS = {
 	// — Mutations (write actions; no features payload) —
-	CreateTweet: "uKLMT1QYb6HJah_Cp5euiQ",
+	CreateTweet: "H-t2v_HvFR07ZBP9aOeKoA",
 	DeleteTweet: "nxpZCY2K-I6QoFHAHeojFQ",
 	FavoriteTweet: "lI07N6Otwv1PhnEgXILM7A",
 	UnfavoriteTweet: "ZYKSe-w7KEslx3JhSIk5LA",
@@ -34,16 +34,16 @@ export const X_QUERY_IDS = {
 	Viewer: "_8ClT24oZ8tpylf_OSuNdg",
 	UserByScreenName: "IGgvgiOx4QZndDHuD3x9TQ",
 	UserByRestId: "VQfQ9wwYdk6j_u2O4vt64Q",
-	UserTweets: "pQHADmT91zIY83UbK0x4Lw",
-	UserTweetsAndReplies: "6eh3huj6fJnA3Naupj4w0Q",
-	TweetDetail: "UyruM32D2wFB3iSrtf_JcQ",
-	SearchTimeline: "xrS3h-srT2mQT-g3lKsUjA",
-	HomeLatestTimeline: "e89k_Hjy9W-HblqrtNCrlQ",
-	HomeTimeline: "kUbOYB721bLdKYy6pQdBWQ",
-	Following: "BdLNz9uyjufSJAveij_WZw",
-	Followers: "f_mHnjGiLxcNKbvKG5VQZg",
-	Likes: "Q69CuyHDCvTaFX95D5Zc8w",
-	UserMedia: "rfcApxVNsBOsann7TAegWA",
+	UserTweets: "PNd0vlufvrcIwrAnBYKE9g",
+	UserTweetsAndReplies: "EqtpEwt0CoQXmDfq5DKH0A",
+	TweetDetail: "6uCvnic3m5reVuehkvHa3w",
+	SearchTimeline: "-TFXKoMnMTKdEXcCn-eahw",
+	HomeLatestTimeline: "v8D8YuUcH9097nKOVvRPgA",
+	HomeTimeline: "-M5P8LkjBRfeMF2MRJfbqA",
+	Following: "XRzHZz4sLnhSgz55WGMCbg",
+	Followers: "Wp9x7NPOJ5klmf5H-350gw",
+	Likes: "-a4kQTjMROm_V1cOpbNyXQ",
+	UserMedia: "g_rGPF0fLON-M9cyVjXuzA",
 } as const;
 
 /**

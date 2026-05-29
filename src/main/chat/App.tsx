@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Sun, Settings, X } from "lucide-react";
 import type {
 	ChannelStatus,
 	ProviderId,
@@ -14,7 +15,7 @@ import { ChannelsView } from "../channels/ChannelsView";
 import { InboxPane } from "./inbox/InboxPane";
 import { GatewayPane } from "./gateway/GatewayPane";
 import { PensieveView } from "../pensieve/PensieveView";
-import { ActivityView } from "../activity/ActivityView";
+import { ActivityView, type ActivityTab } from "../activity/ActivityView";
 import { BrowserView } from "../browser/BrowserView";
 import { GalleryView } from "../gallery/GalleryView";
 import { PortlessView } from "../portless/PortlessView";
@@ -22,22 +23,27 @@ import { CommandPalette } from "../command-palette/CommandPalette";
 import { rpc } from "../rpc";
 import {
 	onUiOpenActivity,
+	onUiOpenAgents,
 	onUiOpenBrowser,
 	onUiOpenChat,
 	onUiOpenCommandPalette,
 	onUiOpenGallery,
 	onUiOpenPensieve,
+	onUiOpenPortless,
 	onUiOpenSettings,
 } from "../rpc-listeners/chat";
 import { onProviderChanged } from "../rpc-listeners/providers";
 
-function renderToolView(view: HubToolView): React.ReactNode {
+function renderToolView(
+	view: HubToolView,
+	activityFocus: { focusTab: ActivityTab | null; onFocusApplied: () => void },
+): React.ReactNode {
 	switch (view) {
-		case "pensieve": return <PensieveView embedded />;
-		case "activity": return <ActivityView embedded />;
-		case "browser": return <BrowserView embedded />;
-		case "gallery": return <GalleryView embedded />;
-		case "portless": return <PortlessView embedded />;
+		case "pensieve": return <PensieveView />;
+		case "activity": return <ActivityView focusTab={activityFocus.focusTab} onFocusApplied={activityFocus.onFocusApplied} />;
+		case "browser": return <BrowserView />;
+		case "gallery": return <GalleryView />;
+		case "portless": return <PortlessView />;
 	}
 }
 
@@ -92,6 +98,10 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 	const [llamaReady, setLlamaReady] = useState<boolean | null>(null);
 	const [llamaProgress, setLlamaProgress] = useState<{ percent: number; downloaded: number; total: number } | null>(null);
 	const [activeView, setActiveView] = useState<HubView>(initialView);
+	// One-shot deep-link into an Activity sub-tab (e.g. "Open Coding Agents").
+	// Cleared once ActivityView applies it, so normal navigation keeps the
+	// user's last tab.
+	const [pendingActivityTab, setPendingActivityTab] = useState<ActivityTab | null>(null);
 	const [channels, setChannels] = useState<ChannelStatus[]>([]);
 	const [paletteOpen, setPaletteOpen] = useState(false);
 	const drawerOpen = drawer !== null;
@@ -143,6 +153,15 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 		const offActivity = onUiOpenActivity(() => { setActiveView("activity"); setDrawer(null); });
 		const offBrowser = onUiOpenBrowser(() => { setActiveView("browser"); setDrawer(null); });
 		const offGallery = onUiOpenGallery(() => { setActiveView("gallery"); setDrawer(null); });
+		const offPortless = onUiOpenPortless(() => { setActiveView("portless"); setDrawer(null); });
+		// "Coding Agents" surfaces as Activity's Subagents pane. The one-shot
+		// pendingActivityTab makes ActivityView focus subagents whether or not
+		// it's already mounted (clicking this while already on Activity works).
+		const offAgents = onUiOpenAgents(() => {
+			setPendingActivityTab("subagents");
+			setActiveView("activity");
+			setDrawer(null);
+		});
 		const offPalette = onUiOpenCommandPalette(() => setPaletteOpen((x) => !x));
 		const offProvider = onProviderChanged((m) => setActiveProvider(m.activeProvider));
 		// Active provider for the header chip.
@@ -176,6 +195,8 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 			offActivity();
 			offBrowser();
 			offGallery();
+			offPortless();
+			offAgents();
 			offPalette();
 			offProvider();
 			clearInterval(llamaTimer);
@@ -421,17 +442,7 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 							title="Appearance"
 							onClick={() => setAppearancePopover((x) => !x)}
 						>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-								<circle cx="12" cy="12" r="5" />
-								<line x1="12" y1="1" x2="12" y2="3" />
-								<line x1="12" y1="21" x2="12" y2="23" />
-								<line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-								<line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-								<line x1="1" y1="12" x2="3" y2="12" />
-								<line x1="21" y1="12" x2="23" y2="12" />
-								<line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-								<line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-							</svg>
+							<Sun size={14} />
 						</button>
 						{appearancePopover && (
 							<div className="popover">
@@ -474,10 +485,7 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 						title="Configuration"
 						onClick={() => setDrawer((current) => current === "settings" ? null : "settings")}
 					>
-						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-							<circle cx="12" cy="12" r="3" />
-							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-						</svg>
+						<Settings size={14} />
 					</button>
 					<button
 						type="button"
@@ -485,10 +493,7 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 						title="Hide window"
 						onClick={closeWindow}
 					>
-						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-							<line x1="18" y1="6" x2="6" y2="18" />
-							<line x1="6" y1="6" x2="18" y2="18" />
-						</svg>
+						<X size={14} />
 					</button>
 				</div>
 			</header>
@@ -501,7 +506,10 @@ export function App({ initialView = "chat", initialDrawer = null }: AppProps = {
 				/>
 				<div className="hub-main">
 					{isHubToolView(activeView) ? (
-						renderToolView(activeView)
+						renderToolView(activeView, {
+							focusTab: pendingActivityTab,
+							onFocusApplied: () => setPendingActivityTab(null),
+						})
 					) : activeView === "inbox" ? (
 						<InboxPane />
 					) : activeView === "feed" ? (

@@ -48,6 +48,11 @@ import type { DreamsRequests, DreamsMessages } from "./dreams";
 import type { PromptSlotsRequests } from "./prompt-slots";
 import type { SkillsRequests } from "./skills";
 import type { WalletStatsRequests } from "./wallet-stats";
+import type { CapsuleRequests, CapsuleMessages } from "./capsule";
+import type { TrayPopoverRequests, TrayPopoverMessages } from "./tray-popover";
+import type { PrintingPressRequests } from "./printing-press";
+import type { RecapRequests, RecapMessages } from "./recap";
+import type { AgentMailRequests } from "./agentmail";
 
 export type DetourBunRequests =
 	& VaultRequests
@@ -78,6 +83,11 @@ export type DetourBunRequests =
 	& PromptSlotsRequests
 	& SkillsRequests
 	& WalletStatsRequests
+	& CapsuleRequests
+	& TrayPopoverRequests
+	& PrintingPressRequests
+	& RecapRequests
+	& AgentMailRequests
 	& PhantomBunRequests;
 
 // All `messages` (both bun→view and view→bun) live in DetourBunMessages.
@@ -98,7 +108,10 @@ export type DetourBunMessages =
 	& TasksMessages
 	& PetsMessages
 	& GoalsMessages
-	& DreamsMessages;
+	& DreamsMessages
+	& CapsuleMessages
+	& TrayPopoverMessages
+	& RecapMessages;
 
 export type DetourWebviewRequests = PhantomWebviewRequests;
 
