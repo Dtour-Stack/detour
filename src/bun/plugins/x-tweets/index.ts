@@ -35,6 +35,7 @@ import {
 	X_AUTONOMY_TASK_TAGS,
 } from "../../../shared/x-autonomy-policy";
 import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary } from "./x-client";
+import { buildResearchContext } from "./research";
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -1293,6 +1294,12 @@ async function decideXStatusPost(
 		recentReplyTexts?: string[];
 	},
 ): Promise<XStatusDecision> {
+	const researchContext = params.lane === "generic"
+		? await buildResearchContext(
+			params.context || "AI agents developer technology news",
+			runtime.getSetting("TAVILY_API_KEY") ?? process.env.TAVILY_API_KEY ?? "",
+		).catch(() => "")
+		: "";
 	const laneGuidance: Record<typeof params.lane, string[]> = {
 		generic: [
 			"- Prefer an original project-status bite over silence: Detour Squirrel, elizaOS-native agents, Pensieve memory, messaging context, trajectories, connector awareness, or desktop workflows.",
@@ -1334,6 +1341,7 @@ async function decideXStatusPost(
 		"- No hashtags unless truly useful. No engagement bait.",
 		...laneGuidance[params.lane],
 		"",
+		...(researchContext ? [researchContext, ""] : []),
 		params.context ? `Recent internal context:\n${params.context}` : "Recent internal context: (none)",
 		"",
 		"Output TOON only:",
