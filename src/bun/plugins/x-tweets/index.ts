@@ -2656,6 +2656,78 @@ export const xPostAction: Action = {
 	],
 } as Action;
 
+// ── X_POST_THREAD ────────────────────────────────────────────────────────────
+
+function threadSegmentsFromOptions(options: Record<string, unknown>): string[] {
+	const raw = options.segments;
+	if (Array.isArray(raw)) return raw.map((s) => String(s)).filter((s) => s.trim().length > 0);
+	const text = typeof options.text === "string" ? options.text : "";
+	return text.split(/\n\s*\n+/).map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+const threadHandler: Handler = async (runtime, _m, _s, options, callback) => {
+	const opts = (options as Record<string, unknown> | undefined) ?? {};
+	const segments = threadSegmentsFromOptions(opts);
+	return withClient(runtime, callback, "X_POST_THREAD", async (client) => {
+		if (segments.length < 2) {
+			const text = pickString(opts, ["text", "content", "tweet", "message"]) ?? segments[0] ?? "";
+			if (!text) return missing("X_POST_THREAD", "segments", callback);
+			const r = await client.tweet(text);
+			if (!r.success) {
+				await emit(callback, `X_POST_THREAD failed: ${r.error ?? "unknown"}`, "X_POST_THREAD");
+				return { success: false, error: r.error };
+			}
+			if (r.tweetId) recordOutboundTweet(runtime, r.tweetId, text);
+			const url = r.url ?? `https://x.com/i/web/status/${r.tweetId}`;
+			await emit(callback, `Posted: ${url}`, "X_POST_THREAD");
+			return { success: true, tweetId: r.tweetId, url };
+		}
+		const res = await client.postThread(segments);
+		if (!res.success) {
+			const partial = res.tweetIds.length > 0
+				? ` (${res.tweetIds.length} segment(s) posted before failure)`
+				: "";
+			const errMsg = `X_POST_THREAD failed at segment ${res.tweetIds.length + 1}${partial}: ${res.error ?? "unknown"}`;
+			await emit(callback, errMsg, "X_POST_THREAD");
+			const firstUrl = res.tweetIds[0]
+				? `https://x.com/i/web/status/${res.tweetIds[0]}`
+				: undefined;
+			return { success: false, error: res.error, tweetIds: res.tweetIds, url: firstUrl };
+		}
+		for (const [i, id] of res.tweetIds.entries()) {
+			recordOutboundTweet(runtime, id, segments[i] ?? "");
+		}
+		logger.info({ src: "x-tweets", tweetIds: res.tweetIds, url: res.url }, "X_POST_THREAD posted");
+		await emit(callback, `Thread posted (${res.tweetIds.length} parts): ${res.url}`, "X_POST_THREAD");
+		return { success: true, tweetIds: res.tweetIds, url: res.url };
+	});
+};
+
+export const xPostThreadAction: Action = {
+	name: "X_POST_THREAD",
+	similes: ["THREAD_TWEET", "POST_THREAD", "TWEET_THREAD", "X_THREAD"],
+	description:
+		"Post a multi-part thread on X. Pass `segments` (string array) for explicit parts, or pass `text` with blank-line separators. Segment 0 becomes the original tweet; each later segment is a reply to the previous one. Use X_POST_THREAD when a take needs more than one post to land. One strong opener, each reply earns the next. Do not pad. Returns the URL of the first tweet in the thread.",
+	descriptionCompressed:
+		"post multi-part X thread via chained replies; segments array or blank-line-separated text; returns first tweet URL.",
+	validate: alwaysValid,
+	handler: threadHandler,
+	examples: [
+		[
+			{ name: "{{user}}", content: { text: "thread this out: here is why the outage was actually about yaml" } },
+			{ name: "{{agent}}", content: { text: "Threading it.", actions: ["X_POST_THREAD"] } },
+		],
+		[
+			{ name: "{{user}}", content: { text: "post a 3-part thread on why agents need permissions not chatbots" } },
+			{ name: "{{agent}}", content: { text: "Posted thread.", actions: ["X_POST_THREAD"] } },
+		],
+	],
+	parameters: [
+		{ name: "segments", description: "Array of thread parts. Each becomes a separate tweet (first is original, rest are replies).", required: false, schema: { type: "array" as const, items: { type: "string" as const } } },
+		{ name: "text", description: "Alternatively, pass a single string with parts separated by blank lines.", required: false, schema: { type: "string" as const } },
+	],
+} as Action;
+
 // ── X_POST_DETOUR_STATUS ────────────────────────────────────────────────────
 
 const detourStatusHandler: Handler = async (runtime, _m, _s, options, callback) => {
@@ -3365,6 +3437,7 @@ export const xTweetsPlugin: Plugin = {
 		"discovery unless proactive public engagement is explicitly enabled.",
 	actions: [
 		xPostAction,
+		xPostThreadAction,
 		xPostDetourStatusAction,
 		xPostTokenStatusAction,
 		xPostDexploarerStatusAction,

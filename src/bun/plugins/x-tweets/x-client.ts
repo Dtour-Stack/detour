@@ -210,6 +210,33 @@ export class XClient {
 		});
 	}
 
+	/** Post a thread: segment 0 is an original tweet, each later segment is a reply to
+	 *  the previous one. Stops and returns on the first failed segment. */
+	async postThread(
+		segments: string[],
+		opts: { mediaIds?: string[] } = {},
+	): Promise<{ success: boolean; tweetIds: string[]; url?: string; error?: string }> {
+		const clean = segments.map((s) => s.trim()).filter((s) => s.length > 0);
+		const tweetIds: string[] = [];
+		let prev = "";
+		for (let i = 0; i < clean.length; i++) {
+			const res =
+				i === 0
+					? await this.tweet(clean[i], opts.mediaIds ? { mediaIds: opts.mediaIds } : {})
+					: await this.reply(clean[i], prev, {});
+			if (!res.success || !res.tweetId) {
+				return { success: false, tweetIds, error: res.error ?? `thread failed at segment ${i}` };
+			}
+			tweetIds.push(res.tweetId);
+			prev = res.tweetId;
+		}
+		return {
+			success: tweetIds.length > 0,
+			tweetIds,
+			url: tweetIds[0] ? `https://x.com/i/web/status/${tweetIds[0]}` : undefined,
+		};
+	}
+
 	/**
 	 * Upload media bytes to X using the chunked v1.1 endpoint (INIT → APPEND →
 	 * FINALIZE → STATUS), returning the `media_id_string` the create-tweet
