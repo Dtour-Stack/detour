@@ -233,7 +233,7 @@ function pickMediaUrls(opts: Record<string, unknown> | undefined): string[] {
  * returning the resulting `media_id_string` array suitable for
  * `client.tweet(text, { mediaIds })`.
  *
- * Best-effort: a single failed upload is logged and dropped — partial
+ * Best-effort: a single failed upload is logged and dropped; partial
  * attach is preferable to a blocked post (matches user instruction to
  * "always attempt before giving up").
  */
@@ -288,13 +288,13 @@ async function withClient<T>(
 	if (expectedUserId) {
 		const self = await selfViewer(client);
 		if (!self) {
-			const msg = "X account check failed — couldn't resolve the authenticated account. Not acting to avoid posting as the wrong account.";
+			const msg = "X account check failed: couldn't resolve the authenticated account. Not acting to avoid posting as the wrong account.";
 			void emit(callback, msg, action);
 			return { success: false, error: msg };
 		}
 		if (self.userId !== expectedUserId) {
 			const msg = `Wrong X account loaded (@${self.screenName}, id ${self.userId}); expected id ${expectedUserId}. Refusing to act. Switch the Chrome profile's active x.com login back to the agent's account.`;
-			logger.warn({ src: "x-tweets", action, got: self.userId, expected: expectedUserId }, "refusing — wrong X account");
+			logger.warn({ src: "x-tweets", action, got: self.userId, expected: expectedUserId }, "refusing: wrong X account");
 			void emit(callback, msg, action);
 			return { success: false, error: msg };
 		}
@@ -306,7 +306,7 @@ async function withClient<T>(
 // Caches the authenticated viewer (handle + numeric id) per process so
 // reply/like/retweet/follow can refuse to operate on the agent's own
 // posts/account. Prevents loops where the agent reacts to its own
-// activity. Failures in lookup fall through (fail-open) — we don't
+// activity. Failures in lookup fall through (fail-open); we don't
 // hard-fail legitimate writes on a transient X error.
 
 let cachedSelfViewer: { userId: string; screenName: string } | null = null;
@@ -484,9 +484,9 @@ export const X_SQUIRREL_VOICE = [
 
 export const X_ALGORITHM_PLAYBOOK = [
 	"X For You algorithm playbook (aligned to xai-org/x-algorithm, May 2026 release):",
-	"- Ranking is a Grok-based transformer (Phoenix) that scores each post from the viewer's engagement SEQUENCE — what they like, reply to, repost, and share. Hand-engineered features were eliminated; the model learns relevance directly. Earn genuine engagement; keyword tricks do not move it.",
+	"- Ranking is a Grok-based transformer (Phoenix) that scores each post from the viewer's engagement SEQUENCE (what they like, reply to, repost, and share). Hand-engineered features were eliminated; the model learns relevance directly. Earn genuine engagement; keyword tricks do not move it.",
 	"- The feed blends in-network (Thunder: accounts the viewer follows) and out-of-network (Phoenix two-tower retrieval over the global corpus). To reach beyond current followers, post content whose meaning embeds near a target audience's interests: elizaOS, AI agents, agent frameworks, personal AI, developer tools, autonomous workflows.",
-	"- Final score = Σ(weight × P(action)) across many predicted actions — favorite, reply, repost, quote, click, profile_click, video_view, photo_expand, share, dwell, follow_author. Optimize for the high-intent positive actions (reply, repost, quote, profile_click, follow), not just likes.",
+	"- Final score = Σ(weight × P(action)) across many predicted actions: favorite, reply, repost, quote, click, profile_click, video_view, photo_expand, share, dwell, follow_author. Optimize for the high-intent positive actions (reply, repost, quote, profile_click, follow), not just likes.",
 	"- NEGATIVE actions carry NEGATIVE weight and actively push content DOWN: not_interested, block, mute, report. Bait, giveaways, outrage loops, politics traps, low-effort replies, spam, and generic viral slop trigger these and suppress reach. Avoid them entirely.",
 	"- Replies win when specific, fast, and likely to spark useful downstream conversation (which itself predicts more replies/likes). Off-topic or low-effort replies risk mute/block/not-interested and hurt the account.",
 	"- An Author Diversity scorer attenuates repeated-author scores, and an OON scorer tunes out-of-network reach: do not hammer one account or thread, and vary who you engage with.",
@@ -494,10 +494,10 @@ export const X_ALGORITHM_PLAYBOOK = [
 	"- Standalone original posts matter: do not be only reactive. Publish concrete, specific takes on tech, AI, news, and culture, grounded in what actually happened.",
 	"- Reply when you can add a real point that starts a conversation. The jackpot is a reply the author replies back to. Skip anything that would earn a mute, block, or not-interested.",
 	"- Adjacent posts are discovery signals, not automatic comment targets. Reply only when the post is addressed to the account or clearly about Dexploarer, Detour Squirrel, the CA, or the agent project.",
-	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; status posts must be original, concrete, concise, and public-safe — never leak private context or promise product state the app cannot prove.",
+	"- Follow only authors with durable fit, not one-off viral posts. Author diversity matters; status posts must be original, concrete, concise, and public-safe. Never leak private context or promise product state the app cannot prove.",
 	"- Autonomous public writes are gated: notification replies use X_AUTONOMY_WRITE; proactive discovery replies/likes/follows require X_AUTONOMY_PROACTIVE_ENGAGEMENT_ENABLED; scheduled status posts require X_AUTONOMY_POST_STATUS_ENABLED. Direct owner X_POST/X_POST_* commands execute immediately when credentials are configured.",
 	"",
-	"Primary sources (xai-org/x-algorithm — the open-source For You feed algorithm):",
+	"Primary sources (xai-org/x-algorithm, the open-source For You feed algorithm):",
 	"https://github.com/xai-org/x-algorithm",
 	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/scorers/weighted_scorer.rs",
 	"https://github.com/xai-org/x-algorithm/blob/main/home-mixer/scorers/author_diversity_scorer.rs",
@@ -1223,7 +1223,7 @@ function formatRepo(record: Record<string, unknown>): string {
 	const name = stringValue(record, "full_name") ?? stringValue(record, "name") ?? "unknown";
 	const pushed = githubDate(stringValue(record, "pushed_at"));
 	const description = compactText(stringValue(record, "description"), 100);
-	return `${name} pushed ${pushed}${description ? ` — ${description}` : ""}`;
+	return `${name} pushed ${pushed}${description ? `: ${description}` : ""}`;
 }
 
 function formatEvent(record: Record<string, unknown>): string {
@@ -1592,7 +1592,7 @@ async function discoverXCandidates(
 
 /** Describe a post's attached media so the reply/discovery decision can SEE it,
  *  not just read the text. Prefers the author's alt-text; otherwise runs a
- *  vision pass (IMAGE_DESCRIPTION). Best-effort — notes presence if vision is
+ *  vision pass (IMAGE_DESCRIPTION). Best-effort: notes presence if vision is
  *  unavailable, so the agent at least knows media exists and doesn't reply blind. */
 async function describeTweetMedia(runtime: IAgentRuntime, tweet: XTweetSummary): Promise<string> {
 	const media = tweet.media ?? [];
@@ -1666,7 +1666,7 @@ async function decideXDiscoveryAction(
 		"",
 		"Post:",
 		compactText(tweet.text, 900),
-		...(mediaDescription ? ["Post media (you can see this — factor it into the reply):", mediaDescription] : []),
+		...(mediaDescription ? ["Post media (you can see this; factor it into the reply):", mediaDescription] : []),
 		"",
 		"Output TOON only:",
 		isProjectCriticismText(tweet.text)
@@ -2404,7 +2404,7 @@ async function executeXAutonomyTaskInner(runtime: IAgentRuntime, task: Task): Pr
 		if (expectedUserId && String(viewer.userId) !== expectedUserId) {
 			logger.warn(
 				{ src: "x-autonomy", got: String(viewer.userId), screenName: viewer.screenName, expected: expectedUserId },
-				"X autonomy skipped — wrong account loaded (refusing to act as @" + viewer.screenName + ")",
+				"X autonomy skipped: wrong account loaded (refusing to act as @" + viewer.screenName + ")",
 			);
 			rememberHandled(state, { action: "wrong_account", success: false, error: `loaded @${viewer.screenName} (${viewer.userId}), expected ${expectedUserId}` });
 			await completeXAutonomyTrajectoryStep(runtime, settings, state);
@@ -2492,7 +2492,7 @@ function configuredStatusString(
 }
 
 /** True if `candidate` matches (or substantially overlaps) one of the agent's
- *  recent posts — used to skip status posts X would reject as duplicates (187),
+ *  recent posts, used to skip status posts X would reject as duplicates (187),
  *  rather than wasting the attempt on the duplicate wall. */
 function isDuplicateStatus(candidate: string, recent: string[]): boolean {
 	const norm = (s: string) => s.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
@@ -2519,7 +2519,7 @@ async function postGeneratedXStatus(
 		const writeAllowed = forceWrite || readBooleanSetting(runtime, "X_AUTONOMY_WRITE", true);
 		const viewer = await client.viewer();
 		// Recent posts: feed them to the generator so it varies, and dedup against
-		// them before posting — skipping repeats instead of hitting X's duplicate
+		// them before posting; skipping repeats instead of hitting X's duplicate
 		// (187) wall, which was rejecting the bulk of status attempts.
 		const recentStatusTexts = (await client.getUserTweets(viewer.userId, 12).catch(() => []))
 			.map((t) => t.text)
@@ -2545,7 +2545,7 @@ async function postGeneratedXStatus(
 				return { success: true, text: fallback, values: { dryRun: true, fallback: true }, continueChain: false };
 			}
 			if (isDuplicateStatus(fallback, recentStatusTexts)) {
-				logger.info({ src: "x-tweets", actionName, lane }, "generated X status skipped — fallback duplicates a recent post");
+				logger.info({ src: "x-tweets", actionName, lane }, "generated X status skipped: fallback duplicates a recent post");
 				await emit(callback, `${actionName} skipped: duplicate of a recent post`, actionName);
 				return { success: true, text: `${actionName} skipped: duplicate`, values: { skipped: true, reason: "duplicate" }, continueChain: false };
 			}
@@ -2570,7 +2570,7 @@ async function postGeneratedXStatus(
 			return { success: true, text, values: { dryRun: true }, continueChain: false };
 		}
 		if (isDuplicateStatus(text, recentStatusTexts)) {
-			logger.info({ src: "x-tweets", actionName, lane }, "generated X status skipped — duplicates a recent post");
+			logger.info({ src: "x-tweets", actionName, lane }, "generated X status skipped: duplicates a recent post");
 			await emit(callback, `${actionName} skipped: duplicate of a recent post`, actionName);
 			return { success: true, text: `${actionName} skipped: duplicate`, values: { skipped: true, reason: "duplicate" }, continueChain: false };
 		}
@@ -2671,7 +2671,7 @@ export const xPostAction: Action = {
 	name: "X_POST",
 	similes: ["TWEET", "POST_TO_X", "POST_TWITTER", "TWEET_OUT"],
 	description:
-		"Post a new public tweet/status on X as the logged-in account. Use immediately when Dexploarer says to post/tweet from any connected channel. If exact text is provided, publish it; if no text is provided, generate and publish a Detour Squirrel token/project status. Pass `mediaUrls` (or `imageUrl`/`videoUrl`) — usually the hosted URL returned by GENERATE_IMAGE / GENERATE_VIDEO — to attach images/videos to the tweet; the handler downloads, uploads to X's chunked endpoint, and attaches the resulting media_ids. X caps at 4 images / 1 GIF / 1 video per tweet. No extra confirmation is required for owner commands when X write is configured. Returns the posted URL.",
+		"Post a new public tweet/status on X as the logged-in account. Use immediately when Dexploarer says to post/tweet from any connected channel. If exact text is provided, publish it; if no text is provided, generate and publish a Detour Squirrel token/project status. Pass `mediaUrls` (or `imageUrl`/`videoUrl`), typically the hosted URL returned by GENERATE_IMAGE / GENERATE_VIDEO, to attach images/videos to the tweet; the handler downloads, uploads to X's chunked endpoint, and attaches the resulting media_ids. X caps at 4 images / 1 GIF / 1 video per tweet. No extra confirmation is required for owner commands when X write is configured. Returns the posted URL.",
 	descriptionCompressed:
 		"post/tweet public X status now; supports mediaUrls (image/video) from generation actions; owner command is confirmation.",
 	validate: alwaysValid,
@@ -2912,7 +2912,7 @@ export const xReplyAction: Action = {
 		"Reply to a tweet by its numeric ID. Use for specific, useful conversation, especially direct " +
 		"mentions and replies to your posts; X's open-source ranking pipeline predicts reply and downstream " +
 		"conversation probability as core engagement signals. Pass `mediaUrls` (or `imageUrl`/`videoUrl`) to " +
-		"attach an image/video — typically the hosted URL returned by GENERATE_IMAGE or GENERATE_VIDEO.",
+		"attach an image/video, typically the hosted URL returned by GENERATE_IMAGE or GENERATE_VIDEO.",
 	validate: alwaysValid,
 	handler: replyHandler,
 	examples: [],
@@ -3225,7 +3225,7 @@ export const xUserTweetsAction: Action = {
 	name: "X_USER_TWEETS",
 	similes: ["GET_USER_TWEETS", "LIST_TWEETS", "READ_USER_TWEETS"],
 	description:
-		"List recent tweets by @handle or user ID. Use to surface posts to engage with — especially " +
+		"List recent tweets by @handle or user ID. Use to surface posts to engage with, especially " +
 		"on @dEXploarer (cross-engagement boosts both accounts via the graph-distance signal).",
 	validate: alwaysValid,
 	handler: userTweetsHandler,
@@ -3266,7 +3266,7 @@ export const xSearchAction: Action = {
 	name: "X_SEARCH",
 	similes: ["SEARCH_X", "SEARCH_TWITTER", "FIND_TWEETS"],
 	description:
-		"Search X for tweets matching a query. Find conversations to engage in — searching for " +
+		"Search X for tweets matching a query. Find conversations to engage in by searching for " +
 		"`elizaos`, `agent framework`, project-specific keywords, etc. Returns recent tweets by default.",
 	validate: alwaysValid,
 	handler: searchHandler,
@@ -3432,7 +3432,7 @@ const algorithmPlaybookHandler: Handler = async (runtime, _m, _s, _options, call
 };
 
 // Eligible ONLY when the user is actually asking about X/Twitter growth, reach,
-// ranking, or strategy — never for general chat. Without this gate the planner
+// ranking, or strategy; never for general chat. Without this gate the planner
 // (especially weaker models) over-selects this action for unrelated turns like
 // greetings or "/help", hijacking ordinary replies.
 const PLAYBOOK_TRIGGER_TERMS = ["algorithm", "playbook", "for you feed", "for-you feed", "ranking", "go viral", "virality", "reach"];
@@ -3450,7 +3450,7 @@ export const xAlgorithmPlaybookAction: Action = {
 	name: "X_ALGORITHM_PLAYBOOK",
 	similes: ["X_GROWTH_PLAYBOOK", "X_ALGO_PLAYBOOK", "TWITTER_ALGORITHM_PLAYBOOK"],
 	description:
-		"Return the agent's X For You algorithm strategy (per xai-org/x-algorithm), source links, guardrails, and autonomy flags. Use ONLY when the user explicitly asks about X/Twitter growth, reach, ranking, or strategy — never for general chat or non-X requests.",
+		"Return the agent's X For You algorithm strategy (per xai-org/x-algorithm), source links, guardrails, and autonomy flags. Use ONLY when the user explicitly asks about X/Twitter growth, reach, ranking, or strategy. Never use for general chat or non-X requests.",
 	validate: algorithmPlaybookValidate,
 	handler: algorithmPlaybookHandler,
 	examples: [],

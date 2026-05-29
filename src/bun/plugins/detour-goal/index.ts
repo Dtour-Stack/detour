@@ -22,7 +22,7 @@
  *
  * Why a runtime wrapper for spawn:
  *   The orchestrator lives in eliza/plugins/plugin-agent-orchestrator (git
- *   submodule). We can't safely edit the spawn-side directly — eliza
+ *   submodule). We can't safely edit the spawn-side directly; eliza
  *   upstream changes would clobber it. Wrapping the action handler at
  *   Detour's boot layer keeps the orchestrator pristine while giving us
  *   the guarantee we need.
@@ -118,7 +118,7 @@ const setGoalAction: Action = {
 			{
 				name: "{{agentName}}",
 				content: {
-					text: "got it — pivoting. New goal: get auth working end-to-end before touching the dashboard.",
+					text: "got it, pivoting. New goal: get auth working end-to-end before touching the dashboard.",
 					action: "SET_GOAL",
 					goal: "Get auth working end-to-end before touching the dashboard",
 				},
@@ -228,7 +228,7 @@ function injectGoalIntoMemoryContent(
 
 /**
  * Wrap a single Action's handler so it injects the active goal into the
- * spawn payload's `memoryContent` field. Idempotent — re-wrapping is a
+ * spawn payload's `memoryContent` field. Idempotent: re-wrapping is a
  * no-op via the WRAPPED_FOR_GOAL marker.
  *
  * Trade-off: we mutate `message.content.memoryContent` and (if provided)
@@ -249,7 +249,7 @@ function wrapSpawnAction(action: Action): Action {
 		callback?: HandlerCallback,
 		responses?: Memory[],
 	) => {
-		// Worker name injection — runs unconditionally (independent of
+		// Worker name injection: runs unconditionally (independent of
 		// goal threading) so every spawned sub-agent gets a memorable
 		// "Hazel the Wayfarer"-style handle the user can refer back to.
 		// Skipped if the caller (LLM planner) already supplied a name,
@@ -265,7 +265,7 @@ function wrapSpawnAction(action: Action): Action {
 				// Seed from message id + action so the same plan rendered
 				// twice generates the same name (stable trajectories) but
 				// SPAWN_AGENT and CREATE_TASK on the same turn get distinct
-				// names (mostly — the seed has enough entropy).
+				// names (mostly; the seed has enough entropy).
 				const seedKey = `${action.name}:${(message.id as string | undefined) ?? roomIdOf(message) ?? Date.now()}`;
 				const generated = workerNameFromSeed(seedKey);
 				(message.content as SpawnContent).name = generated;
@@ -279,7 +279,7 @@ function wrapSpawnAction(action: Action): Action {
 						action: action.name,
 					});
 				} catch {
-					// Best-effort — disk write failure doesn't block spawning.
+					// Best-effort: disk write failure doesn't block spawning.
 				}
 				logger.info(
 					{ src: "detour:goal", action: action.name, workerName: generated },
@@ -289,7 +289,7 @@ function wrapSpawnAction(action: Action): Action {
 		} catch (err) {
 			logger.warn(
 				{ src: "detour:goal", err: err instanceof Error ? err.message : err },
-				"Worker name injection failed — proceeding with default session id",
+				"Worker name injection failed; proceeding with default session id",
 			);
 		}
 
@@ -322,7 +322,7 @@ function wrapSpawnAction(action: Action): Action {
 			} catch (err) {
 				logger.warn(
 					{ src: "detour:goal", err: err instanceof Error ? err.message : err },
-					"Goal threading failed — proceeding with original spawn payload",
+					"Goal threading failed; proceeding with original spawn payload",
 				);
 			}
 		}
@@ -336,7 +336,7 @@ function wrapSpawnAction(action: Action): Action {
 /**
  * Walk the runtime's actions and wrap each spawn-style action. Idempotent
  * via the WRAPPED_FOR_GOAL marker, so calling this from both plugin init
- * AND from a RuntimeService onAfterBuild hook is safe — the second call
+ * AND from a RuntimeService onAfterBuild hook is safe; the second call
  * will find the actions already wrapped and skip them.
  *
  * Why both: init runs before the orchestrator's PTYService finishes its
@@ -361,7 +361,7 @@ export const detourGoalPlugin: Plugin = {
 	providers: [goalProvider],
 	actions: [setGoalAction, clearGoalAction],
 	init: async (_config, runtime) => {
-		// Best-effort first pass — most actions are registered by now and
+		// Best-effort first pass: most actions are registered by now and
 		// this catches them before the runtime's first turn. The guaranteed
 		// pass runs in core/index.ts via runtime.onAfterBuild AFTER all
 		// services have started (including the orchestrator).
