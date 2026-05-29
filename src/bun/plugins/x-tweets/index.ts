@@ -8,6 +8,9 @@
  * authors, then avoid negative-feedback traps.
  */
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
 	type Action,
 	type ActionResult,
@@ -19,6 +22,8 @@ import {
 	ModelType,
 	parseToonKeyValue,
 	type Plugin,
+	type Provider,
+	type ProviderResult,
 	Service,
 	type Task,
 	type TaskMetadata,
@@ -38,6 +43,37 @@ import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary }
 import { buildResearchContext } from "./research";
 import { shouldAttachImage, imagePromptFromDraft } from "./post-image";
 import { scoreDraft, passesTaste, TASTE_THRESHOLD } from "./taste-gate";
+
+// File-contract read-back of the Phase 2 background services. x-tweets must NOT
+// import any src/bun/core module (hard import-cycle rule), so the radar digest,
+// the learned style psyche, and the engagement feedback lessons reach generation
+// purely through these files (exactly like trajectory-lessons reads its own md).
+const X_RADAR_FILE = join(homedir(), ".detour", "x-radar-latest.txt");
+const X_STYLE_PSYCHE_FILE = join(homedir(), ".detour", "x-style-psyche.md");
+const X_FEEDBACK_LESSONS_FILE = join(homedir(), ".detour", "x-feedback-lessons.md");
+// Bound how much learned psyche we splice into a system prompt. The writer
+// already bounds the file; this is a defense-in-depth cap on the read side.
+const X_STYLE_PSYCHE_MAX = 1200;
+
+/** Read a file, returning its trimmed contents or "" when it is missing or
+ *  unreadable. Fail-safe by contract: never throws, so a missing artifact can
+ *  never break the autonomous post path. */
+export function readOptionalFile(path: string): string {
+	try {
+		return readFileSync(path, "utf8").trim();
+	} catch {
+		return "";
+	}
+}
+
+/** The learned style psyche as a short labeled guidance block, capped, or "" when
+ *  the file is absent. Injected alongside X_SQUIRREL_VOICE in the generation
+ *  prompts so the agent rides its mined voice without copying any source line. */
+function stylePsycheGuidance(): string[] {
+	const psyche = readOptionalFile(X_STYLE_PSYCHE_FILE).slice(0, X_STYLE_PSYCHE_MAX).trim();
+	if (!psyche) return [];
+	return [`Learned style notes (guidance, do not copy):\n${psyche}`];
+}
 
 function pickSetting(runtime: IAgentRuntime, key: string): string | undefined {
 	const v = runtime.getSetting(key);
@@ -962,6 +998,7 @@ export async function decideXAutonomyAction(
 		`You are autonomously managing the X account @${params.viewerScreenName}.`,
 		"Decide whether to reply, like, or ignore this X item.",
 		...X_SQUIRREL_VOICE,
+		...stylePsycheGuidance(),
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...xTemplateGuidance(runtime, "comment", params.replyStyleSeed),
 		...replyToneGuidance(params.tweetText),
@@ -1191,9 +1228,14 @@ async function decideXStatusPost(
 		recentReplyTexts?: string[];
 	},
 ): Promise<XStatusDecision> {
+	// Generic-lane topic: prefer the live radar digest (what is actually happening
+	// right now, written by the core radar service) as the research TOPIC. Missing
+	// or empty file => fall back to the prior behavior unchanged. The .catch keeps
+	// a weird/long digest-as-query from ever breaking the post path.
+	const radarTopic = params.lane === "generic" ? readOptionalFile(X_RADAR_FILE) : "";
 	const researchContext = params.lane === "generic"
 		? await buildResearchContext(
-			params.context || "AI agents developer technology news",
+			radarTopic || params.context || "AI agents developer technology news",
 			runtime.getSetting("TAVILY_API_KEY") ?? process.env.TAVILY_API_KEY ?? "",
 		).catch(() => "")
 		: "";
@@ -1224,6 +1266,7 @@ async function decideXStatusPost(
 	const prompt = [
 		`You are composing one autonomous X status for @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...stylePsycheGuidance(),
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...xTemplateGuidance(runtime, "post", `${params.lane}:${Date.now()}`),
 		...replyVariationGuidance(`${params.lane}:${Date.now()}`, params.context, params.recentReplyTexts),
@@ -1516,6 +1559,7 @@ async function decideXDiscoveryAction(
 	const prompt = [
 		`You are autonomously growing the X account @${params.viewerScreenName}.`,
 		...X_SQUIRREL_VOICE,
+		...stylePsycheGuidance(),
 		...X_AUTONOMY_ECOSYSTEM_LINK_GUIDANCE,
 		...xTemplateGuidance(runtime, "comment", tweet.tweetId),
 		...replyToneGuidance(tweet.text),
@@ -3262,6 +3306,27 @@ async function missing(action: string, field: string, callback: HandlerCallback 
 
 // ── Plugin export ───────────────────────────────────────────────────────────
 
+/** Surfaces the engagement feedback lessons ("what landed" / "what flopped" on X)
+ *  that XFeedbackService distills into ~/.detour/x-feedback-lessons.md. Reader and
+ *  writer are decoupled through the file path (the contract); this provider does
+ *  not import the core service. Returns empty text when the file is absent. */
+export const xFeedbackLessonsProvider: Provider = {
+	name: "X_FEEDBACK_LESSONS",
+	description:
+		"Lessons distilled from the agent's own recent X engagement -- which post styles landed (drew replies/reposts) and which flopped. Auto-updated by the X feedback loop.",
+	descriptionCompressed: "what landed on X recently.",
+	position: -20,
+	get: async (): Promise<ProviderResult> => {
+		const lessons = readOptionalFile(X_FEEDBACK_LESSONS_FILE);
+		if (!lessons) return { text: "", values: {} as never, data: {} as never };
+		return {
+			text: `What landed on X recently:\n${lessons}`,
+			values: { hasXFeedbackLessons: true } as never,
+			data: {} as never,
+		};
+	},
+};
+
 export const xTweetsPlugin: Plugin = {
 	name: "x-tweets",
 	description:
@@ -3293,6 +3358,7 @@ export const xTweetsPlugin: Plugin = {
 		xHomeTimelineAction,
 		xWhoAmIAction,
 	],
+	providers: [xFeedbackLessonsProvider],
 	services: [XAutonomyService],
 };
 

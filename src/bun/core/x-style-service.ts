@@ -12,12 +12,16 @@
  * the core barrel (./index) or a plugin barrel. The runtime accessor is typed
  * structurally so there is no edge to ./runtime.
  */
+import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { logger, ModelType, type IAgentRuntime } from "@elizaos/core";
 import { XClient } from "../plugins/x-tweets/x-client";
 import { distillPsychePrompt, formatPsyche, type AccountSamples } from "../plugins/x-tweets/style-mining";
 import type { PensieveMemoryService } from "./pensieve/memory-service";
 
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60_000;
+const PSYCHE_FILE = join(homedir(), ".detour", "x-style-psyche.md");
 const DEFAULT_EXEMPLARS = "dexploarer,shawmakesmagic,god,Satan";
 const SAMPLES_PER_ACCOUNT = 15;
 
@@ -91,6 +95,14 @@ export class XStyleService {
 				tags: ["voice"],
 				path: "/x/style-psyche/latest",
 			});
+			// Also mirror to a file so x-tweets can read the learned voice without an
+			// import edge into core (file-contract, like trajectory-lessons). Wrapped
+			// so a write failure never escapes into the tick's failure path.
+			try {
+				writeFileSync(PSYCHE_FILE, psyche, "utf8");
+			} catch (err) {
+				logger.warn({ src: "x-style", err: err instanceof Error ? err.message : err }, "psyche file write failed");
+			}
 			logger.info({ src: "x-style", accounts: samples.length }, "x style psyche refreshed");
 			return { wrote: true };
 		} catch (err) {

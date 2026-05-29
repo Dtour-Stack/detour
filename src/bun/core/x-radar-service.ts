@@ -13,12 +13,16 @@
  * close an import cycle. The runtime accessor is typed structurally so there is
  * no edge to ./runtime either.
  */
+import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { logger, type IAgentRuntime } from "@elizaos/core";
 import { buildRadarDigest, type RadarItem } from "../plugins/x-tweets/radar";
 import { buildResearchContext } from "../plugins/x-tweets/research";
 import type { PensieveMemoryService } from "./pensieve/memory-service";
 
 const DEFAULT_INTERVAL_MS = 45 * 60_000;
+const RADAR_FILE = join(homedir(), ".detour", "x-radar-latest.txt");
 
 /** Seed queries the radar sweeps each cycle. Kept short and broad so the digest
  *  stays a high-signal "current events" snapshot rather than a firehose. */
@@ -88,6 +92,14 @@ export class XRadarService {
 				tags: ["radar"],
 				path: "/x/radar/latest",
 			});
+			// Also mirror to a file so x-tweets can read the latest topic without an
+			// import edge into core (file-contract, like trajectory-lessons). Wrapped
+			// so a write failure never escapes into the tick's failure path.
+			try {
+				writeFileSync(RADAR_FILE, digest, "utf8");
+			} catch (err) {
+				logger.warn({ src: "x-radar", err: err instanceof Error ? err.message : err }, "radar file write failed");
+			}
 			logger.info({ src: "x-radar", items: items.length }, "x radar digest refreshed");
 			return { wrote: true };
 		} catch (err) {
