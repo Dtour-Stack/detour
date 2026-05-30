@@ -82,3 +82,18 @@ export function buildRadarDigest(
 
   return lines.join("\n");
 }
+
+/** Extract the item headlines (titles) from a digest built by buildRadarDigest, so a
+ *  caller can use ONE concise topic as a search query instead of the whole multi-line
+ *  digest. Skips the date header and the "Trending:" line. Returns [] when there are
+ *  no item lines. */
+export function topicsFromRadarDigest(digest: string): string[] {
+  const out: string[] = [];
+  for (const raw of digest.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("- ")) continue;
+    const title = line.slice(2).split(" | ")[0]?.trim() ?? "";
+    if (title) out.push(title);
+  }
+  return out;
+}

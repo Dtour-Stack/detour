@@ -1,5 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { buildRadarDigest, type RadarItem } from "./radar";
+import { buildRadarDigest, topicsFromRadarDigest, type RadarItem } from "./radar";
+
+describe("topicsFromRadarDigest", () => {
+  test("extracts item titles, skips the date header and the trending line", () => {
+    const digest = buildRadarDigest(
+      [{ title: "Big AI outage today", snippet: "a config change" }, { title: "EU AI Act summary" }],
+      ["something trending"],
+      { dateLabel: "Today" },
+    );
+    const topics = topicsFromRadarDigest(digest);
+    expect(topics).toContain("Big AI outage today");
+    expect(topics).toContain("EU AI Act summary");
+    expect(topics.some((t) => t.startsWith("Trending"))).toBe(false);
+    expect(topics).not.toContain("Today");
+  });
+
+  test("returns an empty array for an empty digest", () => {
+    expect(topicsFromRadarDigest("")).toEqual([]);
+  });
+});
 
 describe("buildRadarDigest", () => {
   test("returns empty string for no items and no trends", () => {

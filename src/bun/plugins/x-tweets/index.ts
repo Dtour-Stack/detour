@@ -41,6 +41,7 @@ import {
 } from "../../../shared/x-autonomy-policy";
 import { XClient, mediaCategoryForMime, type XNotification, type XTweetSummary } from "./x-client";
 import { buildResearchContext } from "./research";
+import { topicsFromRadarDigest } from "./radar";
 import { shouldAttachImage, imagePromptFromDraft } from "./post-image";
 import { scoreDraft, passesTaste, TASTE_THRESHOLD } from "./taste-gate";
 
@@ -1232,7 +1233,8 @@ async function decideXStatusPost(
 	// right now, written by the core radar service) as the research TOPIC. Missing
 	// or empty file => fall back to the prior behavior unchanged. The .catch keeps
 	// a weird/long digest-as-query from ever breaking the post path.
-	const radarTopic = params.lane === "generic" ? readOptionalFile(X_RADAR_FILE) : "";
+	const radarDigest = params.lane === "generic" ? readOptionalFile(X_RADAR_FILE) : "";
+	const radarTopic = radarDigest ? (topicsFromRadarDigest(radarDigest)[0] ?? "") : "";
 	const researchContext = params.lane === "generic"
 		? await buildResearchContext(
 			radarTopic || params.context || "AI agents developer technology news",
@@ -1241,9 +1243,9 @@ async function decideXStatusPost(
 		: "";
 	const laneGuidance: Record<typeof params.lane, string[]> = {
 		generic: [
-			"- Prefer an original project-status bite over silence: Detour Squirrel, elizaOS-native agents, Pensieve memory, messaging context, trajectories, connector awareness, or desktop workflows.",
-			"- Use internal context only when it is public-safe; otherwise post a general project-positioning line.",
-			"- Stress that the point is an agent with permissions that acts: coding tools, shell, files, browser, X, messaging context, memory, and runtime state.",
+			"- This is a world-commentary post. Riff on what is actually happening in tech, AI, science, news, or culture, using the live research above as the subject.",
+			"- A real point under the joke. Specific, current, conversation-starting. Not about yourself, your project, or any token.",
+			"- If you do not have a genuinely good or funny take, should_post can be false. Silence beats a generic post.",
 		],
 		detour_project: [
 			"- This lane posts about Detour, the Squirrel's own project, and its GitHub status.",
