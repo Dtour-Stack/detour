@@ -42,7 +42,16 @@ export function validateModelConfig(runtime?: IAgentRuntime): ModelConfig {
 		const ctxKnowledgeEnabled = parseBooleanEnv(
 			getSetting("CTX_KNOWLEDGE_ENABLED", "false"),
 		);
-		const embeddingProvider = getSetting("EMBEDDING_PROVIDER");
+		const rawEmbeddingProvider = getSetting("EMBEDDING_PROVIDER");
+		const VALID_EMBED_PROVIDERS = new Set(["local", "openai", "google"]);
+		// Guard: if the value leaked through as an encrypted/corrupted string,
+		// fall back to process.env then to undefined so Zod doesn't reject it.
+		const embeddingProvider =
+			typeof rawEmbeddingProvider === "string" && VALID_EMBED_PROVIDERS.has(rawEmbeddingProvider)
+				? rawEmbeddingProvider
+				: (VALID_EMBED_PROVIDERS.has(process.env.EMBEDDING_PROVIDER ?? "")
+					? process.env.EMBEDDING_PROVIDER
+					: undefined);
 		const localEmbeddingModel = getSetting("LOCAL_EMBEDDING_MODEL");
 		const localEmbeddingDimensions = getSetting("LOCAL_EMBEDDING_DIMENSIONS");
 		const inferredLocalEmbeddings =
