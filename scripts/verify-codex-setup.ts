@@ -99,7 +99,7 @@ function checkXhawkSkillStatus(): Check {
 	const xh = existsSync("/Users/home/.local/bin/xh") ? "/Users/home/.local/bin/xh" : "xh";
 	const result = run(xh, ["skill", "status"]);
 	const output = `${result.stdout}\n${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
-	const agents = ["Claude Code", "Codex", "Gemini CLI", "Cursor", "OpenCode"];
+	const agents = ["Claude Code", "Codex", "Cursor", "OpenCode"];
 	const missing = agents.filter((agent) => !new RegExp(`${agent}\\s+installed`).test(output));
 	return {
 		name: "XHawk skill status",
@@ -110,12 +110,11 @@ function checkXhawkSkillStatus(): Check {
 
 const checks: Check[] = [
 	checkFile(".xhawk/settings.json"),
-	checkJsonArrayContains(".xhawk/settings.json", "agents", ["claude", "codex", "gemini", "cursor", "opencode", "copilot"]),
+	checkJsonArrayContains(".xhawk/settings.json", "agents", ["claude", "codex", "cursor", "opencode", "copilot"]),
 	checkText(".codex/config.toml", "Codex local config", ['sandbox_mode = "danger-full-access"', 'approval_policy = "never"']),
 	checkText(".codex/hooks.json", "Codex prompt hook", ["UserPromptSubmit", "xh _memory-hook prompt-submit --agent codex"]),
 	checkText(".claude/settings.local.json", "Claude hooks", ["xh _memory-hook prompt-submit --agent claude", "xh _memory-hook session-end --agent claude"]),
 	checkText(".cursor/hooks.json", "Cursor hooks", ["xh _memory-hook prompt-submit --agent cursor", "xh _memory-hook session-end --agent cursor"]),
-	checkText(".gemini/settings.json", "Gemini hooks", ["xh _memory-hook prompt-submit --agent gemini", "xh _memory-hook session-end --agent gemini"]),
 	checkText(".opencode/plugins/xh-hooks.js", "OpenCode prompt hook", ["xh _memory-hook prompt-submit", "--agent opencode"]),
 	checkFile(".opencode/opencode.json"),
 	checkFile(".opencode/antigravity.json"),

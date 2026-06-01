@@ -8,7 +8,7 @@ git diff --cached --check
 
 blocked=$(
 	git diff --cached --name-only --diff-filter=ACMR |
-		grep -E '(^|/)(\.env(\..*)?|\.agents/|\.eliza/|\.detour/|\.xhawk/|\.DS_Store$|.*\.log$|\.codex/(config\.toml|hooks\.json)$|\.cursor/hooks\.json$|\.gemini/settings\.json$|\.opencode/(node_modules/|package(-lock)?\.json$|plugins/xh-hooks\.js$)|eliza/.*-export\.jsonl?$)' || true
+		grep -E '(^|/)(\.env(\..*)?|\.agents/|\.eliza/|\.detour/|\.xhawk/|\.DS_Store$|.*\.log$|\.codex/(config\.toml|hooks\.json)$|\.cursor/hooks\.json$|\.opencode/(node_modules/|package(-lock)?\.json$|plugins/xh-hooks\.js$)|eliza/.*-export\.jsonl?$)' || true
 )
 
 if [[ -n "$blocked" ]]; then

@@ -45,7 +45,6 @@ packages/web/public/apple-touch-icon.png
 .claude/settings.local.json
 .codex/hooks.json
 .codex/config.toml
-.gemini/settings.json
 .cursor/hooks.json
 .opencode/plugins/xh-hooks.js
 .claude/worktrees/
