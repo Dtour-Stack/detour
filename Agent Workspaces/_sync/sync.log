@@ -1,0 +1,87 @@
+===== 2026-06-02 22:23:31 sync start =====
+[sync] 1996 sessions (1 new, 1995 cached) · 550 insight candidates
+[sync] codex=63 claude=1933
+===== done =====
+===== 2026-06-02 22:24:43 sync start =====
+[sync] 1996 sessions (1 new, 1995 cached) · 550 insight candidates
+[sync] codex=63 claude=1933
+===== done =====
+===== 2026-06-02 23:09:08 sync start =====
+[sync] 1997 sessions (2 new, 1995 cached) · 550 insight candidates
+[sync] codex=63 claude=1934
+===== done =====
+===== 2026-06-02 23:12:52 sync start =====
+Traceback (most recent call last):
+  File "/Users/home/v1/Agent Workspaces/_sync/sync.py", line 675, in <module>
+    main()
+    ~~~~^^
+  File "/Users/home/v1/Agent Workspaces/_sync/sync.py", line 662, in main
+    write_tags_moc(recs, topic_projects, general_topics)
+    ^^^^^^^^^^^^^^
+NameError: name 'write_tags_moc' is not defined
+===== done =====
+===== 2026-06-02 23:22:56 sync start =====
+[sync] 2000 sessions (2 new, 1998 cached, 2 written, 0 pruned) · 550 candidates
+[sync] codex=63 claude=1937 · 56 projects · 12 topics · 12 cross-project
+===== done =====
+===== 2026-06-02 23:39:41 sync start =====
+[sync] 1999 sessions (1 new, 1998 cached, 1 written, 0 pruned) · 526 candidates
+[sync] codex=63 claude=1936 · 55 projects · 12 topics · 12 cross-project
+===== done =====
+===== 2026-06-02 23:43:21 sync start =====
+[sync] 2000 sessions (2 new, 1998 cached, 2 written, 0 pruned) · 526 candidates
+[sync] codex=63 claude=1937 · 55 projects · 12 topics · 12 cross-project
+===== done =====
+===== 2026-06-02 23:53:33 sync start =====
+[sync] 2000 sessions (1 new, 1999 cached, 1 written, 0 pruned) · 526 candidates
+[sync] codex=63 claude=1937 · 55 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-02 23:54:06 sync start =====
+[sync] 2000 sessions (1 new, 1999 cached, 1 written, 0 pruned) · 526 candidates
+[sync] codex=63 claude=1937 · 55 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-03 01:05:59 sync start =====
+[sync] 2006 sessions (8 new, 1998 cached, 8 written, 1 pruned) · 519 candidates
+[sync] codex=64 claude=1942 · 55 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-03 01:23:56 sync start =====
+[sync] 2012 sessions (10 new, 2002 cached, 10 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1948 · 55 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-03 01:28:13 sync start =====
+[sync] 2014 sessions (4 new, 2010 cached, 3 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1950 · 56 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-03 01:29:34 sync start =====
+===== 2026-06-03 01:29:36 sync start =====
+===== 2026-06-03 01:29:36 sync start =====
+[sync] 2014 sessions (4 new, 2010 cached, 3 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1950 · 56 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-03 01:31:26 sync start =====
+===== 2026-06-03 01:31:26 sync start =====
+[sync] 2016 sessions (4 new, 2012 cached, 3 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1952 · 56 projects · 12 topics · 12 cross-project
+[sync] 2016 sessions (4 new, 2012 cached, 3 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1952 · 56 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
+===== 2026-06-03 01:42:50 sync start =====
+[sync] 2018 sessions (5 new, 2013 cached, 3 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1954 · 56 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
