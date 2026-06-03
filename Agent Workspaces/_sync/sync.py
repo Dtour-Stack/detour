@@ -538,6 +538,53 @@ def write_tool_index(tool, recs):
     with open(os.path.join(ROOT, tool, f"{tool.capitalize()}.md"), "w") as f:
         f.write("\n".join(lines))
 
+# ---------------------------------------------------------------- clustering (dedup)
+# The mined queue is heavily redundant (the same CI/test failure recurs across dozens of
+# sessions). A deterministic fingerprint collapses near-identical candidates into ONE
+# cluster so the queue shows DISTINCT problems, and so the (paid) synthesizer sees ~50
+# patterns instead of ~500 near-dupes. $0, no LLM.
+_SIG_STRIP = [
+    re.compile(r"0x[0-9a-fA-F]+"),                 # hex addresses
+    re.compile(r"\b[0-9a-f]{8,}\b"),               # hashes / uuids / sha
+    re.compile(r"\d+"),                            # any number (line numbers, counts, ports)
+    re.compile(r"[~./][\w./\-]+"),                 # paths
+    re.compile(r"\b[a-zA-Z]:\\[\\\w.\-]+"),        # windows paths
+]
+_SIG_STOP = set((
+    "the a an and or to of in is was were be been for on with that this it its as at by from into "
+    "not now run runs running error errors output line lines file files test tests failed fail fix "
+    "fixed found check checking found root cause issue problem result null none true false return"
+).split())
+def err_signature(c):
+    """Stable fingerprint that collapses near-identical errors. Combines the
+    volatile-stripped error skeleton with the candidate's topic set, so 'ENOENT in
+    project A' and 'ENOENT in project B' on the same topics cluster together."""
+    t = denoise(c.get("error", "")).lower()
+    for rx in _SIG_STRIP:
+        t = rx.sub(" ", t)
+    toks = [w for w in re.findall(r"[a-z]{4,}", t) if w not in _SIG_STOP]
+    skel = " ".join(sorted(set(toks))[:8])
+    topics = ",".join(sorted(c.get("topics", [])))
+    return hashlib.sha1((topics + "|" + skel).encode()).hexdigest()[:12]
+
+def cluster_candidates(active):
+    """Group active candidates by signature; keep the highest-scoring exemplar per cluster.
+    Returns clusters sorted by aggregate (recurrence-weighted) score, highest first."""
+    clusters = collections.OrderedDict()
+    for c in sorted(active, key=lambda c: -c["score"]):
+        sig = err_signature(c)
+        cl = clusters.get(sig)
+        if cl is None:
+            clusters[sig] = {**c, "signature": sig, "cluster_size": 1,
+                             "members": [cand_key(c)], "projects": {c["project"]},
+                             "agg_score": c["score"]}
+        else:
+            cl["cluster_size"] += 1
+            cl["members"].append(cand_key(c))
+            cl["projects"].add(c["project"])
+            cl["agg_score"] += c["score"]
+    return sorted(clusters.values(), key=lambda x: -x["agg_score"])
+
 def write_insights(all_recs):
     cands = []
     for r in all_recs:
