@@ -85,3 +85,10 @@ NameError: name 'write_tags_moc' is not defined
 [skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
 [skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
 ===== done =====
+2026-06-03 01:46:17 skipped: sync.py not parseable (mid-edit)
+===== 2026-06-03 01:46:17 sync start =====
+[sync] 2020 sessions (2 new, 2018 cached, 2 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1956 · 56 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
