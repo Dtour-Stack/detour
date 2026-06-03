@@ -1,13 +1,13 @@
 ---
 type: "agent-workspace-index"
 tool: "claude"
-sessions: 1955
+sessions: 1957
 tags: ["tool/claude", "moc"]
 ---
 
 # Claude — Sessions
 
-**1955** sessions · **152** with mined fixes · **390** insight candidates.
+**1957** sessions · **152** with mined fixes · **390** insight candidates.
 
 ```dataview
 TABLE started as "Started", project as "Project", turns_assistant as "Turns", errors_seen as "Errs", insights as "Fixes"
@@ -20,13 +20,15 @@ _If Dataview isn't installed, the table below is a static fallback._
 
 | Date | Title | Project | Turns | Fixes |
 |---|---|---|---|---|
+| 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for d26d63e29c|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
+| 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for ae055dd77f|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for 4076da3b5f|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for f4d52c2836|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for f721128f8c|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for 251ca67065|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-03 you-are-summarizing-a-claude-code-session-for 31ce1efd68|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/private-var-folders-1g-w1llf-y95jndz9hmkxcgn0nm0000gn-t/2026-06-03 you-are-a-memory-consolidation-agent-your-job acd7eee21c|You are a memory consolidation agent. Your job is mechanical…]] | `/private/var/folders/1g/w1llf_y95jndz9hmkxcgn0nm0000gn/T` | 2 | 0 |
-| 2026-06-03 | [[Agent Workspaces/claude/sessions/home-v1/2026-06-03 review-this-agent-workspaces-folder-tree-what df7ffcbf11|review this Agent Workspaces folder tree, what else do i nee…]] | `~/v1` | 28 | 0 |
+| 2026-06-03 | [[Agent Workspaces/claude/sessions/home-v1-agent-workspaces/2026-06-03 error-ede-diagnostic-result-typeuser-last-cont df7ffcbf11|❌ Error: [ede_diagnostic] result_type=user last_content_type…]] | `~/v1/Agent Workspaces` | 42 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/home-v1/2026-06-03 adversarially-verify-this-merged-skill-replace 7cb61b7f56|Adversarially verify this merged skill replaces its original…]] | `~/v1` | 32 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/home-v1/2026-06-03 read-these-2-skill-files-then-write-one-merged 8dfca7e94b|Read these 2 skill files, then write ONE merged SKILL.md tha…]] | `~/v1` | 24 | 0 |
 | 2026-06-03 | [[Agent Workspaces/claude/sessions/home-v1/2026-06-03 from-descriptions-alone-do-not-open-any-files ca263902f2|From DESCRIPTIONS ALONE (do NOT open any files, do NOT use t…]] | `~/v1` | 3 | 0 |
@@ -50,7 +52,7 @@ _If Dataview isn't installed, the table below is a static fallback._
 | 2026-06-02 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-02 you-are-summarizing-a-claude-code-session-for 1e2b4c2012|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-02 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-02 apply-maximum-non-destructive-compression-rule 205fb60132|Apply maximum non-destructive compression. Rules: - Keep ALL…]] | `/private/tmp` | 2 | 0 |
 | 2026-06-02 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-02 you-are-summarizing-a-claude-code-session-for 0a49275845|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
-| 2026-06-02 | [[Agent Workspaces/claude/sessions/home-v1/2026-06-02 error-ede-diagnostic-result-typeuser-last-cont a91014fda9|❌ Error: [ede_diagnostic] result_type=user last_content_type…]] | `~/v1` | 551 | 2 |
+| 2026-06-02 | [[Agent Workspaces/claude/sessions/home-v1/2026-06-02 i-keep-getting-all-kindas-of-obsidian-notifact a91014fda9|i keep getting all kindas of obsidian notifactions of failur…]] | `~/v1` | 575 | 2 |
 | 2026-06-02 | [[Agent Workspaces/claude/sessions/home-documents-eliza/2026-06-02 review-open-prs-and-address-comments e6b96b66af|Review open PRs and address comments]] | `~/Documents/eliza` | 364 | 7 |
 | 2026-06-02 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-02 you-are-summarizing-a-claude-code-session-for f7797b8284|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 1 | 0 |
 | 2026-06-02 | [[Agent Workspaces/claude/sessions/private-tmp/2026-06-02 you-are-summarizing-a-claude-code-session-for 8f73795052|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
@@ -418,7 +420,5 @@ _If Dataview isn't installed, the table below is a static fallback._
 | 2026-05-30 | [[Agent Workspaces/claude/sessions/private-tmp/2026-05-30 you-are-summarizing-a-claude-code-session-for 7b0717cd64|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
 | 2026-05-30 | [[Agent Workspaces/claude/sessions/home-dtour-cloud/2026-05-30 build-the-shared-shell-for-the-new-detour-dash 2cb404bad4|Build the SHARED SHELL for the new Detour dashboard surfaces…]] | `~/dtour-cloud` | 41 | 0 |
 | 2026-05-30 | [[Agent Workspaces/claude/sessions/private-tmp/2026-05-30 apply-maximum-non-destructive-compression-rule 21fb34acc1|Apply maximum non-destructive compression. Rules: - Keep ALL…]] | `/private/tmp` | 2 | 0 |
-| 2026-05-30 | [[Agent Workspaces/claude/sessions/private-tmp/2026-05-30 you-are-summarizing-a-claude-code-session-for 8e48bb1df2|You are summarizing a Claude Code session for a daily memory…]] | `/private/tmp` | 2 | 0 |
-| 2026-05-30 | [[Agent Workspaces/claude/sessions/home-documents-the-family/2026-05-30 apply-two-final-review-fixes-to-the-nancy-bsc 81befbf205|Apply two final-review fixes to the "Nancy" BSC bot. Work fr…]] | `~/Documents/the family` | 19 | 0 |
 
-_…and 1555 more (see Dataview table above)._
+_…and 1557 more (see Dataview table above)._
