@@ -1,7 +1,7 @@
 ---
 type: "tags-index"
 topics: 12
-projects: 55
+projects: 56
 tags: ["moc", "tags"]
 ---
 
@@ -15,18 +15,18 @@ Every session carries `tool/`, `project/`, `topic/`, and `scope/` tags. The **sa
 |---|---|---|
 | `#scope/general` | 636 | reusable across 2+ projects (skill-worthy) |
 | `#scope/project-specific` | 653 | tied to one repo's setup/quirks |
-| `#scope/surface` | 1366 | shallow one-off / trivial |
+| `#scope/surface` | 1368 | shallow one-off / trivial |
 
 ## Topics — and the projects they overlap
 
 | Topic | Sessions | # Projects | Projects | Cross-project? |
 |---|---|---|---|---|
-| `#topic/agent-tooling` | 1382 | 37 | `actantdb`, `audit-fixes-locallllm-models`, `booth`, `can-we-get-this-running-on`, `comfy`, `ddtour`… | ✅ general |
-| `#topic/git-ci` | 871 | 25 | `actantdb`, `audit-fixes-locallllm-models`, `can-we-get-this-running-on`, `claude`, `ddtour`, `detour`… | ✅ general |
+| `#topic/agent-tooling` | 1385 | 38 | `actantdb`, `audit-fixes-locallllm-models`, `booth`, `can-we-get-this-running-on`, `comfy`, `ddtour`… | ✅ general |
+| `#topic/git-ci` | 873 | 26 | `actantdb`, `audit-fixes-locallllm-models`, `can-we-get-this-running-on`, `claude`, `ddtour`, `detour`… | ✅ general |
 | `#topic/testing-e2e` | 732 | 27 | `actantdb`, `audit-fixes-locallllm-models`, `booth`, `can-we-get-this-running-on`, `ddtour`, `detour`… | ✅ general |
-| `#topic/api-server` | 439 | 31 | `actantdb`, `audit-fixes-locallllm-models`, `bloodhound`, `booth`, `can-we-get-this-running-on`, `claude`… | ✅ general |
+| `#topic/api-server` | 440 | 31 | `actantdb`, `audit-fixes-locallllm-models`, `bloodhound`, `booth`, `can-we-get-this-running-on`, `claude`… | ✅ general |
 | `#topic/frontend-ui` | 418 | 23 | `actantdb`, `audit-fixes-locallllm-models`, `bloodhound`, `booth`, `can-we-get-this-running-on`, `claude`… | ✅ general |
-| `#topic/blockchain` | 244 | 21 | `actantdb`, `can-we-get-this-running-on`, `ddtour`, `detour`, `dtour-cloud`, `eliza`… | ✅ general |
+| `#topic/blockchain` | 245 | 22 | `actantdb`, `can-we-get-this-running-on`, `ddtour`, `detour`, `dtour-cloud`, `eliza`… | ✅ general |
 | `#topic/dependency-install` | 234 | 20 | `actantdb`, `booth`, `claude`, `ddtour`, `detour`, `documents`… | ✅ general |
 | `#topic/typescript-build` | 180 | 22 | `actantdb`, `booth`, `can-we-get-this-running-on`, `claude`, `core`, `ddtour`… | ✅ general |
 | `#topic/database` | 171 | 15 | `actantdb`, `audit-fixes-locallllm-models`, `booth`, `claude`, `detour`, `dtour-cloud`… | ✅ general |
@@ -38,7 +38,7 @@ Every session carries `tool/`, `project/`, `topic/`, and `scope/` tags. The **sa
 
 | Project | Sessions |
 |---|---|
-| `#project/scratch` | 1007 |
+| `#project/scratch` | 1009 |
 | `#project/swoosh` | 334 |
 | `#project/milady` | 110 |
 | `#project/actantdb` | 89 |
@@ -53,8 +53,8 @@ Every session carries `tool/`, `project/`, `topic/`, and `scope/` tags. The **sa
 | `#project/swooshcli-audit-fixes` | 14 |
 | `#project/teardown-on-feat-next` | 14 |
 | `#project/claude` | 11 |
-| `#project/v1` | 6 |
 | `#project/booth` | 6 |
+| `#project/v1` | 5 |
 | `#project/goals-manifesting-followups` | 5 |
 | `#project/plugin-agent-orchestrator` | 5 |
 | `#project/tests` | 5 |
@@ -67,6 +67,7 @@ Every session carries `tool/`, `project/`, `topic/`, and `scope/` tags. The **sa
 | `#project/swift` | 2 |
 | `#project/remnants` | 2 |
 | `#project/can-we-get-this-running-on` | 2 |
+| `#project/sync` | 1 |
 | `#project/electrobun` | 1 |
 | `#project/agent-orchestrator-claude-reuse-1rawwr` | 1 |
 | `#project/mainview` | 1 |
@@ -87,7 +88,6 @@ Every session carries `tool/`, `project/`, `topic/`, and `scope/` tags. The **sa
 | `#project/elated-kapitsa-5b80c5` | 1 |
 | `#project/mlp` | 1 |
 | `#project/there-is-a-challenge-to-email` | 1 |
-| `#project/files-mentioned-by-the-user-contents` | 1 |
 
 ---
 ```dataview
