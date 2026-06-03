@@ -604,23 +604,34 @@ def write_insights(all_recs):
         for c in active: f.write(json.dumps(c) + "\n")
     with open(os.path.join(INSIGHTS, "candidates_synthesized.jsonl"), "w") as f:  # archive (provenance / export)
         for c in archived: f.write(json.dumps(c) + "\n")
-    # human MOC (active only)
+    # DEDUPED exemplar queue — distinct problems, recurrence-weighted. Consumed by
+    # auto_improve.py (autonomous) and synthesize.py (manual) so the paid model sees
+    # ~one row per real pattern instead of dozens of near-identical repeats.
+    clusters = cluster_candidates(active)
+    with open(os.path.join(INSIGHTS, "clusters.jsonl"), "w") as f:
+        for cl in clusters:
+            f.write(json.dumps({**cl, "projects": sorted(cl["projects"])}) + "\n")
+    # human MOC (active only, DEDUPED to distinct problems)
     by_tool = collections.Counter(c["tool"] for c in active)
     by_topic = collections.Counter(t for c in active for t in c["topics"])
-    lines = [frontmatter({"type":"insights-index","candidates":len(active),"synthesized":len(archived),"tags":["moc","insights"]}),
+    lines = [frontmatter({"type":"insights-index","candidates":len(active),"distinct":len(clusters),
+                          "synthesized":len(archived),"tags":["moc","insights"]}),
              "", "# 🔧 Mined Insights — Debugging & Fixes", "",
-             f"**{len(active)}** active candidate lessons "
-             f"({', '.join(f'{k}: {v}' for k,v in by_tool.items()) or '—'})"
+             f"**{len(clusters)}** distinct problems "
+             f"(deduped from {len(active)} raw candidates · {', '.join(f'{k}: {v}' for k,v in by_tool.items()) or '—'})"
              + (f" · ✅ **{len(archived)}** already synthesized → [[Agent Workspaces/_insights/Synthesized|archive]]" if archived else ""), "",
              "**By topic:** " + (" · ".join(f"`#topic/{t}` {n}" for t, n in by_topic.most_common()) or "—"), "",
-             "Top un-synthesized candidates (highest signal first). Run `synthesize.py --confirm` to distill them; "
-             "once synthesized they move to the archive and the next batch rises here.", "",
-             "| Score | Topics | Problem → Fix | Project | Session |", "|---|---|---|---|---|"]
-    for c in active[:200]:
-        prob = oneline(c["error"],62).replace("|","/"); fix = oneline(c["fix"],62).replace("|","/")
-        link = f"[[{c['note']}|{oneline(c['session'],30).replace('|','/')}]]"
+             "Distinct problems (deduped, recurrence-weighted; highest signal first). `×N` = how many "
+             "sessions hit this same pattern — the strongest promote signal. The autonomous loop "
+             "(`auto_improve.py`) distills these into skills; once done they move to the archive.", "",
+             "| Score | ×N | Topics | Problem → Fix | Projects | Session |", "|---|---|---|---|---|---|"]
+    for c in clusters[:200]:
+        prob = oneline(c["error"],60).replace("|","/"); fix = oneline(c["fix"],60).replace("|","/")
+        link = f"[[{c['note']}|{oneline(c['session'],28).replace('|','/')}]]"
         ttags = " ".join("#topic/"+t for t in c["topics"]) or "—"
-        lines.append(f"| {c['score']} | {ttags} | **{prob}** → {fix} | `{c['project']}` | {link} |")
+        nproj = len(c["projects"])
+        projcell = f"`{c['project']}`" + (f" +{nproj-1}" if nproj > 1 else "")
+        lines.append(f"| {c['agg_score']} | ×{c['cluster_size']} | {ttags} | **{prob}** → {fix} | {projcell} | {link} |")
     with open(os.path.join(INSIGHTS, "Insights.md"), "w") as f:
         f.write("\n".join(lines))
     # archive view
