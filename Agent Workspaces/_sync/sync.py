@@ -555,17 +555,43 @@ _SIG_STOP = set((
     "not now run runs running error errors output line lines file files test tests failed fail fix "
     "fixed found check checking found root cause issue problem result null none true false return"
 ).split())
+# Map the many ERROR_RX surface forms onto a small canonical vocabulary so
+# 'TypeError' / 'type error' and 'ENOENT' / 'no such file' land in the same bucket.
+_ERR_CLASS = [
+    (re.compile(r"(?i)enoent|no such file|cannot find|not found|module ?not ?found"), "missing-file-or-module"),
+    (re.compile(r"(?i)test(s)? failed|\bFAILED\b|assert|expect\("), "test-failure"),
+    (re.compile(r"(?i)typeerror|type error|\bts\d{3,}\b|is not a function|is not defined|undefined"), "type-or-ref-error"),
+    (re.compile(r"(?i)enospc|no space|disk (is )?full|out of space"), "disk-space"),
+    (re.compile(r"(?i)permission denied|eacces|not permitted"), "permissions"),
+    (re.compile(r"(?i)connection refused|timed out|econnrefused|etimedout|502|503|504"), "network-timeout"),
+    (re.compile(r"(?i)404|not found"), "http-404"),
+    (re.compile(r"(?i)500 internal|internal server error"), "http-500"),
+    (re.compile(r"(?i)segmentation fault|panic:|fatal|core dumped|sigsegv"), "crash"),
+    (re.compile(r"(?i)npm ERR!|integrity|lockfile|tarball|gyp|node-gyp|install failed"), "dependency-install"),
+    (re.compile(r"(?i)does not match required schema|invalid|validation"), "schema-validation"),
+    (re.compile(r"(?i)command not found|not recognized"), "command-not-found"),
+    (re.compile(r"(?i)traceback|exception|errno|\berror:"), "generic-exception"),
+]
+def _err_classes(raw):
+    return sorted({label for rx, label in _ERR_CLASS if rx.search(raw)})
+
 def err_signature(c):
-    """Stable fingerprint that collapses near-identical errors. Combines the
-    volatile-stripped error skeleton with the candidate's topic set, so 'ENOENT in
-    project A' and 'ENOENT in project B' on the same topics cluster together."""
-    t = denoise(c.get("error", "")).lower()
-    for rx in _SIG_STRIP:
-        t = rx.sub(" ", t)
-    toks = [w for w in re.findall(r"[a-z]{4,}", t) if w not in _SIG_STOP]
-    skel = " ".join(sorted(set(toks))[:8])
+    """Stable fingerprint that collapses near-identical errors into one cluster.
+    Keys on (topic set × canonical error-class set) — the semantic core — NOT on the
+    volatile code/log body, so the same class of failure across many sessions groups
+    together. Falls back to a token skeleton only when no error class is recognized."""
+    raw = denoise(c.get("error", ""))
     topics = ",".join(sorted(c.get("topics", [])))
-    return hashlib.sha1((topics + "|" + skel).encode()).hexdigest()[:12]
+    classes = _err_classes(raw)
+    if classes:
+        basis = topics + "|" + "|".join(classes)
+    else:                                              # unrecognized: fall back to skeleton
+        t = raw.lower()
+        for rx in _SIG_STRIP:
+            t = rx.sub(" ", t)
+        toks = [w for w in re.findall(r"[a-z]{4,}", t) if w not in _SIG_STOP]
+        basis = topics + "|skel|" + " ".join(sorted(set(toks), key=lambda w: (-len(w), w))[:5])
+    return hashlib.sha1(basis.encode()).hexdigest()[:12]
 
 def cluster_candidates(active):
     """Group active candidates by signature; keep the highest-scoring exemplar per cluster.
