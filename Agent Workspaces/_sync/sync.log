@@ -92,3 +92,9 @@ NameError: name 'write_tags_moc' is not defined
 [skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
 [skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
 ===== done =====
+===== 2026-06-03 01:50:19 sync start =====
+[sync] 2021 sessions (4 new, 2017 cached, 4 written, 0 pruned) · 519 candidates
+[sync] codex=64 claude=1957 · 56 projects · 12 topics · 12 cross-project
+[skills] 112 installed · 12 used · 14 review-retire candidates · 1 overlap pairs
+[skills] report → v1/Agent Workspaces/_skills/Skills-Audit.md
+===== done =====
